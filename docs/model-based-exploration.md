@@ -4,6 +4,12 @@
 > 导出时间：2026-05-26 11:07:55 CST
 > 说明：本文档基于本地 Notion 单向导出副本整理，用于 `model-explorer` 开发目录内的算法设计与实现拆解。
 
+## 文档定位
+
+本文档只沉淀基于模型的自主探索背景、闭环逻辑和模块边界。覆盖率优先候选排序见
+[`candidate-list-policy-baseline.md`](candidate-list-policy-baseline.md)，强化学习策略网络的具体输入、奖励、网络结构和训练样本设计见
+[`rl-policy-network-design.md`](rl-policy-network-design.md)。
+
 ## 1. 问题定位
 
 源笔记将研究对象定义为：月面未知环境中，轮式无人平台需要在多类环境与平台约束共同作用下，自主选择探索目标，并规划局部与全局路径。

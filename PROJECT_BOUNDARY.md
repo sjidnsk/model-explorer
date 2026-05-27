@@ -3,6 +3,14 @@
 本文档是 `model-explorer` 的项目边界入口。更细的外部接口字段见
 [`docs/external-interfaces.md`](docs/external-interfaces.md)。
 
+## 文档地图
+
+- `PROJECT_BOUNDARY.md`：定义本项目在建模底座、决策编排和执行层之间的职责边界。
+- `docs/model-based-exploration.md`：整理基于模型的自主探索问题、算法闭环和模块划分。
+- `docs/external-interfaces.md`：定义与 `dev-platform-constraints`、`a_gcs_ws-2.0.1` 的工程接口和契约稳定性规则。
+- `docs/candidate-list-policy-baseline.md`：定义覆盖率优先的确定性候选排序基线和策略学习边界。
+- `docs/rl-policy-network-design.md`：定义候选列表强化学习策略网络、训练样本、奖励函数和评估方式。
+
 ## 定位
 
 `model-explorer` 是月面巡视探索研究原型的探索决策与闭环编排层，位于建模底座和执行层之间。

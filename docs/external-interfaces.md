@@ -3,6 +3,11 @@
 本文档定义 `model-explorer` 与 `dev-platform-constraints`、`a_gcs_ws-2.0.1` 的工程接口边界。项目职责边界入口见
 [`../PROJECT_BOUNDARY.md`](../PROJECT_BOUNDARY.md)。
 
+## 文档定位
+
+本文档只定义外部接口和契约稳定性。候选排序、覆盖率策略和强化学习网络可以消费这里描述的稳定字段与实验字段，但不得要求破坏 `model-explorer-contract/v1` 稳定字段。策略网络设计见
+[`rl-policy-network-design.md`](rl-policy-network-design.md)。
+
 ## 与 dev-platform-constraints
 
 `dev-platform-constraints` 是建模底座。`model-explorer` 只消费它暴露给上层的解释性 JSON 摘要，并把地图、约束、可信度和候选目标基础评分视为外部输入。
@@ -32,6 +37,8 @@ world_y = grid.origin[1] + y * grid.resolution
 `experimental_fields` 中列出的字段只用于解释研究原型和消融实验，例如 `information_gain`、`confidence_gain`、`risk`、`segment_path_costs`、`unreachable_reasons`。这些字段可以参与日志、可视化和调试，但不能作为 `model-explorer` 最小可运行闭环的必需依赖。
 
 在 `model-explorer-contract/v1` 内，稳定字段不得删除、改名或改变语义。若稳定字段需要破坏性调整，应由 `dev-platform-constraints` 发布新的契约版本，并保留 v1 示例直到上层完成迁移。
+
+策略网络只能把实验字段作为可选特征。实验字段缺失时，`model-explorer` 必须继续支持基于 `top_goals[].utility` 和 `top_goals[].reachable` 的兼容选择行为。
 
 ### 请求方向
 

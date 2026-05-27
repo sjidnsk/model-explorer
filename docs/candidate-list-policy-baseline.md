@@ -2,6 +2,12 @@
 
 本文档记录 `model-explorer` 后续候选点排序、仿真实验和策略网络训练的基线方案。该方案只定义设计边界和接口期望，不表示已经实现对应代码。
 
+## 文档定位
+
+本文档定义确定性候选排序基线，以及策略网络可以学习的候选列表边界。强化学习训练方式、网络结构、样本记录和验收指标的细化设计见
+[`rl-policy-network-design.md`](rl-policy-network-design.md)。外部字段契约见
+[`external-interfaces.md`](external-interfaces.md)。
+
 ## 背景
 
 候选点排序不应只最大化单步 `utility`，还需要显式考虑探索覆盖率。这里的探索覆盖率指有效地图中已经被传感器有效观测并被底座接受更新的累计唯一面积占比。
@@ -103,6 +109,9 @@ score desc -> utility desc -> cell.x asc -> cell.y asc
 ## 策略网络基线
 
 策略网络第一版只在 `top_goals` 候选列表内输出目标概率或排序分数。
+
+强化学习版本采用同一候选列表边界：网络只学习可达候选之间的偏好，不直接读取完整覆盖 mask，也不改变 `model-explorer-contract/v1` 稳定字段。具体 masked policy、PPO 奖励和样本格式见
+[`rl-policy-network-design.md`](rl-policy-network-design.md)。
 
 推荐输入特征包括：
 
