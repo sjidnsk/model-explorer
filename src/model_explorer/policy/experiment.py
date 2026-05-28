@@ -7,6 +7,7 @@ from typing import Any
 
 from ..io.scenario import Scenario, load_scenario
 from .collector import collect_rollout_episode
+from .dataset import summarize_rollout_dataset
 from .evaluation import evaluate_policy_baseline_scenarios, evaluate_policy_baselines
 from .planning import planner_from_config
 from .rollout import RolloutEpisode
@@ -87,6 +88,7 @@ def run_experiment_manifest(path: str | Path) -> dict[str, Any]:
         reward_config=manifest.reward_config,
     )
     write_rollout_episodes_jsonl(manifest.rollout_output, episodes)
+    dataset_summary = summarize_rollout_dataset(episodes)
 
     base_evaluation = evaluate_policy_baseline_scenarios(scenarios, planning_adapter=planner)
     evaluation = (
@@ -94,7 +96,6 @@ def run_experiment_manifest(path: str | Path) -> dict[str, Any]:
         if len(manifest.scenario_groups) > 1
         else base_evaluation
     )
-    manifest.evaluation_output.write_text(json.dumps(evaluation, indent=2, ensure_ascii=False), encoding="utf-8")
 
     summary = {
         "schema_version": manifest.schema_version,
@@ -109,14 +110,37 @@ def run_experiment_manifest(path: str | Path) -> dict[str, Any]:
         "evaluation_output": str(manifest.evaluation_output),
         "transition_count": sum(len(episode.transitions) for episode in episodes),
         "rollout_metrics": _aggregate_rollout_metrics(episodes),
+        "dataset_summary": dataset_summary,
         "reward": dict(manifest.reward_config or {}),
     }
     if manifest.reward_ablations:
         summary["reward_ablations"] = _run_reward_ablations(manifest, scenarios, planner=planner)
     if manifest.train_config is not None:
         summary["training"] = _run_training(episodes, manifest.train_config, base_dir=Path(path).parent)
+        if _should_evaluate_trained_policy(manifest.train_config):
+            from .training import load_policy_checkpoint
+
+            trained_policy = load_policy_checkpoint(summary["training"]["checkpoint"])
+            trained_evaluation = evaluate_policy_baseline_scenarios(
+                scenarios,
+                torch_policy=trained_policy,
+                planning_adapter=planner,
+            )
+            evaluation = (
+                _grouped_evaluation(
+                    manifest,
+                    scenarios,
+                    planner=planner,
+                    aggregate=trained_evaluation,
+                    torch_policy=trained_policy,
+                )
+                if len(manifest.scenario_groups) > 1
+                else trained_evaluation
+            )
+            summary["training"]["baseline_evaluation"] = _comparison_from_evaluation(evaluation)
+    manifest.evaluation_output.write_text(json.dumps(evaluation, indent=2, ensure_ascii=False), encoding="utf-8")
     if manifest.report_output is not None:
-        manifest.report_output.write_text(_markdown_report(summary, base_evaluation), encoding="utf-8")
+        manifest.report_output.write_text(_markdown_report(summary, evaluation), encoding="utf-8")
         summary["report_output"] = str(manifest.report_output)
     return summary
 
@@ -213,13 +237,18 @@ def _grouped_evaluation(
     *,
     planner,
     aggregate: dict[str, Any],
+    torch_policy=None,
 ) -> dict[str, Any]:
     groups: dict[str, Any] = {}
     cursor = 0
     for group in manifest.scenario_groups:
         group_scenarios = scenarios[cursor : cursor + len(group.scenarios)]
         cursor += len(group.scenarios)
-        groups[group.name] = evaluate_policy_baseline_scenarios(group_scenarios, planning_adapter=planner)
+        groups[group.name] = evaluate_policy_baseline_scenarios(
+            group_scenarios,
+            torch_policy=torch_policy,
+            planning_adapter=planner,
+        )
 
     return {
         "aggregate": aggregate,
@@ -227,7 +256,11 @@ def _grouped_evaluation(
         "per_scenario": [
             {
                 "path": str(path),
-                "metrics": evaluate_policy_baselines(scenario, planning_adapter=planner),
+                "metrics": evaluate_policy_baselines(
+                    scenario,
+                    torch_policy=torch_policy,
+                    planning_adapter=planner,
+                ),
             }
             for path, scenario in zip(manifest.scenarios, scenarios)
         ],
@@ -265,6 +298,8 @@ def _run_training(episodes: tuple[RolloutEpisode, ...], config: dict[str, Any], 
         hidden_size=int(config.get("hidden_size", 64)),
         learning_rate=float(config.get("learning_rate", 1.0e-3)),
         epochs=int(config.get("epochs", 1)),
+        return_mode=str(config.get("return_mode", "reward_as_return")),
+        discount_factor=float(config.get("discount_factor", 0.99)),
     )
     loss_log = config.get("loss_log")
     if loss_log is not None:
@@ -275,6 +310,16 @@ def _run_training(episodes: tuple[RolloutEpisode, ...], config: dict[str, Any], 
     result["train_episode_count"] = len(train_episodes)
     result["validation_episode_count"] = len(validation_episodes)
     return result
+
+
+def _should_evaluate_trained_policy(config: dict[str, Any]) -> bool:
+    return bool(config.get("evaluate_trained_policy", True))
+
+
+def _comparison_from_evaluation(evaluation: dict[str, Any]) -> dict[str, Any]:
+    if "aggregate" in evaluation and isinstance(evaluation["aggregate"], dict):
+        return evaluation["aggregate"]
+    return evaluation
 
 
 def _split_training_episodes(
@@ -319,6 +364,7 @@ def _aggregate_rollout_metrics(episodes: tuple[RolloutEpisode, ...]) -> dict[str
 
 def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str:
     metrics = summary["rollout_metrics"]
+    evaluation_comparison = _comparison_from_evaluation(evaluation)
     lines = [
         "# Model Explorer Experiment Report",
         "",
@@ -344,18 +390,74 @@ def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str
     ):
         lines.append(f"| {key} | {metrics[key]} |")
 
-    lines.extend(["", "## Baselines", "", "| policy | final_coverage_rate | total_path_cost | failure_count | replan_count | value_coverage |", "|---|---:|---:|---:|---:|---:|"])
+    dataset_summary = summary.get("dataset_summary")
+    if isinstance(dataset_summary, dict):
+        lines.extend(["", "## Dataset Summary", "", "| metric | value |", "|---|---:|"])
+        for key in (
+            "episode_count",
+            "transition_count",
+            "trainable_transition_count",
+            "no_op_transition_count",
+            "failure_transition_count",
+            "empty_action_mask_count",
+            "invalid_action_mask_count",
+            "failure_count",
+            "replan_count",
+            "coverage_delta_total",
+            "total_path_cost",
+            "average_risk",
+        ):
+            lines.append(f"| {key} | {dataset_summary.get(key, 0)} |")
+        reward_summary = dataset_summary.get("reward", {})
+        if isinstance(reward_summary, dict):
+            for key in ("min", "max", "mean"):
+                lines.append(f"| reward_{key} | {reward_summary.get(key, 0.0)} |")
+
+    if "training" in summary:
+        training = summary["training"]
+        lines.extend(["", "## Training", "", "| field | value |", "|---|---:|"])
+        for key in (
+            "checkpoint",
+            "seed",
+            "epochs",
+            "sample_count",
+            "train_episode_count",
+            "validation_episode_count",
+            "loss",
+            "policy_loss",
+            "value_loss",
+            "entropy",
+        ):
+            if key in training:
+                lines.append(f"| {key} | {training[key]} |")
+        lines.extend(["", "### dataset_summary", "", "| metric | value |", "|---|---:|"])
+        training_dataset = training.get("dataset_summary", {})
+        if isinstance(training_dataset, dict):
+            for key in (
+                "episode_count",
+                "transition_count",
+                "trainable_transition_count",
+                "failure_transition_count",
+                "coverage_delta_total",
+                "total_path_cost",
+                "average_risk",
+            ):
+                lines.append(f"| {key} | {training_dataset.get(key, 0)} |")
+
+    lines.extend(["", "## Baselines", "", "| policy | final_coverage_rate | cumulative_coverage_rate_delta | total_path_cost | average_risk | failure_count | replan_count | value_coverage |", "|---|---:|---:|---:|---:|---:|---:|---:|"])
     for policy_name in ("utility", "coverage_heuristic", "torch_policy"):
-        if policy_name not in evaluation:
+        if policy_name not in evaluation_comparison:
             continue
-        policy_metrics = evaluation[policy_name]
+        policy_metrics = evaluation_comparison[policy_name]
         lines.append(
             "| "
             + " | ".join(
                 (
                     policy_name,
                     str(policy_metrics.get("final_coverage_rate", policy_metrics.get("average_final_coverage_rate", 0.0))),
+                    str(policy_metrics.get("cumulative_coverage_rate_delta", 0.0)),
                     str(policy_metrics.get("total_path_cost", 0.0)),
+                    str(policy_metrics.get("average_risk", 0.0)),
                     str(policy_metrics.get("failure_count", 0)),
                     str(policy_metrics.get("replan_count", 0)),
                     str(policy_metrics.get("value_coverage", 0.0)),
