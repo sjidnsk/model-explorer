@@ -310,15 +310,17 @@ class PolicyFeatureExtractionTests(unittest.TestCase):
         self.assertEqual(first_features["utility"], 0.7)
         self.assertEqual(first_features["reachable"], 1.0)
         self.assertEqual(first_features["expected_coverage_rate_delta"], 0.3)
-        self.assertEqual(first_features["path_cost"], 4.0)
+        self.assertEqual(first_features["path_cost"], 1.0)
         self.assertEqual(second_features["reachable"], 0.0)
 
         global_features = dict(zip(observation.global_feature_names, observation.global_features))
-        self.assertEqual(global_features["grid_width"], 4.0)
-        self.assertEqual(global_features["grid_height"], 3.0)
+        self.assertGreater(global_features["grid_width"], 0.0)
+        self.assertLessEqual(global_features["grid_width"], 1.0)
+        self.assertGreater(global_features["grid_height"], 0.0)
+        self.assertLessEqual(global_features["grid_height"], 1.0)
         self.assertEqual(global_features["coverage_rate"], 0.25)
-        self.assertEqual(global_features["step_index"], 2.0)
-        self.assertEqual(global_features["remaining_steps"], 5.0)
+        self.assertAlmostEqual(global_features["step_index"], 2.0 / 7.0)
+        self.assertAlmostEqual(global_features["remaining_steps"], 5.0 / 7.0)
 
     def test_missing_experimental_features_use_compatibility_defaults(self):
         from model_explorer.policy.features import extract_policy_observation
@@ -343,6 +345,102 @@ class PolicyFeatureExtractionTests(unittest.TestCase):
         self.assertEqual(features["risk"], 0.0)
         self.assertEqual(features["path_cost"], 0.0)
         self.assertEqual(global_features["coverage_rate"], 0.0)
+
+    def test_missing_indicators_distinguish_real_zero_from_fallback_zero(self):
+        from model_explorer.policy.features import MISSING_INDICATOR_NAMES, extract_policy_observation
+
+        explicit_zero_goal = {
+            "cell": [1, 1],
+            "utility": 0.0,
+            "reachable": True,
+            "expected_coverage_rate_delta": 0.0,
+            "expected_new_coverage_area": 0.0,
+            "information_gain": 0.0,
+            "confidence_gain": 0.0,
+            "value": 0.0,
+            "risk": 0.0,
+            "path_cost": 0.0,
+            "energy_cost": 0.0,
+        }
+        missing_goal = {"cell": [2, 1], "utility": 0.0, "reachable": True}
+        contract = load_contract_from_dict(minimal_contract(goals=[explicit_zero_goal, missing_goal]))
+
+        observation = extract_policy_observation(contract, max_candidates=3)
+
+        self.assertEqual(observation.candidate_missing_indicator_names, MISSING_INDICATOR_NAMES)
+        self.assertEqual(observation.candidate_missing_indicators[0], tuple(0.0 for _ in MISSING_INDICATOR_NAMES))
+        self.assertEqual(observation.candidate_missing_indicators[1], tuple(1.0 for _ in MISSING_INDICATOR_NAMES))
+        self.assertEqual(observation.candidate_missing_indicators[2], tuple(0.0 for _ in MISSING_INDICATOR_NAMES))
+        self.assertEqual(observation.candidate_missing_feature_names[0], ())
+        self.assertEqual(set(observation.candidate_missing_feature_names[1]), {
+            name.removesuffix("_missing") for name in MISSING_INDICATOR_NAMES
+        })
+
+    def test_feature_normalization_keeps_extreme_observation_tensors_finite(self):
+        import math
+
+        from model_explorer.policy.features import extract_policy_observation
+
+        payload = minimal_contract(
+            goals=[
+                {
+                    "cell": [999999, 999998],
+                    "utility": 10.0,
+                    "reachable": True,
+                    "expected_coverage_rate_delta": 9.0,
+                    "expected_new_coverage_area": 1.0e9,
+                    "information_gain": 5.0,
+                    "confidence_gain": 4.0,
+                    "value": 3.0,
+                    "risk": 7.5,
+                    "path_cost": 1.0e12,
+                    "energy_cost": 5.0e11,
+                },
+                {
+                    "cell": [2, 1],
+                    "utility": 0.5,
+                    "reachable": True,
+                    "path_cost": 2.0e12,
+                    "energy_cost": 1.0e12,
+                },
+            ],
+            observation_update={"coverage_rate": 5.0},
+        )
+        payload["grid"]["width"] = 1000000
+        payload["grid"]["height"] = 1000000
+        payload["constraints"]["violation_count"] = 1000000
+        contract = load_contract_from_dict(payload)
+
+        observation = extract_policy_observation(
+            contract,
+            current_cell=(0, 0),
+            step_index=1000000,
+            remaining_steps=1000000,
+            max_candidates=3,
+        )
+
+        flattened = [
+            *observation.global_features,
+            *(value for row in observation.candidate_features for value in row),
+            *(value for row in observation.candidate_missing_indicators for value in row),
+        ]
+        self.assertTrue(all(math.isfinite(value) for value in flattened))
+        self.assertTrue(all(0.0 <= value <= 1.0 for value in observation.global_features))
+        feature_names = observation.candidate_feature_names
+        for row in observation.candidate_features[:2]:
+            features = dict(zip(feature_names, row))
+            for name in (
+                "expected_coverage_rate_delta",
+                "expected_new_coverage_area",
+                "information_gain",
+                "confidence_gain",
+                "value",
+                "risk",
+                "path_cost",
+                "energy_cost",
+            ):
+                self.assertGreaterEqual(features[name], 0.0)
+                self.assertLessEqual(features[name], 1.0)
 
 
 class RolloutLoggingTests(unittest.TestCase):
@@ -525,6 +623,114 @@ class PolicySelectionInterfaceTests(unittest.TestCase):
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not available")
 class TorchPolicyNetworkTests(unittest.TestCase):
+    def test_architecture_registry_builds_mlp_variants_and_rejects_unknown_names(self):
+        from model_explorer.policy.architectures import SUPPORTED_ARCHITECTURES, build_policy_network
+        from model_explorer.policy.features import extract_policy_observation
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [0, 0], "utility": 0.5, "reachable": True},
+                    {"cell": [1, 1], "utility": 0.9, "reachable": False},
+                ]
+            )
+        )
+        observation = extract_policy_observation(contract, max_candidates=3)
+
+        mlp = build_policy_network("mlp_v1", observation=observation, hidden_size=16)
+        missing = build_policy_network("mlp_missing_v1", observation=observation, hidden_size=16)
+        attention = build_policy_network("candidate_attention_v1", observation=observation, hidden_size=16)
+
+        self.assertIn("mlp_v1", SUPPORTED_ARCHITECTURES)
+        self.assertIn("mlp_missing_v1", SUPPORTED_ARCHITECTURES)
+        self.assertIn("candidate_attention_v1", SUPPORTED_ARCHITECTURES)
+        self.assertEqual(mlp.architecture_name, "mlp_v1")
+        self.assertEqual(missing.architecture_name, "mlp_missing_v1")
+        self.assertEqual(attention.architecture_name, "candidate_attention_v1")
+        self.assertEqual(
+            missing.candidate_encoder[0].in_features,
+            len(observation.candidate_feature_names) + len(observation.candidate_missing_indicator_names),
+        )
+        with self.assertRaisesRegex(ValueError, "unknown architecture.*does_not_exist.*mlp_v1"):
+            build_policy_network("does_not_exist", observation=observation, hidden_size=16)
+
+    def test_mlp_missing_network_is_mask_safe_with_missing_indicator_inputs(self):
+        import torch
+
+        from model_explorer.policy.architectures import build_policy_network
+        from model_explorer.policy.features import extract_policy_observation
+        from model_explorer.policy.torch_policy import observation_to_tensors
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [0, 0], "utility": 0.5, "reachable": True},
+                    {"cell": [1, 1], "utility": 0.9, "reachable": False},
+                    {"cell": [2, 1], "utility": 0.4, "reachable": True, "risk": 0.0},
+                ]
+            )
+        )
+        observation = extract_policy_observation(contract, max_candidates=4)
+        network = build_policy_network("mlp_missing_v1", observation=observation, hidden_size=16)
+
+        output = network(**observation_to_tensors(observation))
+
+        self.assertEqual(tuple(output.masked_logits.shape), (1, 4))
+        self.assertEqual(tuple(output.value.shape), (1,))
+        self.assertTrue(torch.isfinite(output.value).all())
+        action_probs = output.action_probs.detach()
+        self.assertAlmostEqual(float(action_probs[0, 1]), 0.0)
+        self.assertAlmostEqual(float(action_probs[0, 3]), 0.0)
+
+    def test_candidate_attention_masks_padding_candidates_from_valid_probabilities(self):
+        import torch
+
+        from model_explorer.policy.architectures import build_policy_network
+        from model_explorer.policy.features import extract_policy_observation
+        from model_explorer.policy.torch_policy import observation_to_tensors
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [0, 0], "utility": 0.5, "reachable": True, "risk": 0.0},
+                    {"cell": [2, 1], "utility": 0.4, "reachable": True, "risk": 0.2},
+                ]
+            )
+        )
+        observation = extract_policy_observation(contract, max_candidates=2)
+        tensors = observation_to_tensors(observation)
+        network = build_policy_network("candidate_attention_v1", observation=observation, hidden_size=16)
+        network.eval()
+
+        padded_features = torch.cat(
+            (
+                tensors["candidate_features"],
+                torch.full((1, 2, tensors["candidate_features"].shape[-1]), 123.0),
+            ),
+            dim=1,
+        )
+        padded_missing = torch.cat(
+            (
+                tensors["candidate_missing_indicators"],
+                torch.ones((1, 2, tensors["candidate_missing_indicators"].shape[-1])),
+            ),
+            dim=1,
+        )
+        padded_mask = torch.tensor([[True, True, False, False]], dtype=torch.bool)
+
+        with torch.no_grad():
+            base_output = network(**tensors)
+            padded_output = network(
+                candidate_features=padded_features,
+                global_features=tensors["global_features"],
+                action_mask=padded_mask,
+                candidate_missing_indicators=padded_missing,
+            )
+
+        self.assertTrue(torch.allclose(base_output.action_probs[0], padded_output.action_probs[0, :2], atol=1.0e-6))
+        self.assertAlmostEqual(float(padded_output.action_probs[0, 2]), 0.0)
+        self.assertAlmostEqual(float(padded_output.action_probs[0, 3]), 0.0)
+
     def test_masked_network_outputs_zero_probability_for_invalid_actions(self):
         import torch
 
@@ -1040,6 +1246,35 @@ class RolloutIoTests(unittest.TestCase):
         self.assertEqual(loaded.transitions[0].reward, episode.transitions[0].reward)
         self.assertEqual(loaded.metrics.final_coverage_rate, episode.metrics.final_coverage_rate)
 
+    def test_old_rollout_json_without_missing_indicators_uses_compatible_defaults(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.rollout_io import read_rollout_episode
+
+        scenario = [
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[{"cell": [1, 1], "utility": 0.4, "reachable": True}],
+                    observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.05},
+                )
+            )
+        ]
+        episode = collect_rollout_episode(scenario, max_candidates=2)
+        payload = episode.to_dict()
+        payload["transitions"][0]["observation"].pop("candidate_missing_indicator_names", None)
+        payload["transitions"][0]["observation"].pop("candidate_missing_indicators", None)
+        if payload["transitions"][0]["next_observation"] is not None:
+            payload["transitions"][0]["next_observation"].pop("candidate_missing_indicator_names", None)
+            payload["transitions"][0]["next_observation"].pop("candidate_missing_indicators", None)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "old-rollout.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            loaded = read_rollout_episode(path)
+
+        observation = loaded.transitions[0].observation
+        self.assertEqual(len(observation.candidate_missing_indicators), len(observation.candidate_cells))
+        self.assertTrue(all(value == 0.0 for row in observation.candidate_missing_indicators for value in row))
+
     def test_rollout_episodes_round_trip_through_jsonl_file(self):
         from model_explorer.policy.collector import collect_rollout_episode
         from model_explorer.policy.rollout_io import (
@@ -1419,16 +1654,21 @@ class ExperimentManifestTests(unittest.TestCase):
         contract_cost_manifest = SYNTHETIC_EXPERIMENT_FIXTURE / "contract-cost-experiment.json"
         straight_line_manifest = SYNTHETIC_EXPERIMENT_FIXTURE / "straight-line-experiment.json"
         formal_training_manifest = SYNTHETIC_EXPERIMENT_FIXTURE / "formal-training-experiment.json"
+        architecture_smoke_manifest = SYNTHETIC_EXPERIMENT_FIXTURE / "architecture-smoke-experiment.json"
 
         self.assertTrue(manifest_path.exists())
         self.assertTrue(sidecar_path.exists())
         self.assertTrue(contract_cost_manifest.exists())
         self.assertTrue(straight_line_manifest.exists())
         self.assertTrue(formal_training_manifest.exists())
+        self.assertTrue(architecture_smoke_manifest.exists())
         formal_payload = json.loads(formal_training_manifest.read_text(encoding="utf-8"))
         self.assertIn("root", formal_payload["outputs"])
         self.assertIn("dataset_validation", formal_payload)
         self.assertEqual(formal_payload["train"]["seeds"], [11, 13])
+        architecture_payload = json.loads(architecture_smoke_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(architecture_payload["train"]["seed"], 17)
+        self.assertEqual(architecture_payload["train"]["architecture"], "candidate_attention_v1")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             temp_manifest_path = Path(tmpdir) / "experiment.json"

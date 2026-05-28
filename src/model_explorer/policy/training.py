@@ -26,6 +26,7 @@ def train_policy_on_episode(
     epochs: int = 1,
     return_mode: str = "reward_as_return",
     discount_factor: float = 0.99,
+    architecture: str | None = None,
 ) -> dict[str, Any]:
     return train_policy_on_episodes(
         (episode,),
@@ -36,6 +37,7 @@ def train_policy_on_episode(
         epochs=epochs,
         return_mode=return_mode,
         discount_factor=discount_factor,
+        architecture=architecture,
     )
 
 
@@ -49,10 +51,11 @@ def train_policy_on_episodes(
     epochs: int = 1,
     return_mode: str = "reward_as_return",
     discount_factor: float = 0.99,
+    architecture: str | None = None,
 ) -> dict[str, Any]:
     torch = _load_torch()
+    from .architectures import build_policy_network
     from .ppo import compute_masked_ppo_loss
-    from .torch_policy import MaskedCandidatePolicyNetwork
 
     episode_tuple = tuple(episodes)
     dataset_summary = validate_rollout_dataset(episode_tuple)
@@ -62,9 +65,9 @@ def train_policy_on_episodes(
 
     torch.manual_seed(seed)
     first_observation = trainable_transitions[0].observation
-    network = MaskedCandidatePolicyNetwork(
-        candidate_feature_count=len(first_observation.candidate_feature_names),
-        global_feature_count=len(first_observation.global_feature_names),
+    network = build_policy_network(
+        architecture,
+        observation=first_observation,
         hidden_size=hidden_size,
     )
     optimizer = torch.optim.Adam(network.parameters(), lr=learning_rate)
@@ -93,6 +96,7 @@ def train_policy_on_episodes(
             hidden_size=hidden_size,
             candidate_feature_names=first_observation.candidate_feature_names,
             global_feature_names=first_observation.global_feature_names,
+            candidate_missing_indicator_names=first_observation.candidate_missing_indicator_names,
             action_count=max(len(transition.observation.action_mask) for transition in trainable_transitions),
             seed=seed,
             sample_count=len(trainable_transitions),
@@ -103,6 +107,7 @@ def train_policy_on_episodes(
         )
 
     result = {
+        "architecture": network.architecture_name,
         "loss": float(losses.total_loss.detach()),
         "total_loss": float(losses.total_loss.detach()),
         "policy_loss": float(losses.policy_loss.detach()),
@@ -124,18 +129,25 @@ def train_policy_on_episodes(
 
 def load_policy_checkpoint(path: str | Path):
     torch = _load_torch()
-    from .torch_policy import MaskedCandidatePolicyNetwork, TorchPolicyScorer
+    from .architectures import MLP_V1, build_policy_network_from_metadata
+    from .torch_policy import TorchPolicyScorer
 
     checkpoint = torch.load(Path(path), map_location="cpu", weights_only=False)
     metadata = checkpoint.get("metadata", {})
     candidate_feature_names = checkpoint.get("candidate_feature_names", metadata.get("candidate_feature_names"))
     global_feature_names = checkpoint.get("global_feature_names", metadata.get("global_feature_names"))
+    candidate_missing_indicator_names = checkpoint.get(
+        "candidate_missing_indicator_names",
+        metadata.get("candidate_missing_indicator_names", ()),
+    )
     hidden_size = checkpoint.get("hidden_size", metadata.get("hidden_size"))
     if candidate_feature_names is None or global_feature_names is None or hidden_size is None:
         raise ValueError("checkpoint is missing policy feature metadata")
-    network = MaskedCandidatePolicyNetwork(
+    network = build_policy_network_from_metadata(
+        metadata.get("architecture", MLP_V1),
         candidate_feature_count=len(candidate_feature_names),
         global_feature_count=len(global_feature_names),
+        missing_indicator_count=len(candidate_missing_indicator_names),
         hidden_size=int(hidden_size),
     )
     network.load_state_dict(checkpoint["state_dict"])
@@ -273,6 +285,10 @@ def _transitions_to_batch(
             [_padded_action_mask(observation, action_count) for observation in observations],
             dtype=torch.bool,
         ),
+        "candidate_missing_indicators": torch.tensor(
+            [_padded_missing_indicators(observation, action_count) for observation in observations],
+            dtype=torch.float32,
+        ),
         "actions": torch.tensor(
             [transition.action_index for transition in transitions],
             dtype=torch.long,
@@ -307,13 +323,25 @@ def _padded_action_mask(observation, action_count: int) -> tuple[bool, ...]:
     return values + tuple(False for _ in range(action_count - len(values)))
 
 
+def _padded_missing_indicators(observation, action_count: int) -> tuple[tuple[float, ...], ...]:
+    width = len(observation.candidate_missing_indicator_names)
+    rows = tuple(tuple(float(value) for value in row) for row in observation.candidate_missing_indicators)
+    if not rows:
+        rows = tuple(tuple(0.0 for _ in range(width)) for _ in observation.candidate_features)
+    if len(rows) >= action_count:
+        return rows
+    zero_row = tuple(0.0 for _ in range(width))
+    return rows + tuple(zero_row for _ in range(action_count - len(rows)))
+
+
 def _save_policy_checkpoint(
     path: str | Path,
     *,
-    network: MaskedCandidatePolicyNetwork,
+    network,
     hidden_size: int,
     candidate_feature_names: tuple[str, ...],
     global_feature_names: tuple[str, ...],
+    candidate_missing_indicator_names: tuple[str, ...],
     action_count: int,
     seed: int,
     sample_count: int,
@@ -329,12 +357,15 @@ def _save_policy_checkpoint(
             "hidden_size": hidden_size,
             "candidate_feature_names": tuple(candidate_feature_names),
             "global_feature_names": tuple(global_feature_names),
+            "candidate_missing_indicator_names": tuple(candidate_missing_indicator_names),
             "metadata": {
                 "format": "model-explorer-masked-policy",
                 "version": 2,
                 "format_version": "model-explorer-masked-policy/v2",
+                "architecture": network.architecture_name,
                 "candidate_feature_names": tuple(candidate_feature_names),
                 "global_feature_names": tuple(global_feature_names),
+                "candidate_missing_indicator_names": tuple(candidate_missing_indicator_names),
                 "action_count": int(action_count),
                 "seed": int(seed),
                 "sample_count": int(sample_count),

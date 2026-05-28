@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .features import PolicyObservation
+from .features import MISSING_INDICATOR_NAMES, PolicyObservation
 from .rollout import EpisodeMetrics, RolloutEpisode, RolloutInfo, RolloutTransition
 
 
@@ -77,6 +77,16 @@ def _observation_from_dict(payload: dict[str, Any]) -> PolicyObservation:
         candidate_missing_feature_names = tuple(() for _ in candidate_cells)
     else:
         candidate_missing_feature_names = tuple(tuple(str(name) for name in row) for row in missing_feature_names)
+    missing_indicator_names = tuple(
+        str(name) for name in payload.get("candidate_missing_indicator_names", MISSING_INDICATOR_NAMES)
+    )
+    raw_missing_indicators = payload.get("candidate_missing_indicators")
+    if raw_missing_indicators is None:
+        candidate_missing_indicators = tuple(tuple(0.0 for _ in missing_indicator_names) for _ in candidate_cells)
+    else:
+        candidate_missing_indicators = tuple(
+            tuple(float(value) for value in row) for row in raw_missing_indicators
+        )
     return PolicyObservation(
         candidate_feature_names=tuple(payload["candidate_feature_names"]),
         candidate_features=tuple(tuple(float(value) for value in row) for row in payload["candidate_features"]),
@@ -85,6 +95,8 @@ def _observation_from_dict(payload: dict[str, Any]) -> PolicyObservation:
         action_mask=tuple(bool(value) for value in payload["action_mask"]),
         candidate_cells=candidate_cells,
         candidate_missing_feature_names=candidate_missing_feature_names,
+        candidate_missing_indicator_names=missing_indicator_names,
+        candidate_missing_indicators=candidate_missing_indicators,
     )
 
 

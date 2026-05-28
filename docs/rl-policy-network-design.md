@@ -69,6 +69,56 @@ reachable hard filter -> policy probability rank -> deterministic tie-break
 
 缺失实验字段时使用显式默认值：收益类字段默认为 `0.0`，代价类字段默认为候选内最大可用代价或 `0.0`，`coverage_rate` 默认为 `0.0`。这些默认值只用于保持旧契约兼容，不应被解释为真实观测值。
 
+### 3.1 Observation Schema v1.1
+
+v1.1 observation 由四类张量组成：
+
+| 组件 | 名称 | 形状 | 规则 |
+|---|---|---:|---|
+| candidate features | `candidate_features` | `[K, 15]` | 来自稳定字段、派生坐标和可选实验字段 |
+| missing indicators | `candidate_missing_indicators` | `[K, 8]` | 对每个可选实验字段输出 `1.0=缺失 fallback`、`0.0=真实存在` |
+| global features | `global_features` | `[8]` | 地图、约束、覆盖率和 episode 进度摘要 |
+| action mask | `action_mask` | `[K]` | 仅 `top_goals[].reachable=true` 的真实候选为 `True` |
+
+missing indicator 顺序固定为：
+
+```text
+expected_coverage_rate_delta_missing
+expected_new_coverage_area_missing
+information_gain_missing
+confidence_gain_missing
+value_missing
+risk_missing
+path_cost_missing
+energy_cost_missing
+```
+
+真实候选缺失某个实验字段时，对应 feature 继续使用兼容 fallback 值，同时
+indicator 置为 `1.0`。字段真实存在且值为 `0.0` 时，feature 为 `0.0`，indicator
+必须保持 `0.0`。padding 行的 feature、indicator 和 action mask 均为 0/False，
+不得被解释为有效候选。
+
+### 3.2 Feature Normalization Policy
+
+归一化只作用于网络 observation，不改变 contract 字段本身：
+
+| 特征 | 规则 |
+|---|---|
+| `cell_x`, `cell_y` | 分别除以 `grid.width`、`grid.height`，限幅到 `[0, 1]` |
+| `relative_dx`, `relative_dy` | 分别除以 `grid.width`、`grid.height`，限幅到 `[-1, 1]` |
+| `relative_distance` | 除以地图对角线，限幅到 `[0, 1]` |
+| `utility` | 限幅到 `[0, 1]` |
+| `expected_coverage_rate_delta`, `information_gain`, `confidence_gain`, `value`, `risk` | 限幅到 `[0, 1]` |
+| `expected_new_coverage_area` | 除以 `grid.width * grid.height` 后限幅到 `[0, 1]` |
+| `path_cost`, `energy_cost` | 除以候选列表内对应最大可用成本，缺失时使用该最大成本；无可用成本时为 `0.0` |
+| `grid_width`, `grid_height` | `log1p(value) / log1p(1000)` 后限幅到 `[0, 1]` |
+| `grid_resolution`, `passable_ratio`, `coverage_rate` | 限幅到 `[0, 1]` |
+| `violation_count` | `log1p(violation_count) / log1p(grid_area)` 后限幅到 `[0, 1]` |
+| `step_index`, `remaining_steps` | 除以 `step_index + remaining_steps`，无步数预算时为 `0.0` |
+
+所有非数值、布尔、缺失或非有限输入都按兼容缺失值处理，保证 observation tensor
+元素有限。
+
 首版奖励以覆盖率增量为主：
 
 ```text
@@ -120,6 +170,78 @@ info
 ## 5. 网络设计
 
 首版网络由四个部分组成。
+
+### 5.1 `mlp_v1` baseline snapshot
+
+当前默认架构显式命名为 `mlp_v1`。它是后续 `mlp_missing_v1` 和
+`candidate_attention_v1` 的比较基线，不改变 `model-explorer-contract/v1`
+字段语义，也不扩大动作空间。
+
+固定张量形状如下，其中 `B` 为 batch size，`K` 为候选列表长度，`Fc=15`，
+`Fg=8`，`H` 默认为 64：
+
+| 张量 | 形状 | 说明 |
+|---|---|---|
+| `candidate_features` | `[B, K, Fc]` | 每个 `top_goals` 候选一行，不足 `K` 时 padding 为 0 |
+| `global_features` | `[B, Fg]` | 地图、约束和 episode 进度摘要 |
+| `action_mask` | `[B, K]` | `reachable=false` 和 padding 均为 `False` |
+| `logits` | `[B, K]` | 未屏蔽候选 logit，仅用于诊断 |
+| `masked_logits` | `[B, K]` | 无效动作填充为极小值后参与分布计算 |
+| `action_probs` | `[B, K]` | masked categorical policy 概率 |
+| `value` | `[B]` | 状态价值估计 |
+
+`mlp_v1` 架构图：
+
+```text
+candidate_features [B,K,Fc]
+-> shared candidate_encoder
+-> candidate_embedding [B,K,H]
+
+global_features [B,Fg]
+-> global_encoder
+-> global_embedding [B,H]
+
+concat(candidate_embedding, broadcast(global_embedding))
+-> policy_head
+-> logits [B,K]
+-> action_mask
+-> masked_logits/action_probs
+
+masked mean pool(candidate_embedding, action_mask)
++ global_embedding
+-> value_head
+-> value [B]
+```
+
+`mlp_missing_v1` 保持相同 policy head 和 value head，只把
+`candidate_missing_indicators [B,K,8]` 拼接到 candidate encoder 输入：
+
+```text
+concat(candidate_features, candidate_missing_indicators)
+-> shared candidate_encoder
+-> candidate_embedding
+-> same mlp_v1 policy/value heads
+```
+
+`mlp_missing_v1` 的用途是让网络区分真实 `0.0` 和缺失字段 fallback `0.0`。
+`action_mask` 仍是唯一动作安全边界，不可达候选和 padding action 不会因
+missing indicator 被重新启用。
+
+`candidate_attention_v1` 在 `mlp_v1` 的 candidate encoder 之后加入一层轻量
+masked self-attention：
+
+```text
+candidate_features
+-> shared candidate_encoder
+-> MultiheadAttention(num_heads=1, key_padding_mask=~action_mask)
+-> residual + LayerNorm
+-> same mlp_v1 policy/value heads
+```
+
+attention 只让有效候选作为 key/value 参与上下文交互；`reachable=false` 和
+padding 候选仍通过 `action_mask` 屏蔽，不参与有效候选概率和 value pooling。
+该架构只用于可训练、可比较的 smoke/regression，不要求 synthetic benchmark
+优于 `mlp_v1`。
 
 `candidate_encoder` 对每个候选目标共享权重编码：
 
@@ -211,4 +333,3 @@ model-explorer-contract/v1
 - 固定随机种子下训练环境可复现。
 - 策略网络在小规模合成场景能完成 rollout，并产生有限的 loss、entropy 和 value。
 - 文档和实现均不要求修改 `model-explorer-contract/v1` 稳定字段。
-

@@ -456,8 +456,10 @@ class TrainingClosureTests(unittest.TestCase):
             old_scorer = load_policy_checkpoint(old_checkpoint_path)
 
         self.assertEqual(result["epochs"], 2)
+        self.assertEqual(result.get("architecture"), "mlp_v1")
         self.assertEqual(metadata["format"], "model-explorer-masked-policy")
         self.assertEqual(metadata["version"], 2)
+        self.assertEqual(metadata.get("architecture"), "mlp_v1")
         self.assertEqual(metadata["candidate_feature_names"], checkpoint["candidate_feature_names"])
         self.assertEqual(metadata["global_feature_names"], checkpoint["global_feature_names"])
         self.assertEqual(metadata["action_count"], 2)
@@ -467,6 +469,106 @@ class TrainingClosureTests(unittest.TestCase):
         self.assertEqual(metadata["hidden_size"], 16)
         self.assertEqual(metadata["learning_rate"], 5.0e-4)
         self.assertIsNotNone(old_scorer)
+        self.assertEqual(old_scorer.network.architecture_name, "mlp_v1")
+
+    def test_mlp_missing_architecture_trains_saves_and_loads_from_checkpoint(self):
+        import torch
+
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.training import load_policy_checkpoint, train_policy_on_episodes
+
+        episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[
+                            {"cell": [1, 1], "utility": 0.5, "reachable": True},
+                            {"cell": [2, 1], "utility": 0.4, "reachable": True, "risk": 0.0},
+                        ],
+                        observation_update={"coverage_rate_delta": 0.1},
+                    )
+                )
+            ],
+            max_candidates=3,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "missing-policy.pt"
+            result = train_policy_on_episodes(
+                [episode],
+                checkpoint_path=checkpoint_path,
+                seed=31,
+                hidden_size=16,
+                epochs=1,
+                architecture="mlp_missing_v1",
+            )
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            scorer = load_policy_checkpoint(checkpoint_path)
+
+        self.assertEqual(result["architecture"], "mlp_missing_v1")
+        self.assertEqual(checkpoint["metadata"]["architecture"], "mlp_missing_v1")
+        self.assertIn("candidate_missing_indicator_names", checkpoint["metadata"])
+        self.assertEqual(scorer.network.architecture_name, "mlp_missing_v1")
+        self.assertTrue(torch.isfinite(torch.tensor(result["total_loss"])))
+
+    def test_unknown_training_architecture_returns_readable_error(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.training import train_policy_on_episodes
+
+        episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[{"cell": [1, 1], "utility": 0.5, "reachable": True}],
+                        observation_update={"coverage_rate_delta": 0.1},
+                    )
+                )
+            ],
+            max_candidates=2,
+        )
+
+        with self.assertRaisesRegex(ValueError, "unknown architecture.*not_a_model.*mlp_v1"):
+            train_policy_on_episodes([episode], architecture="not_a_model")
+
+    def test_candidate_attention_architecture_trains_saves_and_loads_from_checkpoint(self):
+        import torch
+
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.training import load_policy_checkpoint, train_policy_on_episodes
+
+        episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[
+                            {"cell": [1, 1], "utility": 0.5, "reachable": True, "risk": 0.0},
+                            {"cell": [2, 1], "utility": 0.4, "reachable": True, "risk": 0.2},
+                            {"cell": [3, 1], "utility": 9.0, "reachable": False, "risk": 0.1},
+                        ],
+                        observation_update={"coverage_rate_delta": 0.1},
+                    )
+                )
+            ],
+            max_candidates=4,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "attention-policy.pt"
+            result = train_policy_on_episodes(
+                [episode],
+                checkpoint_path=checkpoint_path,
+                seed=37,
+                hidden_size=16,
+                epochs=1,
+                architecture="candidate_attention_v1",
+            )
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            scorer = load_policy_checkpoint(checkpoint_path)
+
+        self.assertEqual(result["architecture"], "candidate_attention_v1")
+        self.assertEqual(checkpoint["metadata"]["architecture"], "candidate_attention_v1")
+        self.assertEqual(scorer.network.architecture_name, "candidate_attention_v1")
+        self.assertTrue(torch.isfinite(torch.tensor(result["total_loss"])))
 
     def test_experiment_train_block_evaluates_trained_policy_and_reports_training_section(self):
         scenario_payload = minimal_contract(
@@ -505,6 +607,7 @@ class TrainingClosureTests(unittest.TestCase):
                         "train": {
                             "checkpoint": str(checkpoint_path),
                             "loss_log": str(loss_log_path),
+                            "architecture": "mlp_missing_v1",
                             "seed": 29,
                             "hidden_size": 16,
                             "epochs": 1,
@@ -530,9 +633,13 @@ class TrainingClosureTests(unittest.TestCase):
 
         self.assertIn("dataset_summary", summary)
         self.assertIn("dataset_summary", summary["training"])
+        self.assertEqual(summary["training"]["architecture"], "mlp_missing_v1")
+        self.assertIn("mlp_missing_v1", summary.get("architecture_deltas", {}))
         self.assertIn("torch_policy", evaluation)
         self.assertIn("torch_policy", summary["training"]["baseline_evaluation"])
         self.assertIn("## Training", report)
+        self.assertIn("| architecture | mlp_missing_v1 |", report)
+        self.assertIn("## Architecture Deltas", report)
         self.assertIn("checkpoint", report)
         self.assertIn("dataset_summary", report)
         self.assertIn("| torch_policy |", report)

@@ -119,6 +119,10 @@ def _observation_to_dict(observation: PolicyObservation) -> dict[str, Any]:
         "candidate_missing_feature_names": [
             list(names) for names in observation.candidate_missing_feature_names
         ],
+        "candidate_missing_indicator_names": list(observation.candidate_missing_indicator_names),
+        "candidate_missing_indicators": [
+            list(indicators) for indicators in observation.candidate_missing_indicators
+        ],
     }
 
 

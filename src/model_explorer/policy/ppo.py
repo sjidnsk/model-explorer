@@ -26,6 +26,7 @@ def compute_masked_ppo_loss(
     old_log_probs: torch.Tensor,
     returns: torch.Tensor,
     advantages: torch.Tensor,
+    candidate_missing_indicators: torch.Tensor | None = None,
     clip_ratio: float = 0.2,
     value_loss_coefficient: float = 0.5,
     entropy_coefficient: float = 0.01,
@@ -46,6 +47,7 @@ def compute_masked_ppo_loss(
         candidate_features=candidate_features,
         global_features=global_features,
         action_mask=action_mask,
+        candidate_missing_indicators=candidate_missing_indicators,
     )
     distribution = torch.distributions.Categorical(logits=output.masked_logits)
     log_probs = distribution.log_prob(actions)

@@ -17,10 +17,27 @@ class PolicyNetworkOutput:
 
 
 class MaskedCandidatePolicyNetwork(nn.Module):
-    def __init__(self, *, candidate_feature_count: int, global_feature_count: int, hidden_size: int = 64) -> None:
+    architecture_name = "mlp_v1"
+    uses_missing_indicators = False
+
+    def __init__(
+        self,
+        *,
+        candidate_feature_count: int,
+        global_feature_count: int,
+        hidden_size: int = 64,
+        missing_indicator_count: int = 0,
+    ) -> None:
         super().__init__()
+        self.candidate_feature_count = int(candidate_feature_count)
+        self.global_feature_count = int(global_feature_count)
+        self.hidden_size = int(hidden_size)
+        self.missing_indicator_count = int(missing_indicator_count)
+        candidate_encoder_input_count = self.candidate_feature_count
+        if self.uses_missing_indicators:
+            candidate_encoder_input_count += self.missing_indicator_count
         self.candidate_encoder = nn.Sequential(
-            nn.Linear(candidate_feature_count, hidden_size),
+            nn.Linear(candidate_encoder_input_count, hidden_size),
             nn.LayerNorm(hidden_size),
             nn.GELU(),
             nn.Linear(hidden_size, hidden_size),
@@ -49,6 +66,7 @@ class MaskedCandidatePolicyNetwork(nn.Module):
         candidate_features: torch.Tensor,
         global_features: torch.Tensor,
         action_mask: torch.Tensor,
+        candidate_missing_indicators: torch.Tensor | None = None,
     ) -> PolicyNetworkOutput:
         if candidate_features.ndim != 3:
             raise ValueError("candidate_features must have shape [batch, candidates, features]")
@@ -61,7 +79,13 @@ class MaskedCandidatePolicyNetwork(nn.Module):
         if not torch.all(mask.any(dim=1)):
             raise ValueError("each policy batch item must contain at least one valid action")
 
-        candidate_embedding = self.candidate_encoder(candidate_features)
+        candidate_embedding = self.candidate_encoder(
+            self._candidate_encoder_inputs(
+                candidate_features,
+                candidate_missing_indicators=candidate_missing_indicators,
+            )
+        )
+        candidate_embedding = self._contextualize_candidates(candidate_embedding, mask=mask)
         global_embedding = self.global_encoder(global_features)
         expanded_global = global_embedding.unsqueeze(1).expand(-1, candidate_embedding.shape[1], -1)
 
@@ -80,6 +104,73 @@ class MaskedCandidatePolicyNetwork(nn.Module):
             action_probs=action_probs,
             value=value,
         )
+
+    def _candidate_encoder_inputs(
+        self,
+        candidate_features: torch.Tensor,
+        *,
+        candidate_missing_indicators: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if not self.uses_missing_indicators:
+            return candidate_features
+        if self.missing_indicator_count <= 0:
+            raise ValueError("missing indicator architecture requires missing indicators")
+        if candidate_missing_indicators is None:
+            candidate_missing_indicators = torch.zeros(
+                (*candidate_features.shape[:2], self.missing_indicator_count),
+                dtype=candidate_features.dtype,
+                device=candidate_features.device,
+            )
+        if candidate_missing_indicators.ndim != 3:
+            raise ValueError("candidate_missing_indicators must have shape [batch, candidates, indicators]")
+        if candidate_missing_indicators.shape[:2] != candidate_features.shape[:2]:
+            raise ValueError("candidate_missing_indicators must match candidate batch and count")
+        if candidate_missing_indicators.shape[2] != self.missing_indicator_count:
+            raise ValueError("candidate_missing_indicators feature count does not match network metadata")
+        return torch.cat((candidate_features, candidate_missing_indicators.to(candidate_features.dtype)), dim=-1)
+
+    def _contextualize_candidates(self, candidate_embedding: torch.Tensor, *, mask: torch.Tensor) -> torch.Tensor:
+        return candidate_embedding
+
+
+class MissingIndicatorCandidatePolicyNetwork(MaskedCandidatePolicyNetwork):
+    architecture_name = "mlp_missing_v1"
+    uses_missing_indicators = True
+
+
+class CandidateAttentionPolicyNetwork(MaskedCandidatePolicyNetwork):
+    architecture_name = "candidate_attention_v1"
+
+    def __init__(
+        self,
+        *,
+        candidate_feature_count: int,
+        global_feature_count: int,
+        hidden_size: int = 64,
+        missing_indicator_count: int = 0,
+    ) -> None:
+        super().__init__(
+            candidate_feature_count=candidate_feature_count,
+            global_feature_count=global_feature_count,
+            hidden_size=hidden_size,
+            missing_indicator_count=missing_indicator_count,
+        )
+        self.candidate_attention = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=1,
+            batch_first=True,
+        )
+        self.attention_norm = nn.LayerNorm(hidden_size)
+
+    def _contextualize_candidates(self, candidate_embedding: torch.Tensor, *, mask: torch.Tensor) -> torch.Tensor:
+        attended, _ = self.candidate_attention(
+            candidate_embedding,
+            candidate_embedding,
+            candidate_embedding,
+            key_padding_mask=~mask,
+            need_weights=False,
+        )
+        return self.attention_norm(candidate_embedding + attended)
 
 
 class TorchPolicyScorer:
@@ -114,6 +205,11 @@ def observation_to_tensors(
         "action_mask": torch.tensor(
             [observation.action_mask],
             dtype=torch.bool,
+            device=device,
+        ),
+        "candidate_missing_indicators": torch.tensor(
+            [observation.candidate_missing_indicators],
+            dtype=torch.float32,
             device=device,
         ),
     }

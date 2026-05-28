@@ -720,6 +720,7 @@ def _run_training(
             epochs=int(config.get("epochs", 1)),
             return_mode=str(config.get("return_mode", "reward_as_return")),
             discount_factor=float(config.get("discount_factor", 0.99)),
+            architecture=config.get("architecture"),
         )
         if loss_log is not None:
             _ensure_parent_dir(loss_log)
@@ -1090,10 +1091,22 @@ def _daily_report_summary(summary: dict[str, Any], evaluation: dict[str, Any]) -
     return {
         "policy_ranking": _policy_ranking(comparison),
         "baseline_deltas": baseline_deltas,
+        "architecture_deltas": _architecture_deltas(summary, baseline_deltas),
         "per_group_winners": _per_group_winners(evaluation),
         "failure_scenarios": _failure_scenarios(evaluation),
         "gate_summary": _gate_summary(summary.get("dataset_summary")),
     }
+
+
+def _architecture_deltas(summary: dict[str, Any], baseline_deltas: dict[str, Any]) -> dict[str, Any]:
+    training = summary.get("training")
+    if not isinstance(training, dict):
+        return {}
+    architecture = training.get("architecture")
+    torch_deltas = baseline_deltas.get("torch_policy") if isinstance(baseline_deltas, dict) else None
+    if not architecture or not isinstance(torch_deltas, dict):
+        return {}
+    return {str(architecture): torch_deltas}
 
 
 def _policy_ranking(evaluation_comparison: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1329,6 +1342,28 @@ def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str
     else:
         lines.append("| none | torch_policy unavailable | 0.0 |")
 
+    architecture_deltas = summary.get("architecture_deltas", {})
+    lines.extend(
+        [
+            "",
+            "## Architecture Deltas",
+            "",
+            "| architecture | baseline | metric | delta |",
+            "|---|---|---|---:|",
+        ]
+    )
+    if isinstance(architecture_deltas, dict) and architecture_deltas:
+        for architecture, baseline_map in architecture_deltas.items():
+            if not isinstance(baseline_map, dict):
+                continue
+            for baseline_name, metrics in baseline_map.items():
+                if not isinstance(metrics, dict):
+                    continue
+                for metric, delta in metrics.items():
+                    lines.append(f"| {architecture} | {baseline_name} | {metric} | {delta} |")
+    else:
+        lines.append("| none | none | none | 0.0 |")
+
     per_group_winners = summary.get("per_group_winners", {})
     lines.extend(
         [
@@ -1381,6 +1416,7 @@ def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str
         lines.extend(["", "## Training", "", "| field | value |", "|---|---:|"])
         for key in (
             "checkpoint",
+            "architecture",
             "best_checkpoint_path",
             "last_checkpoint_path",
             "best_seed",
