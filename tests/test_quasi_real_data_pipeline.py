@@ -503,6 +503,21 @@ class QuasiRealEvaluationMatrixTests(unittest.TestCase):
         for roi_name in ("smooth_high_confidence", "rim_or_steep_slope", "low_observation_count", "mixed_risk"):
             self.assertGreaterEqual(roi_counts.get(roi_name, 0), 2)
 
+    def test_mask_stress_manifest_template_is_tracked_and_explicitly_augmented(self):
+        from model_explorer.data.evaluation_matrix import load_quasi_real_evaluation_manifest
+
+        manifest_path = ROOT / "data" / "manifests" / "lunar_south_pole_lro_lola_mask_stress_matrix_v1.json"
+
+        manifest = load_quasi_real_evaluation_manifest(manifest_path)
+
+        self.assertTrue(manifest_path.exists())
+        self.assertEqual(manifest.dataset_manifest.name, "lunar_south_pole_lro_lola_gdr_875s_20m.json")
+        self.assertEqual(manifest.output_root.name, "qreal_mask_stress_v1")
+        self.assertTrue(manifest.mask_stress_config["enabled"])
+        self.assertEqual(manifest.mask_stress_config["label"], "mask_stress_augmented")
+        self.assertGreaterEqual(manifest.dataset_validation["min_unreachable_candidate_count"], 1)
+        self.assertGreaterEqual(manifest.dataset_validation["min_mask_stress_sample_count"], 1)
+
     def test_evaluation_manifest_validate_and_dry_run_do_not_write_outputs(self):
         from model_explorer.data.evaluation_matrix import (
             dry_run_quasi_real_evaluation_manifest,
@@ -656,8 +671,77 @@ class QuasiRealEvaluationMatrixTests(unittest.TestCase):
         self.assertIn("## Sample Coverage Warnings", report)
         self.assertIn("no_mask_stress_samples", report)
 
+    def test_mask_stress_matrix_generates_unreachable_padding_missing_and_finite_training(self):
+        try:
+            import torch  # noqa: F401
+        except ImportError:
+            self.skipTest("PyTorch is not available in this environment")
+        from model_explorer.data.evaluation_matrix import run_quasi_real_evaluation_manifest
+        from model_explorer.io.scenario import load_scenario
+        from model_explorer.policy.features import extract_policy_observation
 
-def _write_fixture_matrix_manifest(root: Path, *, seeds: list[int] | None = None, all_reachable: bool = False) -> Path:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            matrix_manifest = _write_fixture_matrix_manifest(Path(tmpdir), seeds=[31], mask_stress=True)
+
+            summary = run_quasi_real_evaluation_manifest(matrix_manifest)
+            report = Path(summary["report_output"]).read_text(encoding="utf-8")
+            first_scenario = load_scenario(Path(summary["output_root"]) / summary["rois"][0]["scenarios"][0])
+            observation = extract_policy_observation(first_scenario.snapshots[0], max_candidates=5)
+
+        dataset_summary = summary["experiment"]["dataset_summary"]
+        self.assertEqual(summary["mask_stress"]["label"], "mask_stress_augmented")
+        self.assertTrue(summary["mask_stress"]["enabled"])
+        self.assertTrue(dataset_summary["mask_stress_augmented"])
+        self.assertGreater(dataset_summary["unreachable_candidate_count"], 0)
+        self.assertGreater(dataset_summary["mask_stress_sample_count"], 0)
+        self.assertGreater(dataset_summary["padding_candidate_count"], 0)
+        self.assertGreater(dataset_summary["missing_experimental_feature_count"], 0)
+        self.assertGreater(dataset_summary["missing_experimental_feature_candidate_count"], 0)
+        self.assertNotIn("no_unreachable_candidates", summary["coverage_warnings"])
+        self.assertNotIn("no_mask_stress_samples", summary["coverage_warnings"])
+        self.assertEqual(dataset_summary["non_finite_reward_count"], 0)
+        for run in summary["experiment"]["training"]["runs"]:
+            self.assertTrue(math.isfinite(run["loss"]))
+        for index, goal in enumerate(first_scenario.snapshots[0].top_goals):
+            if not goal.reachable:
+                self.assertFalse(observation.action_mask[index])
+        self.assertIn(False, observation.action_mask[len(first_scenario.snapshots[0].top_goals) :])
+        for text in (
+            "## Mask-Stress Coverage",
+            "mask_stress_augmented",
+            "not real-world generalization benchmark",
+            "padding_candidate_count",
+            "missing_experimental_feature_candidate_count",
+            "mlp_missing_v1",
+            "candidate_attention_v1",
+        ):
+            self.assertIn(text, report)
+
+    def test_mask_stress_quality_gates_are_optional_and_fail_when_explicitly_requested(self):
+        from model_explorer.data.evaluation_matrix import run_quasi_real_evaluation_manifest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            matrix_manifest = _write_fixture_matrix_manifest(
+                Path(tmpdir),
+                all_reachable=True,
+                dataset_validation_overrides={
+                    "min_unreachable_candidate_count": 1,
+                    "min_mask_stress_sample_count": 1,
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "min_unreachable_candidate_count expected >= 1, actual 0"):
+                run_quasi_real_evaluation_manifest(matrix_manifest)
+
+
+def _write_fixture_matrix_manifest(
+    root: Path,
+    *,
+    seeds: list[int] | None = None,
+    all_reachable: bool = False,
+    mask_stress: bool = False,
+    dataset_validation_overrides: dict[str, object] | None = None,
+) -> Path:
     try:
         from PIL import Image
     except ImportError as exc:
@@ -718,6 +802,22 @@ def _write_fixture_matrix_manifest(root: Path, *, seeds: list[int] | None = None
         ),
         encoding="utf-8",
     )
+    dataset_validation = {
+        "min_trainable_transition_count": 4,
+        "require_finite_reward": True,
+        "min_reward_std": 0.0,
+        "min_action_mask_valid_mean": 0.1,
+        "max_unreachable_candidate_rate": 0.95,
+    }
+    if mask_stress:
+        dataset_validation.update(
+            {
+                "min_unreachable_candidate_count": 1,
+                "min_mask_stress_sample_count": 1,
+            }
+        )
+    if dataset_validation_overrides:
+        dataset_validation.update(dataset_validation_overrides)
     matrix_manifest = root / "matrix.json"
     matrix_manifest.write_text(
         json.dumps(
@@ -731,19 +831,27 @@ def _write_fixture_matrix_manifest(root: Path, *, seeds: list[int] | None = None
                 "episode_count": 1,
                 "seed": 31,
                 "rois": [
-                    {"name": "smooth_high_confidence", "split": "train", "roi_x": 0, "roi_y": 0, "roi_width": 4, "roi_height": 4},
+                    {
+                        "name": "smooth_high_confidence",
+                        "split": "train",
+                        "roi_x": 0,
+                        "roi_y": 0,
+                        "roi_width": 4,
+                        "roi_height": 4,
+                        **({"candidate_count": 3} if mask_stress else {}),
+                    },
                     {"name": "rim_or_steep_slope", "split": "train", "roi_x": 4, "roi_y": 4, "roi_width": 4, "roi_height": 4},
                     {"name": "low_observation_count", "split": "validation", "roi_x": 4, "roi_y": 0, "roi_width": 4, "roi_height": 4},
                     {"name": "mixed_risk", "split": "test", "roi_x": 0, "roi_y": 4, "roi_width": 4, "roi_height": 4},
                     {"name": "mixed_risk", "split": "benchmark", "roi_x": 0, "roi_y": 4, "roi_width": 4, "roi_height": 4, "seed": 41},
                 ],
-                "dataset_validation": {
-                    "min_trainable_transition_count": 4,
-                    "require_finite_reward": True,
-                    "min_reward_std": 0.0,
-                    "min_action_mask_valid_mean": 0.1,
-                    "max_unreachable_candidate_rate": 0.95,
-                },
+                "mask_stress": {
+                    "enabled": True,
+                    "label": "mask_stress_augmented",
+                    "unreachable_candidate_count": 1,
+                    "missing_experimental_fields": ["risk", "path_cost", "energy_cost"],
+                } if mask_stress else {"enabled": False},
+                "dataset_validation": dataset_validation,
                 "train": {
                     "seed": 31,
                     "architectures": ["mlp_v1", "mlp_missing_v1", "candidate_attention_v1"],

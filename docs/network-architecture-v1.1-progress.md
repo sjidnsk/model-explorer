@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Phase | Network Architecture v1.3 network architecture experiments |
-| Current stage | v1 quasi-real stability evaluation |
+| Current stage | v1 mask-stress data quality gate |
 | Current baseline | `mlp_v1` masked candidate policy |
 | Scope | Candidate-list policy over `ModelExplorerContract.top_goals` |
 | Out of scope | Full-map action space, external project imports, contract v1 breaking changes |
@@ -76,6 +76,17 @@
 | VS-4 | Real stability run | Completed | `$env:PYTHONPATH='src'; python -m model_explorer quasi-real run data\manifests\lunar_south_pole_lro_lola_stability_matrix_v1.json` completed 9 architecture/seed runs; loss distribution count 9, mean 0.05742432177066803, std 0.01835056203905026; per-architecture run counts are 3 for `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1` | Run final repository verification gates |
 | VS-5 | Final verification gates | Completed | `python -m unittest discover -s tests -v` passed 126 tests; `$env:PYTHONPATH='src'; python -m model_explorer verify` passed 126 unittest cases, benchmark smoke, forbidden import scan over 44 files, and `git diff --check`; external `git diff --check` returned 0 with CRLF warnings only; external forbidden import `rg` returned no matches | Keep stability outputs under ignored `data/processed/` and do not claim real-world generalization |
 
+## v1 Mask-Stress Data Quality Gate Progress
+
+| ID | Task | Status | Evidence | Next Action |
+|---|---|---|---|---|
+| MS-0 | Deterministic mask-stress manifest | Completed | Added tracked `data/manifests/lunar_south_pole_lro_lola_mask_stress_matrix_v1.json`; it references the existing LOLA GDR 875S 20 m data manifest, writes under ignored `data/processed/qreal_mask_stress_v1`, enables `mask_stress_augmented`, and keeps the run labeled `quasi_real` / `not real-world generalization benchmark` | Keep augmentation explicit and default-off for old manifests |
+| MS-1 | Mask-stress augmentation | Completed | `model_explorer.data.evaluation_matrix` now accepts optional `mask_stress`; when enabled it marks generated scenario provenance and contract observation metadata with `mask_stress_augmented`, deterministically flips configured candidate-list entries to `reachable=false`, and removes configured experimental fields for missing-field fallback coverage without changing `model-explorer-contract/v1` stable field names | Do not use augmented labels as mission ground truth |
+| MS-2 | Dataset summary and gates | Completed | Dataset summary now records `observation_slot_count`, `padding_candidate_count/rate`, `missing_experimental_feature_candidate_count`, `mask_stress_sample_count/rate`, and `mask_stress_augmented`; explicit gates `min_unreachable_candidate_count` and `min_mask_stress_sample_count` fail only when configured | Keep old quasi-real/stability manifests warning-compatible |
+| MS-3 | Report coverage | Completed | Matrix Markdown report adds `Mask-Stress Coverage`; architecture stability tables include per-architecture dataset metrics such as `dataset.padding_candidate_count`, `dataset.missing_experimental_feature_candidate_count`, and `dataset.mask_stress_sample_count`; report continues to display `quasi_real` and `not real-world generalization benchmark` | Use report as data-quality evidence, not performance proof |
+| MS-4 | Real mask-stress run | Completed | `$env:PYTHONPATH='src'; python -m model_explorer quasi-real run data\manifests\lunar_south_pole_lro_lola_mask_stress_matrix_v1.json` completed 4 scenarios and 3 architecture runs; dataset summary: `unreachable_candidate_count=4`, `padding_candidate_count=2`, `missing_experimental_feature_candidate_count=30`, `mask_stress_sample_count=4`, `non_finite_reward_count=0`, coverage warnings empty, validation gates passed | Run full repository verification gates |
+| MS-5 | Final verification gates | Completed | `python -m unittest discover -s tests -v` passed 129 tests; `$env:PYTHONPATH='src'; python -m model_explorer verify` passed 129 unittest cases, benchmark smoke, forbidden import scan over 44 files, and `git diff --check`; external `git diff --check` and forbidden import `rg` are part of final handoff gates | Keep generated outputs under ignored `data/processed/`; do not use mask-stress scores as real-world performance evidence |
+
 ## Current Architecture Snapshot
 
 ```text
@@ -103,6 +114,7 @@ Current network-architecture properties:
 - Ubuntu Readiness documents default install, `model-explorer[training]`, Linux shell verification, and Windows-vs-Ubuntu validation boundaries.
 - Quasi-real LRO LOLA south-pole data can now be validated from manifest, decoded through an optional raster adapter, converted into candidate-list contracts, written as rollout JSONL, and used for three-architecture training smoke without expanding the action space beyond `top_goals`.
 - The v1 stability matrix can compare `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1` over multiple seeds with mean/std summaries while preserving the `quasi_real` and `not real-world generalization benchmark` labels.
+- The v1 mask-stress matrix can produce deterministic unreachable candidates, padding coverage, missing experimental field fallback, and per-architecture finite training metrics while keeping augmentation explicitly labeled.
 
 ## Decision Log
 
@@ -191,6 +203,22 @@ git diff --check
 Result: returned 0; Windows line-ending warnings only
 rg forbidden import check
 Result: no forbidden import matches in src, tests, scripts, docs, or data
+
+v1 Mask-Stress Data Quality Gate
+python -m unittest tests.test_quasi_real_data_pipeline.QuasiRealEvaluationMatrixTests -v
+Result: initially failed as expected for missing tracked manifest, unknown `min_mask_stress_sample_count`, and absent mask-stress summary/report fields
+python -m unittest tests.test_quasi_real_data_pipeline.QuasiRealEvaluationMatrixTests -v
+Result: passed 9 tests after implementation
+$env:PYTHONPATH='src'; python -m model_explorer quasi-real validate data\manifests\lunar_south_pole_lro_lola_mask_stress_matrix_v1.json
+Result: valid; 4 ROI windows, explicit `mask_stress_augmented`, 3 architectures, configured mask-stress gates
+$env:PYTHONPATH='src'; python -m model_explorer quasi-real dry-run data\manifests\lunar_south_pole_lro_lola_mask_stress_matrix_v1.json
+Result: dry_run; output paths remain under ignored data\processed\qreal_mask_stress_v1
+$env:PYTHONPATH='src'; python -m model_explorer quasi-real run data\manifests\lunar_south_pole_lro_lola_mask_stress_matrix_v1.json
+Result: completed; 4 scenarios, 3 architecture runs, unreachable_candidate_count 4, padding_candidate_count 2, missing_experimental_feature_candidate_count 30, mask_stress_sample_count 4, non_finite_reward_count 0, coverage warnings empty
+python -m unittest discover -s tests -v
+Result: passed 129 tests
+$env:PYTHONPATH='src'; python -m model_explorer verify
+Result: passed; unittest, benchmark_smoke, forbidden_import_check, and git_diff_check returned 0
 ```
 
 ## Risk Register
@@ -209,6 +237,7 @@ Result: no forbidden import matches in src, tests, scripts, docs, or data
 | Quasi-real ROI smoke is not mission ground truth | Terrain-derived labels are generated proxies and can bias policy evaluation | Mark data as `quasi_real`, keep provenance in rollout/report, and avoid claiming real-world generalization |
 | Windows long output paths | Deep ignored output roots plus long experiment names can exceed legacy Windows path limits during report writes | Use short local output roots such as `data/processed/qreal_eval_roi32_v1` for current v1 matrix; defer path-prefix hardening unless it blocks tracked workflows |
 | Stability matrix lacks mask-stress samples | Current real stability run has no unreachable candidates, so mask-stress coverage is only fixture-tested | Emit non-fatal report warnings and keep separate mask-safety unit tests; add a dedicated mask-stress sample source before using stability results for stronger claims |
+| Mask-stress augmentation can distort quasi-real costs | Removing experimental fields intentionally exercises fallback paths and can make selected path/risk metrics less representative | Keep `mask_stress_augmented` explicit in provenance/report and use this gate only for mask/data-quality evidence |
 
 ## Completion Criteria
 

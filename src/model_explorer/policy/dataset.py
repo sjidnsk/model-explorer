@@ -21,6 +21,8 @@ class DatasetValidationGates:
     max_missing_experimental_feature_rate: float | None = None
     min_action_mask_valid_mean: float | None = None
     max_unreachable_candidate_rate: float | None = None
+    min_unreachable_candidate_count: int | None = None
+    min_mask_stress_sample_count: int | None = None
     min_reward_std: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -37,6 +39,8 @@ class DatasetValidationGates:
                 "max_missing_experimental_feature_rate": self.max_missing_experimental_feature_rate,
                 "min_action_mask_valid_mean": self.min_action_mask_valid_mean,
                 "max_unreachable_candidate_rate": self.max_unreachable_candidate_rate,
+                "min_unreachable_candidate_count": self.min_unreachable_candidate_count,
+                "min_mask_stress_sample_count": self.min_mask_stress_sample_count,
                 "min_reward_std": self.min_reward_std,
             }.items()
             if value is not None and value is not False
@@ -72,13 +76,21 @@ def summarize_rollout_dataset(episodes: Iterable[RolloutEpisode]) -> dict[str, A
         "non_finite_reward_count": non_finite_reward_count,
         "reward": _numeric_summary(rewards),
         "candidate_count": candidate_quality["candidate_count"],
+        "observation_slot_count": candidate_quality["observation_slot_count"],
         "reachable_candidate_count": candidate_quality["reachable_candidate_count"],
         "unreachable_candidate_count": candidate_quality["unreachable_candidate_count"],
+        "padding_candidate_count": candidate_quality["padding_candidate_count"],
+        "padding_candidate_rate": candidate_quality["padding_candidate_rate"],
         "action_mask_valid_mean": candidate_quality["action_mask_valid_mean"],
         "unreachable_candidate_rate": candidate_quality["unreachable_candidate_rate"],
         "experimental_feature_count": candidate_quality["experimental_feature_count"],
         "missing_experimental_feature_count": candidate_quality["missing_experimental_feature_count"],
+        "missing_experimental_feature_candidate_count": candidate_quality[
+            "missing_experimental_feature_candidate_count"
+        ],
         "missing_experimental_feature_rate": candidate_quality["missing_experimental_feature_rate"],
+        "mask_stress_sample_count": candidate_quality["mask_stress_sample_count"],
+        "mask_stress_sample_rate": candidate_quality["mask_stress_sample_rate"],
         "failure_count": _aggregate_failure_count(episode_tuple),
         "replan_count": _aggregate_replan_count(episode_tuple),
         "coverage_delta_total": _aggregate_coverage_delta(episode_tuple),
@@ -181,39 +193,69 @@ def _population_std(values: tuple[float, ...], *, average: float | None = None) 
 
 def _candidate_quality_summary(transitions: tuple[RolloutTransition, ...]) -> dict[str, Any]:
     candidate_count = 0
+    observation_slot_count = 0
     reachable_count = 0
+    padding_count = 0
     missing_feature_count = 0
+    missing_feature_candidate_count = 0
     experimental_feature_count = 0
+    mask_stress_sample_count = 0
     for transition in transitions:
         observation = transition.observation
         missing_rows = observation.candidate_missing_feature_names
         if len(missing_rows) != len(observation.candidate_cells):
             missing_rows = tuple(() for _ in observation.candidate_cells)
+        transition_has_unreachable = False
+        transition_has_padding = False
+        transition_has_missing = False
         for index, cell in enumerate(observation.candidate_cells):
+            observation_slot_count += 1
             if cell is None:
+                padding_count += 1
+                transition_has_padding = True
                 continue
             candidate_count += 1
             if index < len(observation.action_mask) and bool(observation.action_mask[index]):
                 reachable_count += 1
+            else:
+                transition_has_unreachable = True
             if index < len(missing_rows):
-                missing_feature_count += len(missing_rows[index])
+                missing_count = len(missing_rows[index])
+                missing_feature_count += missing_count
+                if missing_count:
+                    missing_feature_candidate_count += 1
+                    transition_has_missing = True
             experimental_feature_count += len(missing_rows[index]) + _present_experimental_feature_count(
                 observation,
                 index,
                 missing_rows[index] if index < len(missing_rows) else (),
             )
+        provenance = _transition_provenance(transition)
+        if (
+            transition_has_unreachable
+            or transition_has_padding
+            or transition_has_missing
+            or bool(provenance.get("mask_stress_augmented"))
+        ):
+            mask_stress_sample_count += 1
     unreachable_count = candidate_count - reachable_count
     return {
         "candidate_count": candidate_count,
+        "observation_slot_count": observation_slot_count,
         "reachable_candidate_count": reachable_count,
         "unreachable_candidate_count": unreachable_count,
+        "padding_candidate_count": padding_count,
+        "padding_candidate_rate": padding_count / observation_slot_count if observation_slot_count else 0.0,
         "action_mask_valid_mean": reachable_count / candidate_count if candidate_count else 0.0,
         "unreachable_candidate_rate": unreachable_count / candidate_count if candidate_count else 0.0,
         "experimental_feature_count": experimental_feature_count,
         "missing_experimental_feature_count": missing_feature_count,
+        "missing_experimental_feature_candidate_count": missing_feature_candidate_count,
         "missing_experimental_feature_rate": (
             missing_feature_count / experimental_feature_count if experimental_feature_count else 0.0
         ),
+        "mask_stress_sample_count": mask_stress_sample_count,
+        "mask_stress_sample_rate": mask_stress_sample_count / len(transitions) if transitions else 0.0,
     }
 
 
@@ -226,6 +268,8 @@ def _provenance_summary(transitions: tuple[RolloutTransition, ...]) -> dict[str,
     generator_versions = _unique_strings(record.get("generator_version") for record in records)
     roi_names = _unique_strings(record.get("roi_name") for record in records)
     splits = _unique_strings(record.get("split") for record in records)
+    mask_stress_labels = _unique_strings(record.get("mask_stress_label") for record in records)
+    mask_stress_profiles = _unique_strings(record.get("mask_stress_profile") for record in records)
     summary: dict[str, Any] = {
         "data_classes": list(data_classes),
         "dataset_ids": list(dataset_ids),
@@ -235,6 +279,9 @@ def _provenance_summary(transitions: tuple[RolloutTransition, ...]) -> dict[str,
         "roi_count": len(roi_names),
         "splits": list(splits),
         "split_counts": _counts_by_key(records, "split"),
+        "mask_stress_augmented": any(bool(record.get("mask_stress_augmented")) for record in records),
+        "mask_stress_labels": list(mask_stress_labels),
+        "mask_stress_profiles": list(mask_stress_profiles),
     }
     if len(data_classes) == 1:
         summary["data_class"] = data_classes[0]
@@ -244,6 +291,10 @@ def _provenance_summary(transitions: tuple[RolloutTransition, ...]) -> dict[str,
         summary["region"] = regions[0]
     if len(generator_versions) == 1:
         summary["generator_version"] = generator_versions[0]
+    if len(mask_stress_labels) == 1:
+        summary["mask_stress_label"] = mask_stress_labels[0]
+    if len(mask_stress_profiles) == 1:
+        summary["mask_stress_profile"] = mask_stress_profiles[0]
     return summary
 
 
@@ -368,6 +419,8 @@ def _coerce_validation_gates(value: dict[str, Any] | DatasetValidationGates | No
         max_missing_experimental_feature_rate=_optional_float(value, "max_missing_experimental_feature_rate"),
         min_action_mask_valid_mean=_optional_float(value, "min_action_mask_valid_mean"),
         max_unreachable_candidate_rate=_optional_float(value, "max_unreachable_candidate_rate"),
+        min_unreachable_candidate_count=_optional_int(value, "min_unreachable_candidate_count"),
+        min_mask_stress_sample_count=_optional_int(value, "min_mask_stress_sample_count"),
         min_reward_std=_optional_float(value, "min_reward_std"),
     )
 
@@ -423,6 +476,18 @@ def _validation_gate_violations(
         "max_unreachable_candidate_rate",
         summary["unreachable_candidate_rate"],
         gates.max_unreachable_candidate_rate,
+    )
+    _append_min_violation(
+        violations,
+        "min_unreachable_candidate_count",
+        summary["unreachable_candidate_count"],
+        gates.min_unreachable_candidate_count,
+    )
+    _append_min_violation(
+        violations,
+        "min_mask_stress_sample_count",
+        summary["mask_stress_sample_count"],
+        gates.min_mask_stress_sample_count,
     )
     _append_min_violation(violations, "min_reward_std", summary["reward"]["std"], gates.min_reward_std)
     if gates.require_finite_reward and summary["non_finite_reward_count"] > 0:

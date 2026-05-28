@@ -55,6 +55,7 @@ class QuasiRealEvaluationManifest:
     dataset_manifest: Path
     output_root: Path
     rois: tuple[RoiSpec, ...]
+    mask_stress_config: dict[str, Any]
     dataset_validation: dict[str, Any]
     train_config: dict[str, Any]
     planner_config: dict[str, Any]
@@ -115,6 +116,13 @@ def run_quasi_real_evaluation_manifest(path: str | Path) -> dict[str, Any]:
             episode_count=roi.episode_count,
             seed=roi.seed,
         )
+        metadata_extra = {
+            "roi_name": roi.name,
+            "split": roi.split,
+            "roi": roi.bounds,
+        }
+        if _mask_stress_enabled(manifest.mask_stress_config):
+            metadata_extra.update(_mask_stress_metadata(manifest.mask_stress_config))
         scenario_paths = write_lola_south_pole_scenarios_json(
             scenario_dir,
             dem_window.values,
@@ -133,12 +141,11 @@ def run_quasi_real_evaluation_manifest(path: str | Path) -> dict[str, Any]:
                 seed=roi.seed,
             ),
             source_config=source_config,
-            metadata_extra={
-                "roi_name": roi.name,
-                "split": roi.split,
-                "roi": roi.bounds,
-            },
+            metadata_extra=metadata_extra,
         )
+        if _mask_stress_enabled(manifest.mask_stress_config):
+            for scenario_path in scenario_paths:
+                _apply_mask_stress_to_scenario_json(scenario_path, manifest.mask_stress_config)
         relative_paths = [str(scenario_path.relative_to(manifest.output_root)) for scenario_path in scenario_paths]
         split_groups[roi.split].append({"name": roi.name, "scenarios": relative_paths})
         generated_scenarios.append(
@@ -202,6 +209,7 @@ def load_quasi_real_evaluation_manifest(path: str | Path) -> QuasiRealEvaluation
         dataset_manifest=_resolve_path(base_dir, payload.get("dataset_manifest")),
         output_root=_resolve_path(base_dir, payload.get("output_root", "data/processed/quasi_real/evaluation-matrix")),
         rois=rois,
+        mask_stress_config=_normalize_mask_stress_config(payload.get("mask_stress", {})),
         dataset_validation=dict(payload.get("dataset_validation", {})),
         train_config=dict(payload.get("train", _default_train_config(seed))),
         planner_config=dict(payload.get("planner", {"backend": "contract_cost"})),
@@ -273,6 +281,7 @@ def _inspection_summary(
         "rois": [_roi_summary(roi) for roi in manifest.rois],
         "splits": split_counts,
         "architectures": list(manifest.train_config.get("architectures", [manifest.train_config.get("architecture", "mlp_v1")])),
+        "mask_stress": _mask_stress_summary(manifest.mask_stress_config),
         "dataset_validation": data_validation,
         "quality_gates": dict(manifest.dataset_validation),
     }
@@ -334,6 +343,8 @@ def _run_summary(
         "rois": generated_scenarios,
         "splits": _split_counts(manifest.rois),
         "quality_gates": dict(manifest.dataset_validation),
+        "mask_stress": _mask_stress_summary(manifest.mask_stress_config),
+        "mask_stress_augmented": _mask_stress_enabled(manifest.mask_stress_config),
         "data_validation": data_validation,
         "experiment_manifest": str(experiment_manifest_path),
         "experiment": experiment_summary,
@@ -354,6 +365,7 @@ def _markdown_report(summary: dict[str, Any]) -> str:
         f"- dataset_id: {summary['dataset_id']}",
         f"- region: {summary['region']}",
         f"- roi_count: {summary['roi_count']}",
+        f"- mask_stress_augmented: {summary.get('mask_stress_augmented', False)}",
         "",
         "## ROI Splits",
         "",
@@ -389,8 +401,15 @@ def _markdown_report(summary: dict[str, Any]) -> str:
             "transition_count",
             "trainable_transition_count",
             "roi_count",
+            "unreachable_candidate_count",
             "action_mask_valid_mean",
             "unreachable_candidate_rate",
+            "padding_candidate_count",
+            "padding_candidate_rate",
+            "missing_experimental_feature_candidate_count",
+            "mask_stress_sample_count",
+            "mask_stress_sample_rate",
+            "mask_stress_augmented",
             "non_finite_reward_count",
         ):
             lines.append(f"| {key} | {dataset_summary.get(key, 0)} |")
@@ -398,6 +417,21 @@ def _markdown_report(summary: dict[str, Any]) -> str:
         if isinstance(reward, dict):
             lines.append(f"| reward_mean | {reward.get('mean', 0.0)} |")
             lines.append(f"| reward_std | {reward.get('std', 0.0)} |")
+    mask_stress = summary.get("mask_stress", {})
+    lines.extend(["", "## Mask-Stress Coverage", "", "| metric | value |", "|---|---:|"])
+    if isinstance(mask_stress, dict):
+        for key in ("enabled", "label", "profile", "unreachable_candidate_count", "missing_experimental_fields"):
+            lines.append(f"| {key} | {mask_stress.get(key, '')} |")
+    if isinstance(dataset_summary, dict):
+        for key in (
+            "mask_stress_augmented",
+            "mask_stress_sample_count",
+            "unreachable_candidate_count",
+            "padding_candidate_count",
+            "missing_experimental_feature_candidate_count",
+        ):
+            lines.append(f"| {key} | {dataset_summary.get(key, 0)} |")
+    lines.append(f"| evaluation_scope | {summary['evaluation_scope']} |")
     coverage_warnings = summary.get("coverage_warnings", [])
     lines.extend(["", "## Sample Coverage Warnings", ""])
     if isinstance(coverage_warnings, list) and coverage_warnings:
@@ -590,6 +624,118 @@ def _markdown_report(summary: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _normalize_mask_stress_config(value: Any) -> dict[str, Any]:
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError("mask_stress must be an object")
+    enabled = bool(value.get("enabled", False))
+    fields = value.get("missing_experimental_fields", ())
+    if fields is None:
+        fields = ()
+    if not isinstance(fields, (list, tuple)):
+        raise ValueError("mask_stress.missing_experimental_fields must be a list")
+    return {
+        "enabled": enabled,
+        "label": str(value.get("label", "mask_stress_augmented")),
+        "profile": str(value.get("profile", "deterministic-v1")),
+        "unreachable_candidate_count": max(0, int(value.get("unreachable_candidate_count", 1))),
+        "missing_experimental_fields": tuple(str(field) for field in fields),
+    }
+
+
+def _mask_stress_enabled(config: dict[str, Any]) -> bool:
+    return bool(config.get("enabled", False))
+
+
+def _mask_stress_summary(config: dict[str, Any]) -> dict[str, Any]:
+    normalized = _normalize_mask_stress_config(config)
+    return {
+        "enabled": bool(normalized["enabled"]),
+        "label": str(normalized["label"]),
+        "profile": str(normalized["profile"]),
+        "unreachable_candidate_count": int(normalized["unreachable_candidate_count"]),
+        "missing_experimental_fields": list(normalized["missing_experimental_fields"]),
+    }
+
+
+def _mask_stress_metadata(config: dict[str, Any]) -> dict[str, Any]:
+    normalized = _normalize_mask_stress_config(config)
+    return {
+        "mask_stress_augmented": True,
+        "mask_stress_label": str(normalized["label"]),
+        "mask_stress_profile": str(normalized["profile"]),
+        "evaluation_scope": EVALUATION_SCOPE,
+    }
+
+
+def _apply_mask_stress_to_scenario_json(path: Path, config: dict[str, Any]) -> None:
+    normalized = _normalize_mask_stress_config(config)
+    if not bool(normalized["enabled"]):
+        return
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("scenario JSON root must be an object")
+    metadata = payload.setdefault("metadata", {})
+    if not isinstance(metadata, dict):
+        raise ValueError("scenario metadata must be an object")
+    metadata.update(_mask_stress_metadata(normalized))
+    snapshots = payload.get("snapshots", [])
+    if not isinstance(snapshots, list):
+        raise ValueError("scenario snapshots must be a list")
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
+            continue
+        _apply_mask_stress_to_contract_payload(snapshot, normalized)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _apply_mask_stress_to_contract_payload(contract: dict[str, Any], config: dict[str, Any]) -> None:
+    goals = contract.get("top_goals", [])
+    if not isinstance(goals, list) or not goals:
+        return
+    missing_fields = tuple(config.get("missing_experimental_fields", ()))
+    for index, goal in enumerate(goals):
+        if not isinstance(goal, dict):
+            continue
+        removed_fields = []
+        for field in missing_fields:
+            if field in goal:
+                goal.pop(field)
+                removed_fields.append(field)
+        if removed_fields:
+            goal["mask_stress_missing_fields"] = removed_fields
+        goal["mask_stress_augmented"] = True
+
+    reachable_indices = [
+        index
+        for index, goal in enumerate(goals)
+        if isinstance(goal, dict) and bool(goal.get("reachable", False))
+    ]
+    target_unreachable_count = int(config.get("unreachable_candidate_count", 0))
+    changed = 0
+    for index in reversed(reachable_indices):
+        if changed >= target_unreachable_count:
+            break
+        if len(reachable_indices) - changed <= 1:
+            break
+        goal = goals[index]
+        if not isinstance(goal, dict):
+            continue
+        goal["reachable"] = False
+        goal["mask_stress_reason"] = "deterministic_unreachable"
+        changed += 1
+
+    observation_update = contract.setdefault("observation_update", {})
+    if isinstance(observation_update, dict):
+        observation_update.update(_mask_stress_metadata(config))
+    experimental_fields = contract.get("experimental_fields", [])
+    if isinstance(experimental_fields, list):
+        for field in ("mask_stress_augmented", "mask_stress_reason", "mask_stress_missing_fields"):
+            if field not in experimental_fields:
+                experimental_fields.append(field)
+
+
 def _coverage_warnings(dataset_summary: Any) -> list[str]:
     if not isinstance(dataset_summary, dict):
         return ["dataset_summary_missing"]
@@ -597,9 +743,10 @@ def _coverage_warnings(dataset_summary: Any) -> list[str]:
     unreachable_count = _int_value(dataset_summary.get("unreachable_candidate_count"))
     empty_mask_count = _int_value(dataset_summary.get("empty_action_mask_count"))
     invalid_mask_count = _int_value(dataset_summary.get("invalid_action_mask_count"))
+    mask_stress_sample_count = _int_value(dataset_summary.get("mask_stress_sample_count"))
     if unreachable_count == 0:
         warnings.append("no_unreachable_candidates")
-    if unreachable_count == 0 and empty_mask_count == 0 and invalid_mask_count == 0:
+    if mask_stress_sample_count == 0 and unreachable_count == 0 and empty_mask_count == 0 and invalid_mask_count == 0:
         warnings.append("no_mask_stress_samples")
     return warnings
 
@@ -625,6 +772,15 @@ def _stability_summary(experiment: Any) -> dict[str, Any]:
         for metric in ("loss", "policy_loss", "value_loss", "entropy"):
             _append_metric(arch_metrics, metric, run.get(metric))
             _append_metric(loss_values, metric, run.get(metric))
+        run_dataset = run.get("dataset_summary", {})
+        if isinstance(run_dataset, dict):
+            for metric in (
+                "unreachable_candidate_count",
+                "padding_candidate_count",
+                "missing_experimental_feature_candidate_count",
+                "mask_stress_sample_count",
+            ):
+                _append_metric(arch_metrics, f"dataset.{metric}", run_dataset.get(metric))
         validation = run.get("validation_evaluation", {})
         torch_policy = validation.get("torch_policy", {}) if isinstance(validation, dict) else {}
         if isinstance(torch_policy, dict):
