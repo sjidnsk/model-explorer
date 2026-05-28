@@ -737,6 +737,7 @@ def _run_training(
                 return_mode=str(config.get("return_mode", "reward_as_return")),
                 discount_factor=float(config.get("discount_factor", 0.99)),
                 architecture=architecture,
+                architecture_config=_training_architecture_config(config, architecture_name),
             )
             if loss_log is not None:
                 _ensure_parent_dir(loss_log)
@@ -856,6 +857,21 @@ def _training_architectures(config: dict[str, Any]) -> tuple[str | None, ...]:
     if not isinstance(raw_architectures, list) or not raw_architectures:
         raise ValueError("train.architectures must be a non-empty list")
     return tuple(str(architecture) for architecture in raw_architectures)
+
+
+def _training_architecture_config(config: dict[str, Any], architecture: str) -> dict[str, Any] | None:
+    base_config = config.get("architecture_config")
+    architecture_configs = config.get("architecture_configs")
+    selected_config = base_config
+    if architecture_configs is not None:
+        if not isinstance(architecture_configs, dict):
+            raise ValueError("train.architecture_configs must be a mapping of architecture name to config")
+        selected_config = architecture_configs.get(architecture, base_config)
+    if selected_config is None:
+        return None
+    if not isinstance(selected_config, dict):
+        raise ValueError("train.architecture_config must be a mapping")
+    return dict(selected_config)
 
 
 def _normalize_training_architecture_name(value: str | None) -> str:
@@ -1490,6 +1506,29 @@ def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str
         ):
             if key in training:
                 lines.append(f"| {key} | {training[key]} |")
+
+        architecture_config = training.get("architecture_config")
+        architecture_diagnostics = training.get("architecture_diagnostics")
+        if isinstance(architecture_config, dict) or isinstance(architecture_diagnostics, dict):
+            lines.extend(["", "## Architecture Diagnostics", "", "| field | value |", "|---|---|"])
+            if isinstance(architecture_config, dict):
+                for key in sorted(architecture_config):
+                    lines.append(f"| {key} | {architecture_config[key]} |")
+            if isinstance(architecture_diagnostics, dict):
+                for key in (
+                    "architecture",
+                    "observation_schema_version",
+                    "candidate_feature_dim",
+                    "global_feature_dim",
+                    "missing_indicator_dim",
+                    "mask_valid_action_count",
+                ):
+                    if key not in architecture_diagnostics:
+                        continue
+                    value = architecture_diagnostics[key]
+                    if isinstance(value, dict):
+                        value = json.dumps(value, ensure_ascii=False, sort_keys=True)
+                    lines.append(f"| {key} | {value} |")
         lines.extend(["", "### dataset_summary", "", "| metric | value |", "|---|---:|"])
         training_dataset = training.get("dataset_summary", {})
         if isinstance(training_dataset, dict):

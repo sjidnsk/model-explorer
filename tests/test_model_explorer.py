@@ -637,9 +637,18 @@ class TorchPolicyNetworkTests(unittest.TestCase):
         )
         observation = extract_policy_observation(contract, max_candidates=3)
 
-        mlp = build_policy_network("mlp_v1", observation=observation, hidden_size=16)
+        mlp = build_policy_network(
+            "mlp_v1",
+            observation=observation,
+            hidden_size=16,
+            architecture_config={"hidden_dim": 16, "dropout": 0.0},
+        )
         missing = build_policy_network("mlp_missing_v1", observation=observation, hidden_size=16)
-        attention = build_policy_network("candidate_attention_v1", observation=observation, hidden_size=16)
+        attention = build_policy_network(
+            "candidate_attention_v1",
+            observation=observation,
+            architecture_config={"hidden_dim": 16, "attention_heads": 2, "dropout": 0.0},
+        )
 
         self.assertIn("mlp_v1", SUPPORTED_ARCHITECTURES)
         self.assertIn("mlp_missing_v1", SUPPORTED_ARCHITECTURES)
@@ -647,12 +656,28 @@ class TorchPolicyNetworkTests(unittest.TestCase):
         self.assertEqual(mlp.architecture_name, "mlp_v1")
         self.assertEqual(missing.architecture_name, "mlp_missing_v1")
         self.assertEqual(attention.architecture_name, "candidate_attention_v1")
+        self.assertEqual(mlp.architecture_config["hidden_dim"], 16)
+        self.assertEqual(mlp.architecture_config["dropout"], 0.0)
+        self.assertEqual(attention.architecture_config["attention_heads"], 2)
+        self.assertEqual(attention.candidate_attention.num_heads, 2)
         self.assertEqual(
             missing.candidate_encoder[0].in_features,
             len(observation.candidate_feature_names) + len(observation.candidate_missing_indicator_names),
         )
         with self.assertRaisesRegex(ValueError, "unknown architecture.*does_not_exist.*mlp_v1"):
             build_policy_network("does_not_exist", observation=observation, hidden_size=16)
+        with self.assertRaisesRegex(ValueError, "unknown architecture config field.*unexpected_knob"):
+            build_policy_network(
+                "mlp_v1",
+                observation=observation,
+                architecture_config={"hidden_dim": 16, "unexpected_knob": 1},
+            )
+        with self.assertRaisesRegex(ValueError, "attention_heads.*divide hidden_dim"):
+            build_policy_network(
+                "candidate_attention_v1",
+                observation=observation,
+                architecture_config={"hidden_dim": 18, "attention_heads": 4},
+            )
 
     def test_mlp_missing_network_is_mask_safe_with_missing_indicator_inputs(self):
         import torch
@@ -730,6 +755,71 @@ class TorchPolicyNetworkTests(unittest.TestCase):
         self.assertTrue(torch.allclose(base_output.action_probs[0], padded_output.action_probs[0, :2], atol=1.0e-6))
         self.assertAlmostEqual(float(padded_output.action_probs[0, 2]), 0.0)
         self.assertAlmostEqual(float(padded_output.action_probs[0, 3]), 0.0)
+
+    def test_candidate_attention_valid_outputs_ignore_masked_candidate_mutation_and_reordering(self):
+        import torch
+
+        from model_explorer.policy.architectures import build_policy_network
+        from model_explorer.policy.features import extract_policy_observation
+        from model_explorer.policy.torch_policy import observation_to_tensors
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [0, 0], "utility": 0.5, "reachable": True, "risk": 0.0},
+                    {"cell": [1, 0], "utility": 9.9, "reachable": False, "risk": 0.9},
+                    {"cell": [2, 1], "utility": 0.4, "reachable": True, "risk": 0.2},
+                ]
+            )
+        )
+        observation = extract_policy_observation(contract, max_candidates=4)
+        tensors = observation_to_tensors(observation)
+        network = build_policy_network(
+            "candidate_attention_v1",
+            observation=observation,
+            architecture_config={"hidden_dim": 16, "attention_heads": 2, "dropout": 0.0},
+        )
+        network.eval()
+
+        mutated_tensors = dict(tensors)
+        mutated_tensors["candidate_features"] = tensors["candidate_features"].clone()
+        mutated_tensors["candidate_missing_indicators"] = tensors["candidate_missing_indicators"].clone()
+        mutated_tensors["candidate_features"][0, 1, :] = 999.0
+        mutated_tensors["candidate_features"][0, 3, :] = -999.0
+        mutated_tensors["candidate_missing_indicators"][0, 1, :] = 1.0
+        mutated_tensors["candidate_missing_indicators"][0, 3, :] = 1.0
+
+        permutation = torch.tensor([2, 0, 1, 3], dtype=torch.long)
+        permuted_tensors = {
+            "candidate_features": tensors["candidate_features"].index_select(1, permutation),
+            "global_features": tensors["global_features"],
+            "action_mask": tensors["action_mask"].index_select(1, permutation),
+            "candidate_missing_indicators": tensors["candidate_missing_indicators"].index_select(1, permutation),
+        }
+
+        with torch.no_grad():
+            base_output = network(**tensors)
+            mutated_output = network(**mutated_tensors)
+            permuted_output = network(**permuted_tensors)
+
+        valid_indices = torch.tensor([0, 2], dtype=torch.long)
+        self.assertTrue(
+            torch.allclose(
+                base_output.logits[0].index_select(0, valid_indices),
+                mutated_output.logits[0].index_select(0, valid_indices),
+                atol=1.0e-6,
+            )
+        )
+        self.assertTrue(
+            torch.allclose(
+                base_output.action_probs[0].index_select(0, valid_indices),
+                mutated_output.action_probs[0].index_select(0, valid_indices),
+                atol=1.0e-6,
+            )
+        )
+        restored_permuted_probs = torch.empty_like(base_output.action_probs[0])
+        restored_permuted_probs[permutation] = permuted_output.action_probs[0]
+        self.assertTrue(torch.allclose(base_output.action_probs[0], restored_permuted_probs, atol=1.0e-6))
 
     def test_masked_network_outputs_zero_probability_for_invalid_actions(self):
         import torch

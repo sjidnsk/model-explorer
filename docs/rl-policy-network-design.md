@@ -179,11 +179,13 @@ info
 字段语义，也不扩大动作空间。
 
 固定张量形状如下，其中 `B` 为 batch size，`K` 为候选列表长度，`Fc=15`，
-`Fg=8`，`H` 默认为 64：
+`Fm=8`，`Fg=8`，`H` 默认为 64，也可由 `architecture_config.hidden_dim`
+显式配置：
 
 | 张量 | 形状 | 说明 |
 |---|---|---|
 | `candidate_features` | `[B, K, Fc]` | 每个 `top_goals` 候选一行，不足 `K` 时 padding 为 0 |
+| `candidate_missing_indicators` | `[B, K, Fm]` | 实验字段缺失标记；`mlp_missing_v1` 使用，其他架构记录但不拼接 |
 | `global_features` | `[B, Fg]` | 地图、约束和 episode 进度摘要 |
 | `action_mask` | `[B, K]` | `reachable=false` 和 padding 均为 `False` |
 | `logits` | `[B, K]` | 未屏蔽候选 logit，仅用于诊断 |
@@ -234,15 +236,71 @@ masked self-attention：
 ```text
 candidate_features
 -> shared candidate_encoder
--> MultiheadAttention(num_heads=1, key_padding_mask=~action_mask)
+-> MultiheadAttention(num_heads=attention_heads, key_padding_mask=~action_mask)
 -> residual + LayerNorm
 -> same mlp_v1 policy/value heads
 ```
 
 attention 只让有效候选作为 key/value 参与上下文交互；`reachable=false` 和
 padding 候选仍通过 `action_mask` 屏蔽，不参与有效候选概率和 value pooling。
+v1.3 回归测试固定该不变量：改变 unreachable/padding candidate 的特征值不会改变
+有效 action 的 logits/probabilities；候选行重排时，有效 action 概率只按同一排列
+重排，不引入全图动作空间或额外候选。
 该架构只用于可训练、可比较的 smoke/regression，不要求 synthetic benchmark
 优于 `mlp_v1`。
+
+### 5.2 Architecture Config v1.3
+
+训练 manifest 和训练 API 可传入 `architecture_config`；matrix 训练可通过
+`architecture_configs.<architecture>` 为不同架构提供独立配置。缺失配置时保持
+旧行为，默认等价于：
+
+```json
+{
+  "hidden_dim": 64,
+  "dropout": 0.0
+}
+```
+
+`candidate_attention_v1` 额外记录：
+
+```json
+{
+  "hidden_dim": 64,
+  "dropout": 0.0,
+  "attention_heads": 1
+}
+```
+
+当前支持字段如下：
+
+| 架构 | 支持字段 | 约束 |
+|---|---|---|
+| `mlp_v1` | `hidden_dim`, `dropout` | `hidden_dim > 0`; `0.0 <= dropout < 1.0` |
+| `mlp_missing_v1` | `hidden_dim`, `dropout` | 同 `mlp_v1` |
+| `candidate_attention_v1` | `hidden_dim`, `dropout`, `attention_heads` | `attention_heads > 0` 且能整除 `hidden_dim` |
+
+未知配置字段返回可读错误，不静默改变实验语义。checkpoint metadata、训练 JSON
+summary 和 Markdown report 记录解析后的 `architecture_config`，旧 checkpoint
+缺失该字段时按 `mlp_v1`/旧 `hidden_size` fallback。
+
+### 5.3 Architecture Diagnostics v1.3
+
+训练结果追加 `architecture_diagnostics`，不改变既有 JSON 字段语义。该对象用于
+比较实验和复现实验配置，至少包含：
+
+```text
+architecture
+architecture_config
+observation_schema_version
+candidate_feature_dim
+global_feature_dim
+missing_indicator_dim
+mask_valid_action_count
+```
+
+`mask_valid_action_count` 来自训练 dataset summary 的 action mask 有效动作数量分布。
+缺失旧 rollout 字段时仍使用兼容 fallback，diagnostics 输出有限值。
 
 `candidate_encoder` 对每个候选目标共享权重编码：
 
@@ -288,7 +346,7 @@ masked_pool(candidate_embeddings)
 -> V(s)
 ```
 
-默认隐藏维度为 64 或 128。候选数量默认固定到 `K = 16`；不足补 padding，超过则由底座或排序基线截断为 top-K。若后续发现候选之间的相互覆盖和去重关系对策略影响明显，再将 candidate encoder 升级为 1 到 2 层 self-attention。
+默认隐藏维度为 64。候选数量默认固定到 `K = 16`；不足补 padding，超过则由底座或排序基线截断为 top-K。当前 v1.3 仍只比较 `mlp_v1`、`mlp_missing_v1` 和一层 `candidate_attention_v1`，不引入全图动作空间。
 
 ## 6. 闭环流程
 

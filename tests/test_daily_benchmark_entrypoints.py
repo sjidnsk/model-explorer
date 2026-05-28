@@ -583,11 +583,14 @@ class BenchmarkDocumentationTests(unittest.TestCase):
         ):
             self.assertIn(text, ubuntu_doc)
 
-    def test_progress_doc_marks_v1_2_release_candidate_and_has_no_stale_gaps(self):
+    def test_progress_doc_marks_v1_3_network_architecture_focus_and_has_no_stale_gaps(self):
         progress_doc = (ROOT / "docs" / "network-architecture-v1.1-progress.md").read_text(encoding="utf-8")
 
-        self.assertIn("| Phase | Network Architecture v1.2 release candidate |", progress_doc)
-        self.assertIn("Current release-candidate properties:", progress_doc)
+        self.assertIn("| Phase | Network Architecture v1.3 network architecture experiments |", progress_doc)
+        self.assertIn("Current network-architecture properties:", progress_doc)
+        self.assertIn("Network Architecture v1.3 Progress", progress_doc)
+        self.assertIn("architecture_config", progress_doc)
+        self.assertIn("Attention leakage", progress_doc)
         self.assertNotIn("Current gaps:", progress_doc)
         for stale_gap in (
             "Missing experimental fields are not exposed as tensor indicators",
@@ -595,6 +598,7 @@ class BenchmarkDocumentationTests(unittest.TestCase):
             "Candidate self-attention is not implemented",
         ):
             self.assertNotIn(stale_gap, progress_doc)
+        self.assertIn("Keep v1.3 focused on network architecture, not release readiness", progress_doc)
         self.assertIn("Ubuntu 24.04 target environment has not been executed in this Windows session", progress_doc)
         self.assertIn("Synthetic benchmark remains smoke/regression evidence only", progress_doc)
 
@@ -623,6 +627,9 @@ class BenchmarkDocumentationTests(unittest.TestCase):
         for text in (
             "`train.architecture` and `train.architectures` are compatible",
             "`train.architectures` takes precedence when present",
+            "`train.architecture_config` is recorded after parsing",
+            "`candidate_attention_v1` also",
+            "`Architecture Diagnostics` includes parsed `architecture_config`",
             "`outputs.root/<name>/<run_id>/<architecture>/seed-<seed>/checkpoint.pt`",
             "`train.checkpoint` and `train.loss_log` may use `{architecture}` and `{seed}`",
         ):

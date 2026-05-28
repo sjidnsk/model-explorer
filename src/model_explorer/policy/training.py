@@ -28,6 +28,7 @@ def train_policy_on_episode(
     return_mode: str = "reward_as_return",
     discount_factor: float = 0.99,
     architecture: str | None = None,
+    architecture_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return train_policy_on_episodes(
         (episode,),
@@ -39,6 +40,7 @@ def train_policy_on_episode(
         return_mode=return_mode,
         discount_factor=discount_factor,
         architecture=architecture,
+        architecture_config=architecture_config,
     )
 
 
@@ -53,6 +55,7 @@ def train_policy_on_episodes(
     return_mode: str = "reward_as_return",
     discount_factor: float = 0.99,
     architecture: str | None = None,
+    architecture_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     torch = _load_torch()
     from .architectures import build_policy_network
@@ -70,6 +73,7 @@ def train_policy_on_episodes(
         architecture,
         observation=first_observation,
         hidden_size=hidden_size,
+        architecture_config=architecture_config,
     )
     optimizer = torch.optim.Adam(network.parameters(), lr=learning_rate)
     batch = _transitions_to_batch(
@@ -94,7 +98,7 @@ def train_policy_on_episodes(
         _save_policy_checkpoint(
             checkpoint_path,
             network=network,
-            hidden_size=hidden_size,
+            hidden_size=network.hidden_size,
             candidate_feature_names=first_observation.candidate_feature_names,
             global_feature_names=first_observation.global_feature_names,
             candidate_missing_indicator_names=first_observation.candidate_missing_indicator_names,
@@ -109,6 +113,14 @@ def train_policy_on_episodes(
 
     result = {
         "architecture": network.architecture_name,
+        "architecture_config": dict(network.architecture_config),
+        "architecture_diagnostics": _architecture_diagnostics(
+            network=network,
+            candidate_feature_names=first_observation.candidate_feature_names,
+            global_feature_names=first_observation.global_feature_names,
+            candidate_missing_indicator_names=first_observation.candidate_missing_indicator_names,
+            dataset_summary=dataset_summary,
+        ),
         "loss": float(losses.total_loss.detach()),
         "total_loss": float(losses.total_loss.detach()),
         "policy_loss": float(losses.policy_loss.detach()),
@@ -118,7 +130,7 @@ def train_policy_on_episodes(
         "sample_count": len(trainable_transitions),
         "epochs": int(epochs),
         "seed": int(seed),
-        "hidden_size": int(hidden_size),
+        "hidden_size": int(network.hidden_size),
         "learning_rate": float(learning_rate),
         "return_mode": str(return_mode),
         "discount_factor": float(discount_factor),
@@ -150,6 +162,7 @@ def load_policy_checkpoint(path: str | Path):
         global_feature_count=len(global_feature_names),
         missing_indicator_count=len(candidate_missing_indicator_names),
         hidden_size=int(hidden_size),
+        architecture_config=metadata.get("architecture_config"),
     )
     network.load_state_dict(checkpoint["state_dict"])
     network.eval()
@@ -243,6 +256,28 @@ def _training_quality_warnings(result: dict[str, Any]) -> list[str]:
     elif value_loss > 1.0e6:
         warnings.append("value_loss_abnormally_large")
     return warnings
+
+
+def _architecture_diagnostics(
+    *,
+    network,
+    candidate_feature_names: tuple[str, ...],
+    global_feature_names: tuple[str, ...],
+    candidate_missing_indicator_names: tuple[str, ...],
+    dataset_summary: dict[str, Any],
+) -> dict[str, Any]:
+    mask_distribution = dataset_summary.get("reachable_action_count_distribution", {})
+    if not isinstance(mask_distribution, dict):
+        mask_distribution = {}
+    return {
+        "architecture": network.architecture_name,
+        "architecture_config": dict(network.architecture_config),
+        "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
+        "candidate_feature_dim": len(candidate_feature_names),
+        "global_feature_dim": len(global_feature_names),
+        "missing_indicator_dim": len(candidate_missing_indicator_names),
+        "mask_valid_action_count": dict(mask_distribution),
+    }
 
 
 def _validate_transition_shapes(transitions: tuple[RolloutTransition, ...]) -> None:
@@ -364,6 +399,7 @@ def _save_policy_checkpoint(
                 "version": 2,
                 "format_version": "model-explorer-masked-policy/v2",
                 "architecture": network.architecture_name,
+                "architecture_config": dict(network.architecture_config),
                 "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
                 "candidate_feature_names": tuple(candidate_feature_names),
                 "global_feature_names": tuple(global_feature_names),

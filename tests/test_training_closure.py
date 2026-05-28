@@ -457,9 +457,24 @@ class TrainingClosureTests(unittest.TestCase):
 
         self.assertEqual(result["epochs"], 2)
         self.assertEqual(result.get("architecture"), "mlp_v1")
+        self.assertEqual(result["architecture_config"]["hidden_dim"], 16)
+        self.assertEqual(result["architecture_config"]["dropout"], 0.0)
+        self.assertEqual(result["architecture_diagnostics"]["architecture"], "mlp_v1")
+        self.assertEqual(result["architecture_diagnostics"]["observation_schema_version"], "policy-observation/v1.1")
+        self.assertEqual(result["architecture_diagnostics"]["candidate_feature_dim"], len(checkpoint["candidate_feature_names"]))
+        self.assertEqual(result["architecture_diagnostics"]["global_feature_dim"], len(checkpoint["global_feature_names"]))
+        self.assertEqual(
+            result["architecture_diagnostics"]["missing_indicator_dim"],
+            len(checkpoint["candidate_missing_indicator_names"]),
+        )
+        self.assertEqual(
+            result["architecture_diagnostics"]["mask_valid_action_count"],
+            result["dataset_summary"]["reachable_action_count_distribution"],
+        )
         self.assertEqual(metadata["format"], "model-explorer-masked-policy")
         self.assertEqual(metadata["version"], 2)
         self.assertEqual(metadata.get("architecture"), "mlp_v1")
+        self.assertEqual(metadata["architecture_config"], result["architecture_config"])
         self.assertEqual(metadata["candidate_feature_names"], checkpoint["candidate_feature_names"])
         self.assertEqual(metadata["global_feature_names"], checkpoint["global_feature_names"])
         self.assertEqual(metadata["observation_schema_version"], "policy-observation/v1.1")
@@ -475,6 +490,7 @@ class TrainingClosureTests(unittest.TestCase):
         self.assertEqual(metadata["learning_rate"], 5.0e-4)
         self.assertIsNotNone(old_scorer)
         self.assertEqual(old_scorer.network.architecture_name, "mlp_v1")
+        self.assertEqual(old_scorer.network.architecture_config["hidden_dim"], 16)
 
     def test_mlp_missing_architecture_trains_saves_and_loads_from_checkpoint(self):
         import torch
@@ -515,6 +531,29 @@ class TrainingClosureTests(unittest.TestCase):
         self.assertIn("candidate_missing_indicator_names", checkpoint["metadata"])
         self.assertEqual(scorer.network.architecture_name, "mlp_missing_v1")
         self.assertTrue(torch.isfinite(torch.tensor(result["total_loss"])))
+
+    def test_training_rejects_unknown_architecture_config_fields(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.training import train_policy_on_episodes
+
+        episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[{"cell": [1, 1], "utility": 0.5, "reachable": True}],
+                        observation_update={"coverage_rate_delta": 0.1},
+                    )
+                )
+            ],
+            max_candidates=2,
+        )
+
+        with self.assertRaisesRegex(ValueError, "unknown architecture config field.*unexpected_knob"):
+            train_policy_on_episodes(
+                [episode],
+                architecture="mlp_v1",
+                architecture_config={"unexpected_knob": 1},
+            )
 
     def test_unknown_training_architecture_returns_readable_error(self):
         from model_explorer.policy.collector import collect_rollout_episode
@@ -563,16 +602,19 @@ class TrainingClosureTests(unittest.TestCase):
                 [episode],
                 checkpoint_path=checkpoint_path,
                 seed=37,
-                hidden_size=16,
                 epochs=1,
                 architecture="candidate_attention_v1",
+                architecture_config={"hidden_dim": 16, "attention_heads": 2, "dropout": 0.0},
             )
             checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
             scorer = load_policy_checkpoint(checkpoint_path)
 
         self.assertEqual(result["architecture"], "candidate_attention_v1")
+        self.assertEqual(result["architecture_config"]["attention_heads"], 2)
         self.assertEqual(checkpoint["metadata"]["architecture"], "candidate_attention_v1")
+        self.assertEqual(checkpoint["metadata"]["architecture_config"]["attention_heads"], 2)
         self.assertEqual(scorer.network.architecture_name, "candidate_attention_v1")
+        self.assertEqual(scorer.network.architecture_config["attention_heads"], 2)
         self.assertTrue(torch.isfinite(torch.tensor(result["total_loss"])))
 
     def test_experiment_train_block_evaluates_trained_policy_and_reports_training_section(self):
@@ -613,8 +655,8 @@ class TrainingClosureTests(unittest.TestCase):
                             "checkpoint": str(checkpoint_path),
                             "loss_log": str(loss_log_path),
                             "architecture": "mlp_missing_v1",
+                            "architecture_config": {"hidden_dim": 16, "dropout": 0.0},
                             "seed": 29,
-                            "hidden_size": 16,
                             "epochs": 1,
                             "validation_fraction": 0.5,
                             "evaluate_trained_policy": True,
@@ -639,11 +681,21 @@ class TrainingClosureTests(unittest.TestCase):
         self.assertIn("dataset_summary", summary)
         self.assertIn("dataset_summary", summary["training"])
         self.assertEqual(summary["training"]["architecture"], "mlp_missing_v1")
+        self.assertEqual(summary["training"]["architecture_config"]["hidden_dim"], 16)
+        self.assertEqual(summary["training"]["architecture_diagnostics"]["architecture"], "mlp_missing_v1")
+        self.assertEqual(
+            summary["training"]["architecture_diagnostics"]["observation_schema_version"],
+            "policy-observation/v1.1",
+        )
+        self.assertIn("mask_valid_action_count", summary["training"]["architecture_diagnostics"])
         self.assertIn("mlp_missing_v1", summary.get("architecture_deltas", {}))
         self.assertIn("torch_policy", evaluation)
         self.assertIn("torch_policy", summary["training"]["baseline_evaluation"])
         self.assertIn("## Training", report)
         self.assertIn("| architecture | mlp_missing_v1 |", report)
+        self.assertIn("## Architecture Diagnostics", report)
+        self.assertIn("| observation_schema_version | policy-observation/v1.1 |", report)
+        self.assertIn("| hidden_dim | 16 |", report)
         self.assertIn("## Architecture Deltas", report)
         self.assertIn("checkpoint", report)
         self.assertIn("dataset_summary", report)
@@ -706,7 +758,15 @@ class TrainingClosureTests(unittest.TestCase):
                         "train": {
                             "seed": 17,
                             "architectures": architectures,
-                            "hidden_size": 16,
+                            "architecture_configs": {
+                                "mlp_v1": {"hidden_dim": 16, "dropout": 0.0},
+                                "mlp_missing_v1": {"hidden_dim": 16, "dropout": 0.0},
+                                "candidate_attention_v1": {
+                                    "hidden_dim": 16,
+                                    "attention_heads": 2,
+                                    "dropout": 0.0,
+                                },
+                            },
                             "epochs": 1,
                             "validation_fraction": 0.5,
                             "evaluate_trained_policy": True,
@@ -743,7 +803,12 @@ class TrainingClosureTests(unittest.TestCase):
             self.assertEqual(record["seed"], 17)
             self.assertIn("utility", record["baseline_deltas"])
             self.assertIn("coverage_heuristic", record["baseline_deltas"])
+        for run in training["runs"]:
+            self.assertIn("architecture_config", run)
+            self.assertIn("architecture_diagnostics", run)
+            self.assertEqual(run["architecture_diagnostics"]["architecture"], run["architecture"])
         self.assertIn("synthetic smoke / regression suite", report)
+        self.assertIn("## Architecture Diagnostics", report)
         for architecture in architectures:
             self.assertIn(architecture, report)
 

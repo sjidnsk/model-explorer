@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 from torch import nn
@@ -27,12 +28,20 @@ class MaskedCandidatePolicyNetwork(nn.Module):
         global_feature_count: int,
         hidden_size: int = 64,
         missing_indicator_count: int = 0,
+        dropout: float = 0.0,
+        architecture_config: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self.candidate_feature_count = int(candidate_feature_count)
         self.global_feature_count = int(global_feature_count)
         self.hidden_size = int(hidden_size)
         self.missing_indicator_count = int(missing_indicator_count)
+        self.dropout = float(dropout)
+        self.architecture_config = dict(
+            architecture_config
+            if architecture_config is not None
+            else {"hidden_dim": self.hidden_size, "dropout": self.dropout}
+        )
         candidate_encoder_input_count = self.candidate_feature_count
         if self.uses_missing_indicators:
             candidate_encoder_input_count += self.missing_indicator_count
@@ -40,23 +49,29 @@ class MaskedCandidatePolicyNetwork(nn.Module):
             nn.Linear(candidate_encoder_input_count, hidden_size),
             nn.LayerNorm(hidden_size),
             nn.GELU(),
+            nn.Dropout(self.dropout),
             nn.Linear(hidden_size, hidden_size),
             nn.GELU(),
+            nn.Dropout(self.dropout),
         )
         self.global_encoder = nn.Sequential(
             nn.Linear(global_feature_count, hidden_size),
             nn.GELU(),
+            nn.Dropout(self.dropout),
             nn.Linear(hidden_size, hidden_size),
             nn.GELU(),
+            nn.Dropout(self.dropout),
         )
         self.policy_head = nn.Sequential(
             nn.Linear(hidden_size * 2, hidden_size),
             nn.GELU(),
+            nn.Dropout(self.dropout),
             nn.Linear(hidden_size, 1),
         )
         self.value_head = nn.Sequential(
             nn.Linear(hidden_size * 2, hidden_size),
             nn.GELU(),
+            nn.Dropout(self.dropout),
             nn.Linear(hidden_size, 1),
         )
 
@@ -148,16 +163,25 @@ class CandidateAttentionPolicyNetwork(MaskedCandidatePolicyNetwork):
         global_feature_count: int,
         hidden_size: int = 64,
         missing_indicator_count: int = 0,
+        dropout: float = 0.0,
+        attention_heads: int = 1,
+        architecture_config: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(
             candidate_feature_count=candidate_feature_count,
             global_feature_count=global_feature_count,
             hidden_size=hidden_size,
             missing_indicator_count=missing_indicator_count,
+            dropout=dropout,
+            architecture_config=architecture_config,
         )
+        self.attention_heads = int(attention_heads)
+        self.architecture_config = dict(self.architecture_config)
+        self.architecture_config["attention_heads"] = self.attention_heads
         self.candidate_attention = nn.MultiheadAttention(
             embed_dim=hidden_size,
-            num_heads=1,
+            num_heads=self.attention_heads,
+            dropout=self.dropout,
             batch_first=True,
         )
         self.attention_norm = nn.LayerNorm(hidden_size)

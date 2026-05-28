@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Phase | Network Architecture v1.2 release candidate |
+| Phase | Network Architecture v1.3 network architecture experiments |
 | Current baseline | `mlp_v1` masked candidate policy |
 | Scope | Candidate-list policy over `ModelExplorerContract.top_goals` |
 | Out of scope | Full-map action space, external project imports, contract v1 breaking changes |
@@ -34,25 +34,37 @@
 | AR-9 | Reproducibility metadata audit | Completed | Checkpoint metadata records architecture, seed, hidden size, candidate/global/missing feature names, and `observation_schema_version = policy-observation/v1.1`; old checkpoint fallback still loads as `mlp_v1`; `python -m unittest discover -s tests -v` passed 110 tests | Do not require bitwise-identical floating point training results |
 | UR-3 | Linux CI/script preparation | Completed | `docs/ubuntu-readiness.md` provides POSIX shell install and validation commands; `model_explorer verify` uses Python-native forbidden import scanning instead of PowerShell-only commands; `python -m unittest discover -s tests -v` passed 110 tests | Re-run final gates before handoff |
 
+## Network Architecture v1.3 Progress
+
+| ID | Task | Status | Evidence | Next Action |
+|---|---|---|---|---|
+| NA-8 | Architecture Config Hardening | Completed | `architecture_config` is parsed per architecture; `hidden_dim`, `dropout`, and `candidate_attention_v1.attention_heads` are recorded in checkpoint metadata and training result; old checkpoints without config still load with `mlp_v1` fallback; `python -m unittest discover -s tests -v` passed 112 tests | Run final verify |
+| NA-9 | Candidate Attention Mask Invariance | Completed | Regression test mutates unreachable and padding candidate tensors and reorders candidate rows; valid action logits/probabilities remain invariant up to the same permutation; masked candidates stay probability zero; `python -m unittest discover -s tests -v` passed 112 tests | Run final verify |
+| NA-10 | Architecture Diagnostics | Completed | Training JSON summary and Markdown report include `architecture_diagnostics` with architecture, parsed config, observation schema, feature dimensions, missing indicator dimension, and valid action mask count distribution; `python -m unittest discover -s tests -v` passed 112 tests | Run final verify |
+
 ## Current Architecture Snapshot
 
 ```text
 contract JSON
 -> extract_policy_observation
 -> candidate_features + global_features + action_mask
--> MaskedCandidatePolicyNetwork
+-> architecture registry + architecture_config
+-> MaskedCandidatePolicyNetwork / MissingIndicatorCandidatePolicyNetwork / CandidateAttentionPolicyNetwork
 -> masked logits + value
 -> PPO loss / TorchPolicyScorer
 ```
 
-Current release-candidate properties:
+Current network-architecture properties:
 
 - Candidate action space is limited to `top_goals`.
 - `reachable=false` and padding actions are masked.
 - Missing experimental fields use compatibility fallback values plus explicit missing indicators.
 - Candidate and global features use bounded, finite normalization rules.
 - `train.architecture` supports single-model compatibility; `train.architectures` supports architecture matrix runs.
+- `train.architecture_config` and `train.architecture_configs` support parsed per-architecture knobs without changing the contract.
 - `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1` are selectable, trainable, checkpointable, and mask-safe.
+- `candidate_attention_v1` uses masked self-attention and regression tests guard against unreachable/padding candidate information leakage.
+- Training summaries and reports include architecture diagnostics for reproducibility and comparison.
 - PPO training, checkpoint save/load, report integration, and architecture deltas exist.
 - Ubuntu Readiness documents default install, `model-explorer[training]`, Linux shell verification, and Windows-vs-Ubuntu validation boundaries.
 
@@ -63,6 +75,7 @@ Current release-candidate properties:
 | 2026-05-28 | Start with `mlp_v1` hardening instead of full-map network | Existing contract exposes candidate summaries, not full map tensors |
 | 2026-05-28 | Prioritize missing indicators before attention | Distinguishing fallback values from real zero values is lower risk and higher leverage |
 | 2026-05-28 | Add architecture config before adding multiple models | Experiments need reproducible manifest-level model selection |
+| 2026-05-28 | Keep v1.3 focused on network architecture, not release readiness | User explicitly deferred real Ubuntu validation and release convergence |
 
 ## Verification Snapshot
 
@@ -104,6 +117,12 @@ git diff --check
 Result: returned 0; Windows line-ending warnings only
 rg forbidden import check
 Result: no forbidden import matches in src, tests, or scripts
+
+Network Architecture v1.3 architecture config and diagnostics
+python -m unittest tests.test_model_explorer.TorchPolicyNetworkTests tests.test_training_closure.TrainingClosureTests -v
+Result: passed 15 tests
+python -m unittest discover -s tests -v
+Result: passed 112 tests
 ```
 
 ## Risk Register
@@ -115,6 +134,7 @@ Result: no forbidden import matches in src, tests, or scripts
 | Ubuntu 24.04 target environment has not been executed in this Windows session | Linux install commands are documented but not proven in a target VM/container here | Run the documented Ubuntu command block in target CI or an Ubuntu 24.04 environment before external release |
 | Feature schema churn | Checkpoints and rollout logs may become hard to load | Version observation schema and preserve loader fallback |
 | Mask regression | Policy could score unreachable or padding actions | Add tests for unreachable and padding masks for every architecture |
+| Attention leakage | Masked candidates could affect valid candidate logits through attention context | v1.3 regression mutates unreachable/padding tensors and checks valid output invariance |
 | Config sprawl | Too many knobs make experiments hard to compare | Keep v1.1 architecture options to `mlp_v1`, `mlp_missing_v1`, `candidate_attention_v1` |
 | PyTorch optional dependency | Non-training workflows could fail when PyTorch is absent | Keep train-specific tests skippable and non-training paths independent |
 
@@ -125,4 +145,6 @@ Result: no forbidden import matches in src, tests, or scripts
 - `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1` can be selected by manifest.
 - All architectures preserve action mask safety.
 - Reports include architecture identity and baseline deltas.
+- Checkpoint metadata, JSON summary, and Markdown report include parsed `architecture_config`.
+- `candidate_attention_v1` passes mask invariance tests for unreachable, padding, and reordered candidates.
 - Final verification commands pass.

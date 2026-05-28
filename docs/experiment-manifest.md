@@ -17,11 +17,20 @@ It is intentionally file based so the runner does not import external projects.
 - `train.architectures`: optional architecture matrix. When present, the
   runner trains every listed architecture for every configured seed and writes
   separate checkpoints under architecture and seed-specific output directories.
+- `train.architecture_config`: optional parsed config for the selected
+  architecture. Supported common fields are `hidden_dim` and `dropout`.
+- `train.architecture_configs`: optional per-architecture config mapping used
+  by architecture matrix runs.
 
 `train.architecture` and `train.architectures` are compatible with older
 single-architecture manifests. `train.architecture` keeps the previous default
 single-model behavior. `train.architectures` takes precedence when present and
 trains each listed architecture for every configured seed.
+
+`train.architecture_config` is recorded after parsing in checkpoint metadata,
+JSON training summaries, and Markdown reports. `candidate_attention_v1` also
+supports `attention_heads`; the value must divide `hidden_dim`. Unknown config
+fields fail with a readable error instead of being silently ignored.
 
 With `outputs.root`, matrix checkpoints are derived as:
 
@@ -47,6 +56,9 @@ baseline sections. The current benchmark hardening fields add:
 - `Failure Scenarios`
 - `Gate Summary`
 - `Training` includes the selected architecture when training is enabled.
+- `Architecture Diagnostics` includes parsed `architecture_config`,
+  `observation_schema_version`, feature dimensions, missing indicator
+  dimension, and valid action-mask count distribution.
 - `Architecture Deltas` reports the trained architecture's `torch_policy`
   deltas against `utility` and `coverage_heuristic` when trained-policy
   evaluation is enabled.
