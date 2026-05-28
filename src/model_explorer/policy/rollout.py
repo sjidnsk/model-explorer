@@ -49,6 +49,10 @@ class RolloutTransition:
     info: RolloutInfo
 
     def __post_init__(self) -> None:
+        if self.action_index == -1:
+            if self.info.failure_reason is None:
+                raise ValueError("no-op action requires a failure reason")
+            return
         if self.action_index < 0 or self.action_index >= len(self.observation.action_mask):
             raise ValueError("action_index is outside the observation action mask")
         if not self.observation.action_mask[self.action_index]:

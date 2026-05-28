@@ -13,25 +13,40 @@ if str(SRC) not in sys.path:
 
 from model_explorer.io.scenario import load_scenario
 from model_explorer.policy.collector import collect_rollout_episode
-from model_explorer.policy.rollout_io import write_rollout_episode
+from model_explorer.policy.rollout_io import write_rollout_episode, write_rollout_episodes_jsonl
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Collect a rollout episode from model-explorer contracts.")
-    parser.add_argument("scenario", type=Path, help="Path to a contract or scenario JSON file.")
-    parser.add_argument("output", type=Path, help="Path to write rollout episode JSON.")
+    parser.add_argument(
+        "paths",
+        type=Path,
+        nargs="+",
+        help="One or more contract/scenario JSON files followed by the output path.",
+    )
     parser.add_argument("--max-candidates", type=int, default=None)
+    parser.add_argument("--jsonl", action="store_true", help="Write JSONL even when there is one input scenario.")
     args = parser.parse_args(argv)
+    if len(args.paths) < 2:
+        parser.error("provide at least one scenario path and one output path")
 
-    scenario = load_scenario(args.scenario)
-    episode = collect_rollout_episode(scenario, max_candidates=args.max_candidates)
-    write_rollout_episode(args.output, episode)
+    scenario_paths = args.paths[:-1]
+    output_path = args.paths[-1]
+    episodes = [
+        collect_rollout_episode(load_scenario(path), max_candidates=args.max_candidates)
+        for path in scenario_paths
+    ]
+    if len(episodes) == 1 and not args.jsonl and output_path.suffix.lower() != ".jsonl":
+        write_rollout_episode(output_path, episodes[0])
+    else:
+        write_rollout_episodes_jsonl(output_path, episodes)
     print(
         json.dumps(
             {
-                "transition_count": len(episode.transitions),
-                "output": str(args.output),
-                "metrics": episode.metrics.to_dict(),
+                "episode_count": len(episodes),
+                "transition_count": sum(len(episode.transitions) for episode in episodes),
+                "output": str(output_path),
+                "metrics": episodes[0].metrics.to_dict() if len(episodes) == 1 else None,
             },
             ensure_ascii=False,
         )

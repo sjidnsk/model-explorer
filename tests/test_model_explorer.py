@@ -708,6 +708,99 @@ class RolloutCollectorTests(unittest.TestCase):
         self.assertAlmostEqual(episode.metrics.cumulative_coverage_rate_delta, 0.13)
         self.assertAlmostEqual(episode.metrics.total_path_cost, 5.0)
 
+    def test_dynamic_rollout_provider_records_replan_and_next_observation(self):
+        from model_explorer.policy.collector import collect_dynamic_rollout_episode
+        from model_explorer.policy.provider import SequenceContractProvider
+
+        snapshots = [
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[{"cell": [1, 1], "utility": 0.4, "reachable": True}],
+                    observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.05},
+                )
+            ),
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[{"cell": [2, 1], "utility": 0.5, "reachable": True}],
+                    observation_update={"coverage_rate": 0.2, "coverage_rate_delta": 0.1},
+                )
+            ),
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[{"cell": [2, 1], "utility": 0.6, "reachable": True}],
+                    observation_update={"coverage_rate": 0.25, "coverage_rate_delta": 0.05},
+                )
+            ),
+        ]
+        provider = SequenceContractProvider(
+            snapshots,
+            replan_reasons_by_step={
+                0: ("observation_delta",),
+                1: ("goal_changed",),
+            },
+        )
+
+        episode = collect_dynamic_rollout_episode(provider, max_steps=3, max_candidates=2)
+
+        self.assertEqual(len(episode.transitions), 3)
+        self.assertEqual(episode.transitions[0].next_observation.candidate_cells, ((2, 1), None))
+        self.assertEqual(episode.transitions[0].info.extra["replan_reasons"], ["observation_delta"])
+        self.assertEqual(episode.metrics.replan_count, 2)
+        self.assertAlmostEqual(episode.metrics.final_coverage_rate, 0.25)
+
+    def test_collect_rollout_episode_records_failure_transition_when_no_goal_is_reachable(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+
+        scenario = [
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[
+                        {"cell": [1, 1], "utility": 0.7, "reachable": False},
+                        {"cell": [2, 1], "utility": 0.6, "reachable": False},
+                    ],
+                    observation_update={},
+                )
+            )
+        ]
+
+        episode = collect_rollout_episode(scenario, max_candidates=2)
+
+        self.assertEqual(len(episode.transitions), 1)
+        self.assertEqual(episode.transitions[0].action_index, -1)
+        self.assertEqual(episode.transitions[0].info.failure_reason, "no_reachable_goal")
+        self.assertAlmostEqual(episode.transitions[0].reward, -1.0)
+        self.assertEqual(episode.metrics.failure_count, 1)
+        self.assertEqual(episode.metrics.replan_count, 1)
+
+    def test_fake_execution_adapter_failure_is_recorded_as_failure_and_replan(self):
+        from model_explorer.policy.collector import collect_dynamic_rollout_episode
+        from model_explorer.policy.execution import FakeExecutionFeasibilityAdapter
+        from model_explorer.policy.provider import SequenceContractProvider
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[{"cell": [1, 1], "utility": 0.4, "reachable": True}],
+                observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.05},
+            )
+        )
+        provider = SequenceContractProvider([contract])
+        execution_adapter = FakeExecutionFeasibilityAdapter(
+            failing_cells={(1, 1): "local_trajectory_infeasible"}
+        )
+
+        episode = collect_dynamic_rollout_episode(
+            provider,
+            execution_adapter=execution_adapter,
+            max_steps=1,
+        )
+
+        self.assertEqual(len(episode.transitions), 1)
+        self.assertEqual(episode.transitions[0].action_index, 0)
+        self.assertEqual(episode.transitions[0].info.failure_reason, "local_trajectory_infeasible")
+        self.assertFalse(episode.transitions[0].info.extra["execution_feasible"])
+        self.assertEqual(episode.metrics.failure_count, 1)
+        self.assertEqual(episode.metrics.replan_count, 1)
+
     def test_reward_uses_compatibility_defaults_when_experimental_fields_are_missing(self):
         from model_explorer.policy.reward import compute_step_reward
 
@@ -747,6 +840,46 @@ class RolloutIoTests(unittest.TestCase):
         self.assertEqual(loaded.transitions[0].observation.action_mask, (True, False))
         self.assertEqual(loaded.transitions[0].reward, episode.transitions[0].reward)
         self.assertEqual(loaded.metrics.final_coverage_rate, episode.metrics.final_coverage_rate)
+
+    def test_rollout_episodes_round_trip_through_jsonl_file(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.rollout_io import (
+            read_rollout_episodes,
+            write_rollout_episodes_jsonl,
+        )
+
+        successful_episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[{"cell": [1, 1], "utility": 0.4, "reachable": True}],
+                        observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.05},
+                    )
+                )
+            ],
+            max_candidates=2,
+        )
+        failure_episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[{"cell": [2, 1], "utility": 0.5, "reachable": False}],
+                        observation_update={},
+                    )
+                )
+            ],
+            max_candidates=2,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "rollouts.jsonl"
+            write_rollout_episodes_jsonl(path, [successful_episode, failure_episode])
+            loaded = read_rollout_episodes(path)
+
+        self.assertEqual(len(loaded), 2)
+        self.assertEqual(loaded[0].transitions[0].observation.action_mask, (True, False))
+        self.assertEqual(loaded[1].transitions[0].action_index, -1)
+        self.assertEqual(loaded[1].transitions[0].info.failure_reason, "no_reachable_goal")
 
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not available")
@@ -789,6 +922,95 @@ class PolicyTrainingTests(unittest.TestCase):
 
         self.assertIsNotNone(decision.selected_goal)
         self.assertNotEqual(decision.selected_goal.cell, (1, 1))
+
+    def test_training_on_multiple_episodes_saves_checkpoint_metadata(self):
+        import torch
+
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.training import load_policy_checkpoint, train_policy_on_episodes
+
+        episodes = []
+        for cell_x, coverage_delta in ((0, 0.05), (2, 0.08)):
+            scenario = [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[
+                            {"cell": [cell_x, 1], "utility": 0.5, "reachable": True},
+                            {"cell": [1, 1], "utility": 9.0, "reachable": False},
+                        ],
+                        observation_update={
+                            "coverage_rate": coverage_delta,
+                            "coverage_rate_delta": coverage_delta,
+                        },
+                    )
+                )
+            ]
+            episodes.append(collect_rollout_episode(scenario, max_candidates=2))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "policy.pt"
+            result = train_policy_on_episodes(
+                episodes,
+                checkpoint_path=checkpoint_path,
+                seed=11,
+                hidden_size=16,
+            )
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+            scorer = load_policy_checkpoint(checkpoint_path)
+
+        self.assertEqual(result["sample_count"], 2)
+        self.assertEqual(checkpoint["metadata"]["sample_count"], 2)
+        self.assertEqual(checkpoint["metadata"]["seed"], 11)
+        self.assertTrue(torch.isfinite(torch.tensor(result["total_loss"])))
+
+        decision = select_goal(scenario[0], policy=scorer)
+
+        self.assertIsNotNone(decision.selected_goal)
+        self.assertNotEqual(decision.selected_goal.cell, (1, 1))
+
+    def test_training_on_variable_candidate_counts_pads_action_masks(self):
+        import torch
+
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.training import train_policy_on_episodes
+
+        one_candidate_episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[{"cell": [0, 1], "utility": 0.5, "reachable": True}],
+                        observation_update={"coverage_rate": 0.05, "coverage_rate_delta": 0.05},
+                    )
+                )
+            ]
+        )
+        two_candidate_episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[
+                            {"cell": [1, 1], "utility": 0.6, "reachable": True},
+                            {"cell": [2, 1], "utility": 0.4, "reachable": True},
+                        ],
+                        observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.05},
+                    )
+                )
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "policy.pt"
+            result = train_policy_on_episodes(
+                [one_candidate_episode, two_candidate_episode],
+                checkpoint_path=checkpoint_path,
+                seed=13,
+                hidden_size=16,
+            )
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+        self.assertEqual(result["sample_count"], 2)
+        self.assertEqual(checkpoint["metadata"]["action_count"], 2)
+        self.assertTrue(torch.isfinite(torch.tensor(result["total_loss"])))
 
 
 class BaselineEvaluationTests(unittest.TestCase):
@@ -834,6 +1056,41 @@ class BaselineEvaluationTests(unittest.TestCase):
             self.assertIn("average_risk", metrics)
             self.assertIn("failure_count", metrics)
             self.assertIn("replan_count", metrics)
+            self.assertIn("value_coverage", metrics)
+
+    def test_baseline_evaluation_can_aggregate_multiple_scenarios(self):
+        from model_explorer.policy.evaluation import evaluate_policy_baseline_scenarios
+
+        first = [
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[{"cell": [0, 0], "utility": 0.9, "reachable": True}],
+                    observation_update={
+                        "coverage_rate": 0.1,
+                        "coverage_rate_delta": 0.1,
+                        "value_coverage": 0.2,
+                    },
+                )
+            )
+        ]
+        second = [
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[{"cell": [1, 1], "utility": 0.8, "reachable": True}],
+                    observation_update={
+                        "coverage_rate": 0.3,
+                        "coverage_rate_delta": 0.2,
+                        "value_coverage": 0.4,
+                    },
+                )
+            )
+        ]
+
+        report = evaluate_policy_baseline_scenarios([first, second])
+
+        self.assertEqual(report["utility"]["episode_count"], 2)
+        self.assertAlmostEqual(report["utility"]["average_final_coverage_rate"], 0.2)
+        self.assertAlmostEqual(report["utility"]["value_coverage"], 0.6)
 
 
 class PolicyScriptTests(unittest.TestCase):
@@ -863,6 +1120,44 @@ class PolicyScriptTests(unittest.TestCase):
         self.assertEqual(summary["transition_count"], 1)
         self.assertEqual(len(payload["transitions"]), 1)
 
+    def test_collect_rollout_script_writes_jsonl_for_multiple_scenarios(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first_scenario_path = Path(tmpdir) / "scenario-a.json"
+            second_scenario_path = Path(tmpdir) / "scenario-b.json"
+            rollout_path = Path(tmpdir) / "rollouts.jsonl"
+            first_scenario_path.write_text(json.dumps(minimal_contract()), encoding="utf-8")
+            second_scenario_path.write_text(
+                json.dumps(
+                    minimal_contract(
+                        goals=[{"cell": [1, 1], "utility": 0.5, "reachable": True}],
+                        observation_update={"coverage_rate": 0.2, "coverage_rate_delta": 0.1},
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "collect_rollout.py"),
+                    str(first_scenario_path),
+                    str(second_scenario_path),
+                    str(rollout_path),
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            lines = rollout_path.read_text(encoding="utf-8").splitlines()
+
+        summary = json.loads(completed.stdout)
+        self.assertEqual(summary["episode_count"], 2)
+        self.assertEqual(summary["transition_count"], 2)
+        self.assertEqual(len(lines), 2)
+
     def test_evaluate_baselines_script_outputs_metrics_json(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             scenario_path = Path(tmpdir) / "scenario.json"
@@ -884,6 +1179,54 @@ class PolicyScriptTests(unittest.TestCase):
         report = json.loads(completed.stdout)
         self.assertIn("utility", report)
         self.assertIn("coverage_heuristic", report)
+
+    def test_evaluate_baselines_script_aggregates_multiple_scenarios(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first_scenario_path = Path(tmpdir) / "scenario-a.json"
+            second_scenario_path = Path(tmpdir) / "scenario-b.json"
+            first_scenario_path.write_text(
+                json.dumps(
+                    minimal_contract(
+                        observation_update={
+                            "coverage_rate": 0.1,
+                            "coverage_rate_delta": 0.1,
+                            "value_coverage": 0.2,
+                        }
+                    )
+                ),
+                encoding="utf-8",
+            )
+            second_scenario_path.write_text(
+                json.dumps(
+                    minimal_contract(
+                        observation_update={
+                            "coverage_rate": 0.3,
+                            "coverage_rate_delta": 0.2,
+                            "value_coverage": 0.4,
+                        }
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "evaluate_baselines.py"),
+                    str(first_scenario_path),
+                    str(second_scenario_path),
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+        report = json.loads(completed.stdout)
+        self.assertEqual(report["utility"]["episode_count"], 2)
+        self.assertAlmostEqual(report["utility"]["average_final_coverage_rate"], 0.2)
+        self.assertAlmostEqual(report["utility"]["value_coverage"], 0.6)
 
     @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not available")
     def test_train_masked_policy_script_saves_checkpoint(self):
@@ -926,6 +1269,63 @@ class PolicyScriptTests(unittest.TestCase):
             checkpoint_exists = checkpoint_path.exists()
 
         self.assertTrue(checkpoint_exists)
+        self.assertIn("total_loss", result)
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not available")
+    def test_train_masked_policy_script_reads_jsonl_dataset(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first_scenario_path = Path(tmpdir) / "scenario-a.json"
+            second_scenario_path = Path(tmpdir) / "scenario-b.json"
+            rollout_path = Path(tmpdir) / "rollouts.jsonl"
+            checkpoint_path = Path(tmpdir) / "policy.pt"
+            first_scenario_path.write_text(json.dumps(minimal_contract()), encoding="utf-8")
+            second_scenario_path.write_text(
+                json.dumps(
+                    minimal_contract(
+                        goals=[{"cell": [1, 1], "utility": 0.5, "reachable": True}],
+                        observation_update={"coverage_rate": 0.2, "coverage_rate_delta": 0.1},
+                    )
+                ),
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "collect_rollout.py"),
+                    str(first_scenario_path),
+                    str(second_scenario_path),
+                    str(rollout_path),
+                    "--max-candidates",
+                    "2",
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "train_masked_policy.py"),
+                    str(rollout_path),
+                    str(checkpoint_path),
+                    "--hidden-size",
+                    "16",
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            result = json.loads(completed.stdout)
+            checkpoint_exists = checkpoint_path.exists()
+
+        self.assertTrue(checkpoint_exists)
+        self.assertEqual(result["sample_count"], 2)
         self.assertIn("total_loss", result)
 
 
