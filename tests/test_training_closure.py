@@ -138,6 +138,76 @@ class RolloutDatasetSummaryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no trainable transitions"):
             validate_rollout_dataset([episode])
 
+    def test_dataset_validation_gates_report_named_threshold_failures(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.dataset import validate_rollout_dataset
+
+        episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[{"cell": [0, 0], "utility": 0.5, "reachable": False}],
+                        observation_update={},
+                    )
+                )
+            ],
+            max_candidates=2,
+        )
+
+        gates = {
+            "min_episode_count": 1,
+            "min_transition_count": 1,
+            "min_trainable_transition_count": 1,
+            "max_empty_action_mask_count": 0,
+            "max_failure_rate": 0.0,
+            "require_finite_reward": True,
+        }
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "min_trainable_transition_count.*max_empty_action_mask_count.*max_failure_rate",
+        ):
+            validate_rollout_dataset([episode], gates=gates)
+
+    def test_enhanced_dataset_gates_measure_missing_features_masks_and_reward_std(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.dataset import summarize_rollout_dataset, validate_rollout_dataset
+
+        episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[
+                            {"cell": [0, 0], "utility": 0.6, "reachable": True},
+                            {"cell": [1, 1], "utility": 0.5, "reachable": False},
+                        ],
+                        observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.1},
+                    )
+                )
+            ],
+            max_candidates=2,
+        )
+
+        summary = summarize_rollout_dataset([episode])
+
+        self.assertGreater(summary["missing_experimental_feature_rate"], 0.0)
+        self.assertEqual(summary["action_mask_valid_mean"], 0.5)
+        self.assertEqual(summary["unreachable_candidate_rate"], 0.5)
+        self.assertEqual(summary["reward"]["std"], 0.0)
+
+        gates = {
+            "max_missing_experimental_feature_rate": 0.0,
+            "min_action_mask_valid_mean": 0.75,
+            "max_unreachable_candidate_rate": 0.25,
+            "min_reward_std": 0.01,
+        }
+        with self.assertRaisesRegex(
+            ValueError,
+            "max_missing_experimental_feature_rate.*min_action_mask_valid_mean.*"
+            "max_unreachable_candidate_rate.*min_reward_std",
+        ):
+            validate_rollout_dataset([episode], gates=gates)
+
 
 class ReturnAdvantageTests(unittest.TestCase):
     def test_discounted_return_helper_respects_done_boundaries(self):
@@ -155,6 +225,177 @@ class ReturnAdvantageTests(unittest.TestCase):
 
         self.assertEqual(result.returns, (2.0, 2.0, 5.0, 4.0))
         self.assertEqual(result.advantages, (2.0, 2.0, 5.0, 4.0))
+
+
+class ExperimentManifestValidationTests(unittest.TestCase):
+    def test_manifest_output_root_derives_reproducible_run_paths(self):
+        from model_explorer.policy.experiment import run_experiment_manifest
+
+        scenario_payload = minimal_contract(
+            goals=[{"cell": [1, 1], "utility": 0.5, "reachable": True}],
+            observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.1},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scenario_path = Path(tmpdir) / "scenario.json"
+            output_root = Path(tmpdir) / "out"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            scenario_path.write_text(json.dumps(scenario_payload), encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "name": "formal-smoke",
+                        "run_id": "run-a",
+                        "scenarios": [str(scenario_path)],
+                        "outputs": {"root": str(output_root)},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_experiment_manifest(manifest_path)
+
+            run_dir = output_root / "formal-smoke" / "run-a"
+            dataset_summary = json.loads((run_dir / "dataset-summary.json").read_text(encoding="utf-8"))
+            report = (run_dir / "report.md").read_text(encoding="utf-8")
+
+        self.assertEqual(summary["experiment_name"], "formal-smoke")
+        self.assertEqual(summary["run_id"], "run-a")
+        self.assertEqual(summary["output_layout"]["run_dir"], str(run_dir))
+        self.assertEqual(summary["rollout_output"], str(run_dir / "rollouts.jsonl"))
+        self.assertEqual(summary["evaluation_output"], str(run_dir / "evaluation.json"))
+        self.assertEqual(summary["dataset_summary_output"], str(run_dir / "dataset-summary.json"))
+        self.assertEqual(summary["report_output"], str(run_dir / "report.md"))
+        self.assertEqual(dataset_summary["episode_count"], 1)
+        self.assertIn("## Dataset Summary", report)
+
+    def test_manifest_dataset_validation_gates_fail_before_training(self):
+        from model_explorer.policy.experiment import run_experiment_manifest
+
+        scenario_payload = minimal_contract(
+            goals=[{"cell": [0, 0], "utility": 0.5, "reachable": False}],
+            observation_update={},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scenario_path = Path(tmpdir) / "scenario.json"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            scenario_path.write_text(json.dumps(scenario_payload), encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "scenarios": [str(scenario_path)],
+                        "max_candidates": 2,
+                        "outputs": {
+                            "rollouts": str(Path(tmpdir) / "rollouts.jsonl"),
+                            "evaluation": str(Path(tmpdir) / "evaluation.json"),
+                        },
+                        "dataset_validation": {
+                            "min_trainable_transition_count": 1,
+                            "max_empty_action_mask_count": 0,
+                            "max_failure_rate": 0.0,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "max_empty_action_mask_count"):
+                run_experiment_manifest(manifest_path)
+
+    def test_explicit_splits_write_resolved_manifest_and_environment_metadata(self):
+        from model_explorer.policy.experiment import run_experiment_manifest
+
+        train_payload = minimal_contract(
+            goals=[{"cell": [1, 1], "utility": 0.5, "reachable": True, "expected_coverage_rate_delta": 0.1}],
+            observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.1},
+        )
+        validation_payload = minimal_contract(
+            goals=[{"cell": [2, 1], "utility": 0.4, "reachable": True, "expected_coverage_rate_delta": 0.2}],
+            observation_update={"coverage_rate": 0.2, "coverage_rate_delta": 0.1},
+        )
+        test_payload = minimal_contract(
+            goals=[{"cell": [3, 1], "utility": 0.3, "reachable": True, "expected_coverage_rate_delta": 0.3}],
+            observation_update={"coverage_rate": 0.3, "coverage_rate_delta": 0.1},
+        )
+        benchmark_payload = minimal_contract(
+            goals=[{"cell": [1, 2], "utility": 0.2, "reachable": True, "expected_coverage_rate_delta": 0.4}],
+            observation_update={"coverage_rate": 0.4, "coverage_rate_delta": 0.1},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            paths = {}
+            for name, payload in (
+                ("train", train_payload),
+                ("validation", validation_payload),
+                ("test", test_payload),
+                ("benchmark", benchmark_payload),
+            ):
+                path = Path(tmpdir) / f"{name}.json"
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                paths[name] = path
+
+            output_root = Path(tmpdir) / "out"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "name": "split-smoke",
+                        "run_id": "run-xyz",
+                        "splits": {
+                            "train": [str(paths["train"])],
+                            "validation": [str(paths["validation"])],
+                            "test": [str(paths["test"])],
+                            "benchmark": {"coverage_dominant": [str(paths["benchmark"])]},
+                        },
+                        "outputs": {"root": str(output_root)},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_experiment_manifest(manifest_path)
+            run_dir = output_root / "split-smoke" / "run-xyz"
+            resolved = json.loads((run_dir / "manifest.resolved.json").read_text(encoding="utf-8"))
+            evaluation = json.loads((run_dir / "evaluation.json").read_text(encoding="utf-8"))
+            report = (run_dir / "report.md").read_text(encoding="utf-8")
+
+        self.assertEqual(summary["split_summaries"]["train"]["scenario_count"], 1)
+        self.assertEqual(summary["split_summaries"]["validation"]["transition_count"], 1)
+        self.assertEqual(summary["split_summaries"]["test"]["episode_count"], 1)
+        self.assertEqual(summary["split_summaries"]["benchmark"]["groups"]["coverage_dominant"]["scenario_count"], 1)
+        self.assertEqual(summary["resolved_manifest_output"], str(run_dir / "manifest.resolved.json"))
+        self.assertEqual(resolved["experiment_name"], "split-smoke")
+        self.assertTrue(Path(resolved["splits"]["train"][0]).is_absolute())
+        self.assertIn("python_version", summary["environment"])
+        self.assertIn("available", summary["environment"]["torch"])
+        self.assertIn("commit", summary["environment"]["git"])
+        self.assertIn("dirty", summary["environment"]["git"])
+        self.assertIn("coverage_dominant", evaluation["groups"])
+        self.assertIn("## Benchmark Groups", report)
+
+
+class BestCheckpointSelectionTests(unittest.TestCase):
+    def test_best_checkpoint_selection_prefers_highest_validation_metric(self):
+        from model_explorer.policy.experiment import _select_best_training_run
+
+        runs = [
+            {
+                "seed": 11,
+                "checkpoint": "seed-11/checkpoint.pt",
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.2}},
+            },
+            {
+                "seed": 13,
+                "checkpoint": "seed-13/checkpoint.pt",
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.35}},
+            },
+        ]
+
+        best = _select_best_training_run(runs, policy="torch_policy", metric="final_coverage_rate")
+
+        self.assertEqual(best["seed"], 13)
+        self.assertEqual(best["checkpoint"], "seed-13/checkpoint.pt")
 
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not available")
@@ -305,6 +546,169 @@ class TrainingClosureTests(unittest.TestCase):
             "value_coverage",
         ):
             self.assertIn(metric_name, summary["training"]["baseline_evaluation"]["torch_policy"])
+
+    def test_experiment_train_block_supports_multi_seed_outputs_and_summary(self):
+        from model_explorer.policy.experiment import run_experiment_manifest
+
+        first_payload = minimal_contract(
+            goals=[
+                {"cell": [1, 1], "utility": 0.5, "reachable": True, "path_cost": 1.0},
+                {"cell": [2, 1], "utility": 9.0, "reachable": False, "path_cost": 1.0},
+            ],
+            observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.1},
+        )
+        second_payload = minimal_contract(
+            goals=[
+                {"cell": [1, 2], "utility": 0.4, "reachable": True, "path_cost": 1.0},
+                {"cell": [3, 1], "utility": 8.0, "reachable": False, "path_cost": 1.0},
+            ],
+            observation_update={"coverage_rate": 0.2, "coverage_rate_delta": 0.2},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first_scenario_path = Path(tmpdir) / "scenario-a.json"
+            second_scenario_path = Path(tmpdir) / "scenario-b.json"
+            output_root = Path(tmpdir) / "out"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            first_scenario_path.write_text(json.dumps(first_payload), encoding="utf-8")
+            second_scenario_path.write_text(json.dumps(second_payload), encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "name": "multi-seed-smoke",
+                        "run_id": "run-001",
+                        "scenarios": [str(first_scenario_path), str(second_scenario_path)],
+                        "max_candidates": 2,
+                        "planner": {"backend": "contract_cost"},
+                        "outputs": {"root": str(output_root)},
+                        "dataset_validation": {
+                            "min_episode_count": 2,
+                            "min_transition_count": 2,
+                            "min_trainable_transition_count": 2,
+                            "max_empty_action_mask_count": 0,
+                            "max_invalid_action_mask_count": 0,
+                            "max_failure_rate": 0.0,
+                            "require_finite_reward": True,
+                        },
+                        "train": {
+                            "seeds": [11, 13],
+                            "hidden_size": 16,
+                            "epochs": 1,
+                            "validation_fraction": 0.5,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_experiment_manifest(manifest_path)
+            run_dir = output_root / "multi-seed-smoke" / "run-001"
+            checkpoint_exists = {
+                seed: (run_dir / f"seed-{seed}" / "checkpoint.pt").exists()
+                for seed in (11, 13)
+            }
+            loss_log_exists = {
+                seed: (run_dir / f"seed-{seed}" / "losses.jsonl").exists()
+                for seed in (11, 13)
+            }
+            report = (run_dir / "report.md").read_text(encoding="utf-8")
+
+        training = summary["training"]
+        self.assertEqual(training["seeds"], [11, 13])
+        self.assertEqual(len(training["runs"]), 2)
+        self.assertEqual(training["run_count"], 2)
+        self.assertEqual(training["best_seed"], 11)
+        self.assertEqual(training["best_selection"]["metric"], "final_coverage_rate")
+        self.assertEqual(training["best_checkpoint_path"], str(run_dir / "seed-11" / "checkpoint.pt"))
+        self.assertEqual(training["last_checkpoint_path"], str(run_dir / "seed-13" / "checkpoint.pt"))
+        for seed in (11, 13):
+            self.assertTrue(checkpoint_exists[seed])
+            self.assertTrue(loss_log_exists[seed])
+
+        utility_stats = training["multi_seed_summary"]["utility"]["final_coverage_rate"]
+        self.assertEqual(utility_stats["mean"], 0.2)
+        self.assertEqual(utility_stats["std"], 0.0)
+        self.assertEqual(utility_stats["min"], 0.2)
+        self.assertEqual(utility_stats["max"], 0.2)
+        self.assertIn("torch_policy", training["multi_seed_summary"])
+        self.assertIn("## Dataset Validation Gates", report)
+        self.assertIn("## Multi-Seed Summary", report)
+        self.assertIn("## Best Checkpoint", report)
+        self.assertIn("best_checkpoint_path", report)
+
+    def test_explicit_split_training_writes_per_epoch_logs_and_baseline_deltas(self):
+        from model_explorer.policy.experiment import run_experiment_manifest
+
+        train_payload = minimal_contract(
+            goals=[
+                {"cell": [1, 1], "utility": 0.5, "reachable": True, "expected_coverage_rate_delta": 0.2},
+                {"cell": [2, 1], "utility": 9.0, "reachable": False, "expected_coverage_rate_delta": 0.9},
+            ],
+            observation_update={"coverage_rate": 0.2, "coverage_rate_delta": 0.2},
+        )
+        validation_payload = minimal_contract(
+            goals=[{"cell": [1, 2], "utility": 0.5, "reachable": True, "expected_coverage_rate_delta": 0.3}],
+            observation_update={"coverage_rate": 0.3, "coverage_rate_delta": 0.1},
+        )
+        benchmark_payload = minimal_contract(
+            goals=[{"cell": [3, 1], "utility": 0.5, "reachable": True, "expected_coverage_rate_delta": 0.4}],
+            observation_update={"coverage_rate": 0.4, "coverage_rate_delta": 0.1},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            train_path = Path(tmpdir) / "train.json"
+            validation_path = Path(tmpdir) / "validation.json"
+            benchmark_path = Path(tmpdir) / "benchmark.json"
+            train_path.write_text(json.dumps(train_payload), encoding="utf-8")
+            validation_path.write_text(json.dumps(validation_payload), encoding="utf-8")
+            benchmark_path.write_text(json.dumps(benchmark_payload), encoding="utf-8")
+            output_root = Path(tmpdir) / "out"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "name": "explicit-training",
+                        "run_id": "run-001",
+                        "splits": {
+                            "train": [str(train_path)],
+                            "validation": [str(validation_path)],
+                            "benchmark": {"coverage_dominant": [str(benchmark_path)]},
+                        },
+                        "max_candidates": 2,
+                        "outputs": {"root": str(output_root)},
+                        "train": {
+                            "seed": 41,
+                            "hidden_size": 16,
+                            "epochs": 2,
+                            "evaluate_trained_policy": True,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_experiment_manifest(manifest_path)
+            run_dir = output_root / "explicit-training" / "run-001"
+            seed_dir = run_dir / "seed-41"
+            loss_records = [
+                json.loads(line)
+                for line in (seed_dir / "losses.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            training_summary = json.loads((seed_dir / "training-summary.json").read_text(encoding="utf-8"))
+            report = (run_dir / "report.md").read_text(encoding="utf-8")
+
+        self.assertEqual(summary["training"]["train_episode_count"], 1)
+        self.assertEqual(summary["training"]["validation_episode_count"], 1)
+        self.assertEqual([record["epoch"] for record in loss_records], [1, 2])
+        self.assertIn("loss", loss_records[0])
+        self.assertIn("validation_evaluation", training_summary)
+        self.assertIn("baseline_deltas", summary)
+        self.assertIn("torch_policy", summary["baseline_deltas"])
+        self.assertIn("utility", summary["baseline_deltas"]["torch_policy"])
+        self.assertIn("multi_seed_loss_summary", summary["training"])
+        self.assertIn("warnings", summary["training"]["runs"][0])
+        self.assertIn("## Baseline Comparison", report)
+        self.assertIn("## Training Quality", report)
 
 
 if __name__ == "__main__":

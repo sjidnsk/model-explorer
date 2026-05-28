@@ -1,0 +1,38 @@
+{
+  "schema_version": "model-explorer-experiment/v1",
+  "name": "formal-training-synthetic",
+  "run_id": "fixture",
+  "scenarios": ["scenario-a.json", "scenario-b.json"],
+  "max_candidates": 4,
+  "planner": {
+    "backend": "contract_cost"
+  },
+  "reward": {
+    "path_cost_weight": 0.1,
+    "path_cost_normalizer": 100.0,
+    "risk_weight": 0.2,
+    "failure_penalty": 1.0
+  },
+  "dataset_validation": {
+    "min_episode_count": 2,
+    "min_transition_count": 2,
+    "min_trainable_transition_count": 2,
+    "max_empty_action_mask_count": 0,
+    "max_invalid_action_mask_count": 0,
+    "max_failure_rate": 0.0,
+    "require_finite_reward": true
+  },
+  "train": {
+    "seeds": [11, 13],
+    "hidden_size": 16,
+    "learning_rate": 0.001,
+    "epochs": 1,
+    "validation_fraction": 0.5,
+    "evaluate_trained_policy": true,
+    "best_policy": "torch_policy",
+    "best_metric": "final_coverage_rate"
+  },
+  "outputs": {
+    "root": "out"
+  }
+}

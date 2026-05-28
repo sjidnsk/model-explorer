@@ -1,0 +1,38 @@
+{
+  "schema_version": "model-explorer-contract/v1",
+  "grid": {
+    "width": 6,
+    "height": 5,
+    "resolution": 0.5,
+    "frame_id": "moon_local",
+    "origin": [0.0, 0.0],
+    "layers": ["confidence", "cost", "risk"]
+  },
+  "constraints": {
+    "violation_count": 0,
+    "passable_ratio": 0.88,
+    "reason_counts": {"obstacle": 0}
+  },
+  "top_goals": [
+    {
+      "cell": [3, 3],
+      "utility": 0.55,
+      "reachable": true,
+      "expected_coverage_rate_delta": 0.09,
+      "path_cost": 3.0,
+      "risk": 0.08
+    }
+  ],
+  "top_sequences": [
+    {
+      "cells": [[3, 3]],
+      "utility": 0.55,
+      "coverage_area": 1.5
+    }
+  ],
+  "observation_update": {
+    "coverage_rate": 0.6,
+    "coverage_rate_delta": 0.06,
+    "value_coverage": 0.12
+  }
+}

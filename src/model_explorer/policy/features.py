@@ -54,6 +54,7 @@ class PolicyObservation:
     global_features: tuple[float, ...]
     action_mask: tuple[bool, ...]
     candidate_cells: tuple[tuple[int, int] | None, ...]
+    candidate_missing_feature_names: tuple[tuple[str, ...], ...] = ()
 
 
 def extract_policy_observation(
@@ -70,12 +71,14 @@ def extract_policy_observation(
     candidate_features = tuple(
         _candidate_features(contract, goal, current_cell=current_cell, cost_defaults=cost_defaults) for goal in goals
     )
+    missing_feature_names = tuple(_candidate_missing_feature_names(goal) for goal in goals)
     action_mask = tuple(goal.reachable for goal in goals)
     candidate_cells: tuple[tuple[int, int] | None, ...] = tuple(goal.cell for goal in goals)
 
     if max_candidates is not None and len(goals) < max_candidates:
         padding_count = max_candidates - len(goals)
         candidate_features += tuple(_zero_candidate_features() for _ in range(padding_count))
+        missing_feature_names += tuple(() for _ in range(padding_count))
         action_mask += tuple(False for _ in range(padding_count))
         candidate_cells += tuple(None for _ in range(padding_count))
 
@@ -86,6 +89,7 @@ def extract_policy_observation(
         global_features=_global_features(contract, step_index=step_index, remaining_steps=remaining_steps),
         action_mask=action_mask,
         candidate_cells=candidate_cells,
+        candidate_missing_feature_names=missing_feature_names,
     )
 
 
@@ -145,6 +149,14 @@ def _cost_defaults(goals: tuple[GoalCandidate, ...]) -> dict[str, float]:
 
 def _zero_candidate_features() -> tuple[float, ...]:
     return tuple(0.0 for _ in CANDIDATE_FEATURE_NAMES)
+
+
+def _candidate_missing_feature_names(goal: GoalCandidate) -> tuple[str, ...]:
+    return tuple(
+        field
+        for field in _BENEFIT_FIELDS + _COST_FIELDS
+        if _numeric_experimental(goal, field) is None
+    )
 
 
 def _numeric_experimental(goal: GoalCandidate, field: str) -> float | None:

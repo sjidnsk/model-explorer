@@ -116,6 +116,9 @@ def _observation_to_dict(observation: PolicyObservation) -> dict[str, Any]:
         "global_features": list(observation.global_features),
         "action_mask": [bool(value) for value in observation.action_mask],
         "candidate_cells": [_cell_to_list(cell) for cell in observation.candidate_cells],
+        "candidate_missing_feature_names": [
+            list(names) for names in observation.candidate_missing_feature_names
+        ],
     }
 
 

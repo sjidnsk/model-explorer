@@ -69,15 +69,22 @@ def _transition_from_dict(payload: dict[str, Any]) -> RolloutTransition:
 
 
 def _observation_from_dict(payload: dict[str, Any]) -> PolicyObservation:
+    candidate_cells = tuple(
+        None if cell is None else (int(cell[0]), int(cell[1])) for cell in payload["candidate_cells"]
+    )
+    missing_feature_names = payload.get("candidate_missing_feature_names")
+    if missing_feature_names is None:
+        candidate_missing_feature_names = tuple(() for _ in candidate_cells)
+    else:
+        candidate_missing_feature_names = tuple(tuple(str(name) for name in row) for row in missing_feature_names)
     return PolicyObservation(
         candidate_feature_names=tuple(payload["candidate_feature_names"]),
         candidate_features=tuple(tuple(float(value) for value in row) for row in payload["candidate_features"]),
         global_feature_names=tuple(payload["global_feature_names"]),
         global_features=tuple(float(value) for value in payload["global_features"]),
         action_mask=tuple(bool(value) for value in payload["action_mask"]),
-        candidate_cells=tuple(
-            None if cell is None else (int(cell[0]), int(cell[1])) for cell in payload["candidate_cells"]
-        ),
+        candidate_cells=candidate_cells,
+        candidate_missing_feature_names=candidate_missing_feature_names,
     )
 
 

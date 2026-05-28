@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from dataclasses import dataclass
+from importlib import util as importlib_util
+from math import sqrt
 from pathlib import Path
 from typing import Any
 
 from ..io.scenario import Scenario, load_scenario
 from .collector import collect_rollout_episode
-from .dataset import summarize_rollout_dataset
+from .dataset import summarize_rollout_dataset, validate_rollout_dataset
 from .evaluation import evaluate_policy_baseline_scenarios, evaluate_policy_baselines
 from .planning import planner_from_config
 from .rollout import RolloutEpisode
@@ -24,18 +28,37 @@ class ExperimentScenarioGroup:
 
 
 @dataclass(frozen=True)
+class ExperimentSplit:
+    name: str
+    scenario_groups: tuple[ExperimentScenarioGroup, ...]
+
+    @property
+    def scenarios(self) -> tuple[Path, ...]:
+        return tuple(path for group in self.scenario_groups for path in group.scenarios)
+
+
+@dataclass(frozen=True)
 class ExperimentManifest:
     schema_version: str
+    experiment_name: str
+    run_id: str
     scenarios: tuple[Path, ...]
     scenario_groups: tuple[ExperimentScenarioGroup, ...]
+    splits: dict[str, ExperimentSplit]
+    explicit_splits: bool
     planner_config: dict[str, Any]
     rollout_output: Path
     evaluation_output: Path
+    resolved_manifest_output: Path
     report_output: Path | None = None
+    dataset_summary_output: Path | None = None
+    output_root: Path | None = None
+    run_output_dir: Path | None = None
     max_candidates: int | None = None
     reward_config: dict[str, Any] | None = None
     reward_ablations: tuple[dict[str, Any], ...] = ()
     train_config: dict[str, Any] | None = None
+    dataset_validation: dict[str, Any] | None = None
 
 
 def load_experiment_manifest(path: str | Path) -> ExperimentManifest:
@@ -49,56 +72,118 @@ def load_experiment_manifest(path: str | Path) -> ExperimentManifest:
         raise ValueError(f"schema_version must be {EXPERIMENT_SCHEMA_VERSION!r}")
 
     base_dir = manifest_path.parent
-    scenario_groups = _scenario_groups(payload, base_dir=base_dir)
-    scenario_paths = tuple(path for group in scenario_groups for path in group.scenarios)
+    experiment_name = str(payload.get("name", payload.get("experiment_name", manifest_path.stem)))
+    run_id = str(payload.get("run_id", "default"))
+    explicit_splits = payload.get("splits") is not None
+    splits = (
+        _manifest_splits(payload["splits"], base_dir=base_dir)
+        if explicit_splits
+        else {"all": ExperimentSplit(name="all", scenario_groups=_scenario_groups(payload, base_dir=base_dir))}
+    )
+    scenario_groups = _evaluation_groups_from_splits(splits, explicit_splits=explicit_splits)
+    scenario_paths = _unique_scenario_paths(splits)
 
     outputs = payload.get("outputs")
     if not isinstance(outputs, dict):
         raise ValueError("experiment manifest requires outputs")
-    if "rollouts" not in outputs:
+    output_root = None if outputs.get("root") is None else _resolve_path(base_dir, outputs["root"])
+    run_output_dir = None if output_root is None else output_root / experiment_name / run_id
+    if "rollouts" not in outputs and run_output_dir is None:
         raise ValueError("experiment outputs must include outputs.rollouts")
-    if "evaluation" not in outputs:
+    if "evaluation" not in outputs and run_output_dir is None:
         raise ValueError("experiment outputs must include outputs.evaluation")
 
     planner_config = _planner_config_with_sidecar(payload.get("planner", {}), base_dir=base_dir)
     max_candidates = payload.get("max_candidates")
+    report_output_value = (
+        outputs["report"]
+        if "report" in outputs
+        else (None if run_output_dir is None else run_output_dir / "report.md")
+    )
+    dataset_summary_output_value = (
+        outputs["dataset_summary"]
+        if "dataset_summary" in outputs
+        else (None if run_output_dir is None else run_output_dir / "dataset-summary.json")
+    )
+    rollout_output = _resolve_output_path(base_dir, outputs.get("rollouts"), run_output_dir, "rollouts.jsonl")
+    evaluation_output = _resolve_output_path(base_dir, outputs.get("evaluation"), run_output_dir, "evaluation.json")
+    resolved_manifest_output = (
+        _resolve_path(base_dir, outputs["resolved_manifest"])
+        if outputs.get("resolved_manifest") is not None
+        else (run_output_dir / "manifest.resolved.json" if run_output_dir is not None else evaluation_output.parent / "manifest.resolved.json")
+    )
     return ExperimentManifest(
         schema_version=schema_version,
+        experiment_name=experiment_name,
+        run_id=run_id,
         scenarios=scenario_paths,
         scenario_groups=scenario_groups,
+        splits=splits,
+        explicit_splits=explicit_splits,
         planner_config=planner_config,
-        rollout_output=_resolve_path(base_dir, outputs["rollouts"]),
-        evaluation_output=_resolve_path(base_dir, outputs["evaluation"]),
-        report_output=(None if outputs.get("report") is None else _resolve_path(base_dir, outputs["report"])),
+        rollout_output=rollout_output,
+        evaluation_output=evaluation_output,
+        resolved_manifest_output=resolved_manifest_output,
+        report_output=(None if report_output_value is None else _resolve_path(base_dir, report_output_value)),
+        dataset_summary_output=(
+            None if dataset_summary_output_value is None else _resolve_path(base_dir, dataset_summary_output_value)
+        ),
+        output_root=output_root,
+        run_output_dir=run_output_dir,
         max_candidates=None if max_candidates is None else int(max_candidates),
         reward_config=_optional_mapping(payload.get("reward")),
         reward_ablations=_reward_ablations(payload.get("reward_ablations")),
         train_config=_optional_mapping(payload.get("train")),
+        dataset_validation=_optional_mapping(payload.get("dataset_validation")),
     )
 
 
 def run_experiment_manifest(path: str | Path) -> dict[str, Any]:
     manifest = load_experiment_manifest(path)
-    scenarios = tuple(load_scenario(path) for path in manifest.scenarios)
     planner = planner_from_config(manifest.planner_config)
-    episodes = _collect_episodes(
-        scenarios,
-        planner=planner,
-        max_candidates=manifest.max_candidates,
-        reward_config=manifest.reward_config,
-    )
+    split_scenarios = _load_split_scenarios(manifest)
+    scenarios = _all_split_scenarios(split_scenarios)
+    split_episodes = {
+        split_name: _collect_episodes(
+            split_items,
+            planner=planner,
+            max_candidates=manifest.max_candidates,
+            reward_config=manifest.reward_config,
+        )
+        for split_name, split_items in split_scenarios.items()
+    }
+    episodes = _all_split_episodes(split_episodes)
+    _ensure_parent_dir(manifest.rollout_output)
     write_rollout_episodes_jsonl(manifest.rollout_output, episodes)
-    dataset_summary = summarize_rollout_dataset(episodes)
+    dataset_summary = (
+        validate_rollout_dataset(episodes, gates=manifest.dataset_validation)
+        if manifest.dataset_validation is not None
+        else summarize_rollout_dataset(episodes)
+    )
+    if manifest.dataset_summary_output is not None:
+        _write_json(manifest.dataset_summary_output, dataset_summary)
 
-    base_evaluation = evaluate_policy_baseline_scenarios(scenarios, planning_adapter=planner)
+    evaluation_split_name = _evaluation_split_name(manifest)
+    evaluation_scenarios = split_scenarios[evaluation_split_name]
+    evaluation_groups = manifest.splits[evaluation_split_name].scenario_groups
+    evaluation_paths = manifest.splits[evaluation_split_name].scenarios
+    base_evaluation = evaluate_policy_baseline_scenarios(evaluation_scenarios, planning_adapter=planner)
     evaluation = (
-        _grouped_evaluation(manifest, scenarios, planner=planner, aggregate=base_evaluation)
-        if len(manifest.scenario_groups) > 1
+        _grouped_evaluation(
+            evaluation_groups,
+            evaluation_scenarios,
+            evaluation_paths,
+            planner=planner,
+            aggregate=base_evaluation,
+        )
+        if manifest.explicit_splits or len(evaluation_groups) > 1
         else base_evaluation
     )
 
     summary = {
         "schema_version": manifest.schema_version,
+        "experiment_name": manifest.experiment_name,
+        "run_id": manifest.run_id,
         "scenario_count": len(scenarios),
         "group_count": len(manifest.scenario_groups),
         "groups": [
@@ -108,38 +193,62 @@ def run_experiment_manifest(path: str | Path) -> dict[str, Any]:
         "planner": str(manifest.planner_config.get("backend", "contract_cost")),
         "rollout_output": str(manifest.rollout_output),
         "evaluation_output": str(manifest.evaluation_output),
+        "dataset_summary_output": None
+        if manifest.dataset_summary_output is None
+        else str(manifest.dataset_summary_output),
+        "output_layout": {
+            "root": None if manifest.output_root is None else str(manifest.output_root),
+            "run_dir": None if manifest.run_output_dir is None else str(manifest.run_output_dir),
+        },
         "transition_count": sum(len(episode.transitions) for episode in episodes),
         "rollout_metrics": _aggregate_rollout_metrics(episodes),
         "dataset_summary": dataset_summary,
+        "split_summaries": _split_summaries(manifest, split_episodes),
+        "resolved_manifest_output": str(manifest.resolved_manifest_output),
+        "environment": _environment_metadata(base_dir=Path(path).parent),
         "reward": dict(manifest.reward_config or {}),
     }
+    _write_json(manifest.resolved_manifest_output, _resolved_manifest_payload(manifest))
     if manifest.reward_ablations:
         summary["reward_ablations"] = _run_reward_ablations(manifest, scenarios, planner=planner)
     if manifest.train_config is not None:
-        summary["training"] = _run_training(episodes, manifest.train_config, base_dir=Path(path).parent)
+        summary["training"] = _run_training(
+            episodes,
+            manifest.train_config,
+            base_dir=Path(path).parent,
+            run_output_dir=manifest.run_output_dir,
+            scenarios=scenarios,
+            planner=planner,
+            train_episodes=split_episodes.get("train") if manifest.explicit_splits else None,
+            validation_episodes=split_episodes.get("validation") if manifest.explicit_splits else None,
+            validation_scenarios=split_scenarios.get("validation") if manifest.explicit_splits else None,
+        )
         if _should_evaluate_trained_policy(manifest.train_config):
             from .training import load_policy_checkpoint
 
             trained_policy = load_policy_checkpoint(summary["training"]["checkpoint"])
             trained_evaluation = evaluate_policy_baseline_scenarios(
-                scenarios,
+                evaluation_scenarios,
                 torch_policy=trained_policy,
                 planning_adapter=planner,
             )
             evaluation = (
                 _grouped_evaluation(
-                    manifest,
-                    scenarios,
+                    evaluation_groups,
+                    evaluation_scenarios,
+                    evaluation_paths,
                     planner=planner,
                     aggregate=trained_evaluation,
                     torch_policy=trained_policy,
                 )
-                if len(manifest.scenario_groups) > 1
+                if manifest.explicit_splits or len(evaluation_groups) > 1
                 else trained_evaluation
             )
             summary["training"]["baseline_evaluation"] = _comparison_from_evaluation(evaluation)
-    manifest.evaluation_output.write_text(json.dumps(evaluation, indent=2, ensure_ascii=False), encoding="utf-8")
+            summary["baseline_deltas"] = _baseline_deltas(_comparison_from_evaluation(evaluation))
+    _write_json(manifest.evaluation_output, evaluation)
     if manifest.report_output is not None:
+        _ensure_parent_dir(manifest.report_output)
         manifest.report_output.write_text(_markdown_report(summary, evaluation), encoding="utf-8")
         summary["report_output"] = str(manifest.report_output)
     return summary
@@ -177,6 +286,89 @@ def _scenario_groups(payload: dict[str, Any], *, base_dir: Path) -> tuple[Experi
     return (ExperimentScenarioGroup(name="default", scenarios=_scenario_paths(payload.get("scenarios"), base_dir=base_dir)),)
 
 
+def _manifest_splits(value: Any, *, base_dir: Path) -> dict[str, ExperimentSplit]:
+    if not isinstance(value, dict):
+        raise ValueError("splits must be an object")
+    splits: dict[str, ExperimentSplit] = {}
+    for split_name in ("train", "validation", "test", "benchmark"):
+        raw_split = value.get(split_name)
+        groups = _split_scenario_groups(raw_split, base_dir=base_dir, default_name=split_name)
+        if groups:
+            splits[split_name] = ExperimentSplit(name=split_name, scenario_groups=groups)
+    if not splits:
+        raise ValueError("splits must define at least one scenario")
+    return splits
+
+
+def _split_scenario_groups(
+    value: Any,
+    *,
+    base_dir: Path,
+    default_name: str,
+) -> tuple[ExperimentScenarioGroup, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, list):
+        if not value:
+            return ()
+        if all(isinstance(item, dict) for item in value):
+            groups = []
+            for index, item in enumerate(value):
+                name = str(item.get("name", f"{default_name}-{index}"))
+                groups.append(
+                    ExperimentScenarioGroup(
+                        name=name,
+                        scenarios=_scenario_paths(item.get("scenarios"), base_dir=base_dir),
+                    )
+                )
+            return tuple(groups)
+        return (ExperimentScenarioGroup(name=default_name, scenarios=_scenario_paths(value, base_dir=base_dir)),)
+    if isinstance(value, dict):
+        if "scenarios" in value:
+            return (
+                ExperimentScenarioGroup(
+                    name=str(value.get("name", default_name)),
+                    scenarios=_scenario_paths(value.get("scenarios"), base_dir=base_dir),
+                ),
+            )
+        groups = []
+        for group_name, paths in value.items():
+            groups.append(
+                ExperimentScenarioGroup(
+                    name=str(group_name),
+                    scenarios=_scenario_paths(paths, base_dir=base_dir),
+                )
+            )
+        return tuple(groups)
+    raise ValueError(f"splits.{default_name} must be a list or object")
+
+
+def _evaluation_groups_from_splits(
+    splits: dict[str, ExperimentSplit],
+    *,
+    explicit_splits: bool,
+) -> tuple[ExperimentScenarioGroup, ...]:
+    if not explicit_splits:
+        return splits["all"].scenario_groups
+    for split_name in ("benchmark", "test", "validation", "train"):
+        split = splits.get(split_name)
+        if split is not None and split.scenario_groups:
+            return split.scenario_groups
+    return ()
+
+
+def _unique_scenario_paths(splits: dict[str, ExperimentSplit]) -> tuple[Path, ...]:
+    seen: set[Path] = set()
+    paths: list[Path] = []
+    for split in splits.values():
+        for path in split.scenarios:
+            if path in seen:
+                continue
+            seen.add(path)
+            paths.append(path)
+    return tuple(paths)
+
+
 def _scenario_paths(value: Any, *, base_dir: Path) -> tuple[Path, ...]:
     if not isinstance(value, list) or not value:
         raise ValueError("experiment manifest requires a non-empty scenarios list")
@@ -185,7 +377,24 @@ def _scenario_paths(value: Any, *, base_dir: Path) -> tuple[Path, ...]:
 
 def _resolve_path(base_dir: Path, value: Any) -> Path:
     path = Path(str(value))
-    return path if path.is_absolute() else base_dir / path
+    return (path if path.is_absolute() else base_dir / path).resolve()
+
+
+def _resolve_output_path(base_dir: Path, value: Any, run_output_dir: Path | None, default_name: str) -> Path:
+    if value is not None:
+        return _resolve_path(base_dir, value)
+    if run_output_dir is None:
+        raise ValueError(f"experiment outputs must include outputs.{default_name}")
+    return run_output_dir / default_name
+
+
+def _ensure_parent_dir(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    _ensure_parent_dir(path)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def _optional_mapping(value: Any) -> dict[str, Any] | None:
@@ -231,20 +440,73 @@ def _collect_episodes(
     )
 
 
-def _grouped_evaluation(
+def _load_split_scenarios(manifest: ExperimentManifest) -> dict[str, tuple[Scenario, ...]]:
+    return {
+        split_name: tuple(load_scenario(path) for path in split.scenarios)
+        for split_name, split in manifest.splits.items()
+    }
+
+
+def _all_split_scenarios(split_scenarios: dict[str, tuple[Scenario, ...]]) -> tuple[Scenario, ...]:
+    return tuple(scenario for scenarios in split_scenarios.values() for scenario in scenarios)
+
+
+def _all_split_episodes(split_episodes: dict[str, tuple[RolloutEpisode, ...]]) -> tuple[RolloutEpisode, ...]:
+    return tuple(episode for episodes in split_episodes.values() for episode in episodes)
+
+
+def _evaluation_split_name(manifest: ExperimentManifest) -> str:
+    if not manifest.explicit_splits:
+        return "all"
+    for split_name in ("benchmark", "test", "validation", "train"):
+        if split_name in manifest.splits and manifest.splits[split_name].scenarios:
+            return split_name
+    raise ValueError("experiment manifest has no scenarios to evaluate")
+
+
+def _split_summaries(
     manifest: ExperimentManifest,
+    split_episodes: dict[str, tuple[RolloutEpisode, ...]],
+) -> dict[str, Any]:
+    summaries: dict[str, Any] = {}
+    for split_name, split in manifest.splits.items():
+        episodes = split_episodes.get(split_name, ())
+        split_summary = {
+            "scenario_count": len(split.scenarios),
+            "episode_count": len(episodes),
+            "transition_count": sum(len(episode.transitions) for episode in episodes),
+            "groups": {},
+        }
+        cursor = 0
+        groups: dict[str, Any] = {}
+        for group in split.scenario_groups:
+            group_episodes = episodes[cursor : cursor + len(group.scenarios)]
+            cursor += len(group.scenarios)
+            groups[group.name] = {
+                "scenario_count": len(group.scenarios),
+                "episode_count": len(group_episodes),
+                "transition_count": sum(len(episode.transitions) for episode in group_episodes),
+            }
+        split_summary["groups"] = groups
+        summaries[split_name] = split_summary
+    return summaries
+
+
+def _grouped_evaluation(
+    groups: tuple[ExperimentScenarioGroup, ...],
     scenarios: tuple[Scenario, ...],
+    scenario_paths: tuple[Path, ...],
     *,
     planner,
     aggregate: dict[str, Any],
     torch_policy=None,
 ) -> dict[str, Any]:
-    groups: dict[str, Any] = {}
+    group_results: dict[str, Any] = {}
     cursor = 0
-    for group in manifest.scenario_groups:
+    for group in groups:
         group_scenarios = scenarios[cursor : cursor + len(group.scenarios)]
         cursor += len(group.scenarios)
-        groups[group.name] = evaluate_policy_baseline_scenarios(
+        group_results[group.name] = evaluate_policy_baseline_scenarios(
             group_scenarios,
             torch_policy=torch_policy,
             planning_adapter=planner,
@@ -252,7 +514,7 @@ def _grouped_evaluation(
 
     return {
         "aggregate": aggregate,
-        "groups": groups,
+        "groups": group_results,
         "per_scenario": [
             {
                 "path": str(path),
@@ -262,7 +524,7 @@ def _grouped_evaluation(
                     planning_adapter=planner,
                 ),
             }
-            for path, scenario in zip(manifest.scenarios, scenarios)
+            for path, scenario in zip(scenario_paths, scenarios)
         ],
     }
 
@@ -283,33 +545,137 @@ def _run_reward_ablations(manifest: ExperimentManifest, scenarios: tuple[Scenari
     return results
 
 
-def _run_training(episodes: tuple[RolloutEpisode, ...], config: dict[str, Any], *, base_dir: Path) -> dict[str, Any]:
+def _run_training(
+    episodes: tuple[RolloutEpisode, ...],
+    config: dict[str, Any],
+    *,
+    base_dir: Path,
+    run_output_dir: Path | None = None,
+    scenarios: tuple[Scenario, ...] = (),
+    planner=None,
+    train_episodes: tuple[RolloutEpisode, ...] | None = None,
+    validation_episodes: tuple[RolloutEpisode, ...] | None = None,
+    validation_scenarios: tuple[Scenario, ...] | None = None,
+) -> dict[str, Any]:
     from .training import train_policy_on_episodes
 
-    train_episodes, validation_episodes = _split_training_episodes(
-        episodes,
-        validation_fraction=float(config.get("validation_fraction", 0.0)),
+    from .training import load_policy_checkpoint
+
+    validation_fraction = float(config.get("validation_fraction", 0.0))
+    if train_episodes is None:
+        train_episodes, inferred_validation_episodes = _split_training_episodes(
+            episodes,
+            validation_fraction=validation_fraction,
+        )
+        if validation_episodes is None:
+            validation_episodes = inferred_validation_episodes
+    if validation_scenarios is None:
+        _, inferred_validation_scenarios = _split_training_scenarios(
+            scenarios,
+            validation_fraction=validation_fraction,
+        )
+        validation_scenarios = inferred_validation_scenarios
+    validation_episodes = validation_episodes or ()
+    evaluation_scenarios = validation_scenarios or scenarios
+    seeds = _training_seeds(config)
+    multi_seed = len(seeds) > 1
+    runs: list[dict[str, Any]] = []
+
+    for seed in seeds:
+        checkpoint = _training_output_path(
+            config,
+            "checkpoint",
+            seed=seed,
+            base_dir=base_dir,
+            run_output_dir=run_output_dir,
+            default_name="checkpoint.pt",
+            multi_seed=multi_seed,
+            required=True,
+        )
+        loss_log = _training_output_path(
+            config,
+            "loss_log",
+            seed=seed,
+            base_dir=base_dir,
+            run_output_dir=run_output_dir,
+            default_name="losses.jsonl",
+            multi_seed=multi_seed,
+            required=False,
+        )
+        _ensure_parent_dir(checkpoint)
+        result = train_policy_on_episodes(
+            train_episodes,
+            checkpoint_path=checkpoint,
+            seed=seed,
+            hidden_size=int(config.get("hidden_size", 64)),
+            learning_rate=float(config.get("learning_rate", 1.0e-3)),
+            epochs=int(config.get("epochs", 1)),
+            return_mode=str(config.get("return_mode", "reward_as_return")),
+            discount_factor=float(config.get("discount_factor", 0.99)),
+        )
+        if loss_log is not None:
+            _ensure_parent_dir(loss_log)
+            loss_records = result.get("epoch_losses", [])
+            if not isinstance(loss_records, list) or not loss_records:
+                loss_records = [result]
+            loss_log.write_text(
+                "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in loss_records),
+                encoding="utf-8",
+            )
+        result["checkpoint"] = str(checkpoint)
+        if loss_log is not None:
+            result["loss_log"] = str(loss_log)
+        result["train_episode_count"] = len(train_episodes)
+        result["validation_episode_count"] = len(validation_episodes)
+        if evaluation_scenarios:
+            trained_policy = load_policy_checkpoint(checkpoint)
+            validation_evaluation = evaluate_policy_baseline_scenarios(
+                evaluation_scenarios,
+                torch_policy=trained_policy,
+                planning_adapter=planner,
+            )
+            result["validation_evaluation"] = validation_evaluation
+            validation_output = checkpoint.parent / "validation-evaluation.json"
+            _write_json(validation_output, validation_evaluation)
+            result["validation_evaluation_output"] = str(validation_output)
+        training_summary_output = checkpoint.parent / "training-summary.json"
+        _write_json(training_summary_output, result)
+        result["training_summary_output"] = str(training_summary_output)
+        runs.append(result)
+
+    best_run = _select_best_training_run(
+        runs,
+        metric=str(config.get("best_metric", "final_coverage_rate")),
+        policy=str(config.get("best_policy", "torch_policy")),
     )
-    checkpoint = _resolve_path(base_dir, config["checkpoint"])
-    result = train_policy_on_episodes(
-        train_episodes,
-        checkpoint_path=checkpoint,
-        seed=int(config.get("seed", 0)),
-        hidden_size=int(config.get("hidden_size", 64)),
-        learning_rate=float(config.get("learning_rate", 1.0e-3)),
-        epochs=int(config.get("epochs", 1)),
-        return_mode=str(config.get("return_mode", "reward_as_return")),
-        discount_factor=float(config.get("discount_factor", 0.99)),
-    )
-    loss_log = config.get("loss_log")
-    if loss_log is not None:
-        _resolve_path(base_dir, loss_log).write_text(json.dumps(result, ensure_ascii=False) + "\n", encoding="utf-8")
-    result["checkpoint"] = str(checkpoint)
-    if loss_log is not None:
-        result["loss_log"] = str(_resolve_path(base_dir, loss_log))
-    result["train_episode_count"] = len(train_episodes)
-    result["validation_episode_count"] = len(validation_episodes)
-    return result
+    selected = dict(best_run)
+    selected["checkpoint"] = best_run["checkpoint"]
+    selected["best_seed"] = int(best_run["seed"])
+    selected["best_checkpoint"] = best_run["checkpoint"]
+    selected["best_checkpoint_path"] = best_run["checkpoint"]
+    selected["last_checkpoint"] = runs[-1]["checkpoint"]
+    selected["last_checkpoint_path"] = runs[-1]["checkpoint"]
+    selected["seeds"] = list(seeds)
+    selected["run_count"] = len(runs)
+    selected["runs"] = runs
+    selected["multi_seed_summary"] = _multi_seed_evaluation_summary(runs)
+    selected["multi_seed_loss_summary"] = _loss_summary(runs)
+    selected["multi_seed_delta_summary"] = _multi_seed_delta_summary(runs)
+    selected["best_selection"] = {
+        "policy": str(config.get("best_policy", "torch_policy")),
+        "metric": str(config.get("best_metric", "final_coverage_rate")),
+        "mode": "max",
+        "value": _training_run_metric(
+            best_run,
+            policy=str(config.get("best_policy", "torch_policy")),
+            metric=str(config.get("best_metric", "final_coverage_rate")),
+        ),
+        "reason": (
+            f"max {config.get('best_policy', 'torch_policy')}."
+            f"{config.get('best_metric', 'final_coverage_rate')} on validation evaluation"
+        ),
+    }
+    return selected
 
 
 def _should_evaluate_trained_policy(config: dict[str, Any]) -> bool:
@@ -332,6 +698,254 @@ def _split_training_episodes(
     validation_count = max(1, int(round(len(episodes) * min(validation_fraction, 0.9))))
     train_count = max(1, len(episodes) - validation_count)
     return episodes[:train_count], episodes[train_count:]
+
+
+def _split_training_scenarios(
+    scenarios: tuple[Scenario, ...],
+    *,
+    validation_fraction: float,
+) -> tuple[tuple[Scenario, ...], tuple[Scenario, ...]]:
+    if validation_fraction <= 0.0 or len(scenarios) <= 1:
+        return scenarios, ()
+    validation_count = max(1, int(round(len(scenarios) * min(validation_fraction, 0.9))))
+    train_count = max(1, len(scenarios) - validation_count)
+    return scenarios[:train_count], scenarios[train_count:]
+
+
+def _training_seeds(config: dict[str, Any]) -> tuple[int, ...]:
+    if "seeds" not in config:
+        return (int(config.get("seed", 0)),)
+    raw_seeds = config["seeds"]
+    if not isinstance(raw_seeds, list) or not raw_seeds:
+        raise ValueError("train.seeds must be a non-empty list")
+    return tuple(int(seed) for seed in raw_seeds)
+
+
+def _training_output_path(
+    config: dict[str, Any],
+    key: str,
+    *,
+    seed: int,
+    base_dir: Path,
+    run_output_dir: Path | None,
+    default_name: str,
+    multi_seed: bool,
+    required: bool,
+) -> Path | None:
+    value = config.get(key)
+    if value is not None:
+        text = str(value)
+        formatted = text.format(seed=seed)
+        path = _resolve_path(base_dir, formatted)
+        if multi_seed and formatted == text and "{seed}" not in text:
+            path = path.parent / f"seed-{seed}" / path.name
+        return path
+    if run_output_dir is not None:
+        return run_output_dir / f"seed-{seed}" / default_name
+    if required:
+        raise ValueError(f"train.{key} is required when outputs.root is not configured")
+    return None
+
+
+def _select_best_training_run(runs: list[dict[str, Any]], *, policy: str, metric: str) -> dict[str, Any]:
+    if not runs:
+        raise ValueError("training must produce at least one run")
+    return max(runs, key=lambda run: _training_run_metric(run, policy=policy, metric=metric))
+
+
+def _training_run_metric(run: dict[str, Any], *, policy: str, metric: str) -> float:
+    evaluation = run.get("validation_evaluation", {})
+    if not isinstance(evaluation, dict):
+        return float("-inf")
+    policy_metrics = evaluation.get(policy, {})
+    if not isinstance(policy_metrics, dict):
+        return float("-inf")
+    value = policy_metrics.get(metric)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("-inf")
+
+
+def _multi_seed_evaluation_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    values: dict[str, dict[str, list[float]]] = {}
+    for run in runs:
+        evaluation = run.get("validation_evaluation", {})
+        if not isinstance(evaluation, dict):
+            continue
+        for policy, metrics in evaluation.items():
+            if not isinstance(metrics, dict):
+                continue
+            policy_values = values.setdefault(str(policy), {})
+            for metric, value in metrics.items():
+                if isinstance(value, bool):
+                    continue
+                try:
+                    numeric = float(value)
+                except (TypeError, ValueError):
+                    continue
+                metric_values = policy_values.setdefault(str(metric), [])
+                metric_values.append(numeric)
+    return {
+        policy: {metric: _numeric_stats(tuple(metric_values)) for metric, metric_values in metrics.items()}
+        for policy, metrics in values.items()
+    }
+
+
+_BASELINE_DELTA_METRICS = (
+    "final_coverage_rate",
+    "cumulative_coverage_rate_delta",
+    "total_path_cost",
+    "average_risk",
+    "failure_count",
+    "value_coverage",
+)
+
+
+def _baseline_deltas(evaluation: dict[str, Any], *, policy: str = "torch_policy") -> dict[str, Any]:
+    policy_metrics = evaluation.get(policy)
+    if not isinstance(policy_metrics, dict):
+        return {}
+    deltas: dict[str, Any] = {policy: {}}
+    for baseline_name in ("utility", "coverage_heuristic"):
+        baseline_metrics = evaluation.get(baseline_name)
+        if not isinstance(baseline_metrics, dict):
+            continue
+        deltas[policy][baseline_name] = {
+            metric: _metric_value(policy_metrics, metric) - _metric_value(baseline_metrics, metric)
+            for metric in _BASELINE_DELTA_METRICS
+        }
+    return deltas
+
+
+def _multi_seed_delta_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    values: dict[str, dict[str, list[float]]] = {}
+    for run in runs:
+        evaluation = run.get("validation_evaluation", {})
+        if not isinstance(evaluation, dict):
+            continue
+        deltas = _baseline_deltas(evaluation).get("torch_policy", {})
+        if not isinstance(deltas, dict):
+            continue
+        for baseline_name, metrics in deltas.items():
+            if not isinstance(metrics, dict):
+                continue
+            baseline_values = values.setdefault(str(baseline_name), {})
+            for metric, value in metrics.items():
+                baseline_values.setdefault(str(metric), []).append(float(value))
+    return {
+        baseline: {metric: _numeric_stats(tuple(metric_values)) for metric, metric_values in metrics.items()}
+        for baseline, metrics in values.items()
+    }
+
+
+def _metric_value(metrics: dict[str, Any], metric: str) -> float:
+    value = metrics.get(metric)
+    if value is None and metric == "final_coverage_rate":
+        value = metrics.get("average_final_coverage_rate")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _numeric_stats(values: tuple[float, ...]) -> dict[str, float]:
+    if not values:
+        return {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0}
+    average = sum(values) / len(values)
+    variance = sum((value - average) ** 2 for value in values) / len(values)
+    return {
+        "mean": average,
+        "std": sqrt(variance),
+        "min": min(values),
+        "max": max(values),
+    }
+
+
+def _environment_metadata(*, base_dir: Path) -> dict[str, Any]:
+    torch_available = importlib_util.find_spec("torch") is not None
+    torch_version = None
+    if torch_available:
+        try:
+            import torch
+
+            torch_version = str(torch.__version__)
+        except Exception:
+            torch_available = False
+            torch_version = None
+    return {
+        "python_version": sys.version,
+        "torch": {"available": torch_available, "version": torch_version},
+        "git": _git_metadata(base_dir=base_dir),
+    }
+
+
+def _git_metadata(*, base_dir: Path) -> dict[str, Any]:
+    commit = _git_output(base_dir, "rev-parse", "HEAD")
+    status = _git_output(base_dir, "status", "--porcelain")
+    return {
+        "commit": commit,
+        "dirty": bool(status),
+    }
+
+
+def _git_output(base_dir: Path, *args: str) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=base_dir,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+    except Exception:
+        return None
+    return completed.stdout.strip()
+
+
+def _resolved_manifest_payload(manifest: ExperimentManifest) -> dict[str, Any]:
+    return {
+        "schema_version": manifest.schema_version,
+        "experiment_name": manifest.experiment_name,
+        "run_id": manifest.run_id,
+        "scenario_paths": [str(path) for path in manifest.scenarios],
+        "splits": {
+            name: [str(path) for path in split.scenarios]
+            for name, split in manifest.splits.items()
+        },
+        "split_groups": {
+            name: {
+                group.name: [str(path) for path in group.scenarios]
+                for group in split.scenario_groups
+            }
+            for name, split in manifest.splits.items()
+        },
+        "outputs": {
+            "rollouts": str(manifest.rollout_output),
+            "evaluation": str(manifest.evaluation_output),
+            "report": None if manifest.report_output is None else str(manifest.report_output),
+            "dataset_summary": None
+            if manifest.dataset_summary_output is None
+            else str(manifest.dataset_summary_output),
+            "resolved_manifest": str(manifest.resolved_manifest_output),
+            "root": None if manifest.output_root is None else str(manifest.output_root),
+            "run_dir": None if manifest.run_output_dir is None else str(manifest.run_output_dir),
+        },
+        "planner": dict(manifest.planner_config),
+        "reward": dict(manifest.reward_config or {}),
+        "dataset_gates": dict(manifest.dataset_validation or {}),
+        "train_config": dict(manifest.train_config or {}),
+        "split_config": {
+            name: {
+                "scenario_count": len(split.scenarios),
+                "groups": {
+                    group.name: len(group.scenarios) for group in split.scenario_groups
+                },
+            }
+            for name, split in manifest.splits.items()
+        },
+    }
 
 
 def _aggregate_rollout_metrics(episodes: tuple[RolloutEpisode, ...]) -> dict[str, Any]:
@@ -412,13 +1026,61 @@ def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str
         if isinstance(reward_summary, dict):
             for key in ("min", "max", "mean"):
                 lines.append(f"| reward_{key} | {reward_summary.get(key, 0.0)} |")
+        validation_gates = dataset_summary.get("validation_gates")
+        if isinstance(validation_gates, dict):
+            lines.extend(["", "## Dataset Validation Gates", "", f"- status: {validation_gates.get('status', 'unknown')}"])
+            configured = validation_gates.get("configured", {})
+            if isinstance(configured, dict):
+                lines.extend(["", "| gate | value |", "|---|---:|"])
+                for key, value in configured.items():
+                    lines.append(f"| {key} | {value} |")
+            violations = validation_gates.get("violations", [])
+            if isinstance(violations, list) and violations:
+                lines.extend(["", "| violation | message |", "|---|---|"])
+                for violation in violations:
+                    if isinstance(violation, dict):
+                        lines.append(f"| {violation.get('gate', '')} | {violation.get('message', '')} |")
+
+    split_summaries = summary.get("split_summaries", {})
+    benchmark_summary = split_summaries.get("benchmark") if isinstance(split_summaries, dict) else None
+    if isinstance(benchmark_summary, dict):
+        lines.extend(
+            [
+                "",
+                "## Benchmark Groups",
+                "",
+                "| group | scenarios | episodes | transitions |",
+                "|---|---:|---:|---:|",
+            ]
+        )
+        groups = benchmark_summary.get("groups", {})
+        if isinstance(groups, dict):
+            for group_name, group_summary in groups.items():
+                if not isinstance(group_summary, dict):
+                    continue
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        (
+                            str(group_name),
+                            str(group_summary.get("scenario_count", 0)),
+                            str(group_summary.get("episode_count", 0)),
+                            str(group_summary.get("transition_count", 0)),
+                        )
+                    )
+                    + " |"
+                )
 
     if "training" in summary:
         training = summary["training"]
         lines.extend(["", "## Training", "", "| field | value |", "|---|---:|"])
         for key in (
             "checkpoint",
+            "best_checkpoint_path",
+            "last_checkpoint_path",
+            "best_seed",
             "seed",
+            "run_count",
             "epochs",
             "sample_count",
             "train_episode_count",
@@ -444,6 +1106,134 @@ def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str
             ):
                 lines.append(f"| {key} | {training_dataset.get(key, 0)} |")
 
+        best_selection = training.get("best_selection", {})
+        if isinstance(best_selection, dict):
+            lines.extend(["", "## Best Checkpoint", "", "| field | value |", "|---|---|"])
+            for key in ("best_seed", "best_checkpoint_path", "last_checkpoint_path"):
+                if key in training:
+                    lines.append(f"| {key} | {training[key]} |")
+            for key in ("policy", "metric", "mode", "value", "reason"):
+                if key in best_selection:
+                    lines.append(f"| {key} | {best_selection[key]} |")
+
+        multi_seed_summary = training.get("multi_seed_summary", {})
+        if isinstance(multi_seed_summary, dict) and multi_seed_summary:
+            lines.extend(
+                [
+                    "",
+                    "## Multi-Seed Summary",
+                    "",
+                    "| policy | metric | mean | std | min | max |",
+                    "|---|---|---:|---:|---:|---:|",
+                ]
+            )
+            for policy, metrics in multi_seed_summary.items():
+                if not isinstance(metrics, dict):
+                    continue
+                for metric, stats in metrics.items():
+                    if not isinstance(stats, dict):
+                        continue
+                    lines.append(
+                        "| "
+                        + " | ".join(
+                            (
+                                str(policy),
+                                str(metric),
+                                str(stats.get("mean", 0.0)),
+                                str(stats.get("std", 0.0)),
+                                str(stats.get("min", 0.0)),
+                                str(stats.get("max", 0.0)),
+                            )
+                        )
+                        + " |"
+                    )
+
+        runs = training.get("runs", [])
+        if isinstance(runs, list) and runs:
+            lines.extend(
+                [
+                    "",
+                    "## Per-Seed Metrics",
+                    "",
+                    "| seed | checkpoint | final_coverage_rate | total_path_cost | loss | policy_loss | value_loss | entropy |",
+                    "|---:|---|---:|---:|---:|---:|---:|---:|",
+                ]
+            )
+            for run in runs:
+                if not isinstance(run, dict):
+                    continue
+                torch_metrics = {}
+                validation_evaluation = run.get("validation_evaluation", {})
+                if isinstance(validation_evaluation, dict):
+                    torch_metrics = validation_evaluation.get("torch_policy", {}) or {}
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        (
+                            str(run.get("seed", "")),
+                            str(run.get("checkpoint", "")),
+                            str(torch_metrics.get("final_coverage_rate", 0.0)),
+                            str(torch_metrics.get("total_path_cost", 0.0)),
+                            str(run.get("loss", 0.0)),
+                            str(run.get("policy_loss", 0.0)),
+                            str(run.get("value_loss", 0.0)),
+                            str(run.get("entropy", 0.0)),
+                        )
+                    )
+                    + " |"
+                )
+
+            loss_summary = _loss_summary(runs)
+            lines.extend(
+                [
+                    "",
+                    "## Loss Summary",
+                    "",
+                    "| metric | mean | std | min | max |",
+                    "|---|---:|---:|---:|---:|",
+                ]
+            )
+            for metric, stats in loss_summary.items():
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        (
+                            metric,
+                            str(stats.get("mean", 0.0)),
+                            str(stats.get("std", 0.0)),
+                            str(stats.get("min", 0.0)),
+                            str(stats.get("max", 0.0)),
+                        )
+                    )
+                    + " |"
+                )
+
+        lines.extend(["", "## Training Quality", "", "| seed | warnings |", "|---:|---|"])
+        for run in runs if isinstance(runs, list) else []:
+            if not isinstance(run, dict):
+                continue
+            warnings = run.get("warnings", [])
+            warning_text = ", ".join(str(item) for item in warnings) if isinstance(warnings, list) else ""
+            lines.append(f"| {run.get('seed', '')} | {warning_text} |")
+
+    baseline_deltas = summary.get("baseline_deltas", {})
+    torch_deltas = baseline_deltas.get("torch_policy") if isinstance(baseline_deltas, dict) else None
+    if isinstance(torch_deltas, dict) and torch_deltas:
+        lines.extend(
+            [
+                "",
+                "## Baseline Comparison",
+                "",
+                "| baseline | metric | delta |",
+                "|---|---|---:|",
+            ]
+        )
+        for baseline_name, metrics in torch_deltas.items():
+            if not isinstance(metrics, dict):
+                continue
+            for metric, delta in metrics.items():
+                lines.append(f"| {baseline_name} | {metric} | {delta} |")
+
     lines.extend(["", "## Baselines", "", "| policy | final_coverage_rate | cumulative_coverage_rate_delta | total_path_cost | average_risk | failure_count | replan_count | value_coverage |", "|---|---:|---:|---:|---:|---:|---:|---:|"])
     for policy_name in ("utility", "coverage_heuristic", "torch_policy"):
         if policy_name not in evaluation_comparison:
@@ -467,3 +1257,18 @@ def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str
         )
     lines.append("")
     return "\n".join(lines)
+
+
+def _loss_summary(runs: list[Any]) -> dict[str, dict[str, float]]:
+    summary: dict[str, dict[str, float]] = {}
+    for metric in ("loss", "policy_loss", "value_loss", "entropy"):
+        values: list[float] = []
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            try:
+                values.append(float(run[metric]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        summary[metric] = _numeric_stats(tuple(values))
+    return summary

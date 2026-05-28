@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -74,11 +75,13 @@ def train_policy_on_episodes(
     )
 
     losses = None
-    for _ in range(epochs):
+    epoch_losses: list[dict[str, Any]] = []
+    for epoch_index in range(epochs):
         optimizer.zero_grad()
         losses = compute_masked_ppo_loss(network, **batch)
         losses.total_loss.backward()
         optimizer.step()
+        epoch_losses.append(_loss_record(losses, epoch=epoch_index + 1))
 
     if losses is None:
         raise ValueError("epochs must be at least 1")
@@ -99,12 +102,13 @@ def train_policy_on_episodes(
             discount_factor=discount_factor,
         )
 
-    return {
+    result = {
         "loss": float(losses.total_loss.detach()),
         "total_loss": float(losses.total_loss.detach()),
         "policy_loss": float(losses.policy_loss.detach()),
         "value_loss": float(losses.value_loss.detach()),
         "entropy": float(losses.entropy.detach()),
+        "epoch_losses": epoch_losses,
         "sample_count": len(trainable_transitions),
         "epochs": int(epochs),
         "seed": int(seed),
@@ -114,6 +118,8 @@ def train_policy_on_episodes(
         "discount_factor": float(discount_factor),
         "dataset_summary": dataset_summary,
     }
+    result["warnings"] = _training_quality_warnings(result)
+    return result
 
 
 def load_policy_checkpoint(path: str | Path):
@@ -189,6 +195,41 @@ def _trainable_transitions(episodes: tuple[RolloutEpisode, ...]) -> tuple[Rollou
     if transitions:
         _validate_transition_shapes(transitions)
     return transitions
+
+
+def _loss_record(losses, *, epoch: int) -> dict[str, Any]:
+    return {
+        "epoch": int(epoch),
+        "loss": float(losses.total_loss.detach()),
+        "total_loss": float(losses.total_loss.detach()),
+        "policy_loss": float(losses.policy_loss.detach()),
+        "value_loss": float(losses.value_loss.detach()),
+        "entropy": float(losses.entropy.detach()),
+    }
+
+
+def _training_quality_warnings(result: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    dataset_summary = result.get("dataset_summary", {})
+    trainable_count = int(dataset_summary.get("trainable_transition_count", result.get("sample_count", 0)))
+    if trainable_count < 2:
+        warnings.append("trainable_transition_count_too_low")
+    reward_summary = dataset_summary.get("reward", {})
+    if (
+        isinstance(reward_summary, dict)
+        and float(reward_summary.get("min", 0.0)) == 0.0
+        and float(reward_summary.get("max", 0.0)) == 0.0
+    ):
+        warnings.append("reward_all_zero")
+    entropy = float(result.get("entropy", 0.0))
+    if entropy < 1.0e-3:
+        warnings.append("entropy_too_low")
+    value_loss = float(result.get("value_loss", 0.0))
+    if not isfinite(value_loss):
+        warnings.append("value_loss_non_finite")
+    elif value_loss > 1.0e6:
+        warnings.append("value_loss_abnormally_large")
+    return warnings
 
 
 def _validate_transition_shapes(transitions: tuple[RolloutTransition, ...]) -> None:

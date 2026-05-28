@@ -1,0 +1,41 @@
+{
+  "schema_version": "model-explorer-experiment/v1",
+  "name": "synthetic-benchmark",
+  "run_id": "fixture",
+  "splits": {
+    "benchmark": {
+      "coverage_dominant": ["benchmark-high-coverage.json"],
+      "risk_dominant": ["benchmark-high-risk.json"],
+      "path_cost_dominant": ["benchmark-high-path-cost.json"],
+      "sparse_candidates": ["benchmark-padding.json"],
+      "high_unreachable_rate": ["benchmark-empty-mask.json"],
+      "missing_experimental_fields": ["benchmark-missing-experimental-fields.json"]
+    }
+  },
+  "max_candidates": 4,
+  "planner": {
+    "backend": "contract_cost"
+  },
+  "reward": {
+    "path_cost_weight": 0.1,
+    "path_cost_normalizer": 100.0,
+    "risk_weight": 0.2,
+    "failure_penalty": 1.0
+  },
+  "dataset_validation": {
+    "min_episode_count": 6,
+    "min_transition_count": 6,
+    "min_trainable_transition_count": 5,
+    "max_empty_action_mask_count": 1,
+    "max_invalid_action_mask_count": 0,
+    "max_failure_rate": 0.2,
+    "require_finite_reward": true,
+    "max_missing_experimental_feature_rate": 0.7,
+    "min_action_mask_valid_mean": 0.45,
+    "max_unreachable_candidate_rate": 0.6,
+    "min_reward_std": 0.01
+  },
+  "outputs": {
+    "root": "out"
+  }
+}

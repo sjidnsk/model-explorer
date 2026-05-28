@@ -1418,11 +1418,17 @@ class ExperimentManifestTests(unittest.TestCase):
         sidecar_path = SYNTHETIC_EXPERIMENT_FIXTURE / "sidecar-grid.json"
         contract_cost_manifest = SYNTHETIC_EXPERIMENT_FIXTURE / "contract-cost-experiment.json"
         straight_line_manifest = SYNTHETIC_EXPERIMENT_FIXTURE / "straight-line-experiment.json"
+        formal_training_manifest = SYNTHETIC_EXPERIMENT_FIXTURE / "formal-training-experiment.json"
 
         self.assertTrue(manifest_path.exists())
         self.assertTrue(sidecar_path.exists())
         self.assertTrue(contract_cost_manifest.exists())
         self.assertTrue(straight_line_manifest.exists())
+        self.assertTrue(formal_training_manifest.exists())
+        formal_payload = json.loads(formal_training_manifest.read_text(encoding="utf-8"))
+        self.assertIn("root", formal_payload["outputs"])
+        self.assertIn("dataset_validation", formal_payload)
+        self.assertEqual(formal_payload["train"]["seeds"], [11, 13])
 
         with tempfile.TemporaryDirectory() as tmpdir:
             temp_manifest_path = Path(tmpdir) / "experiment.json"
@@ -1446,6 +1452,55 @@ class ExperimentManifestTests(unittest.TestCase):
         self.assertEqual(summary["planner"], "grid_astar")
         self.assertEqual(summary["scenario_count"], 2)
         self.assertGreater(summary["transition_count"], 0)
+
+    def test_synthetic_benchmark_fixture_runs_with_quality_gates(self):
+        from model_explorer.policy.experiment import run_experiment_manifest
+
+        manifest_path = SYNTHETIC_EXPERIMENT_FIXTURE / "synthetic-benchmark-experiment.json"
+
+        self.assertTrue(manifest_path.exists())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            payload["splits"]["benchmark"] = {
+                group_name: [
+                    str((SYNTHETIC_EXPERIMENT_FIXTURE / path).resolve())
+                    for path in scenario_paths
+                ]
+                for group_name, scenario_paths in payload["splits"]["benchmark"].items()
+            }
+            payload["outputs"] = {
+                "rollouts": str(Path(tmpdir) / "benchmark-rollouts.jsonl"),
+                "evaluation": str(Path(tmpdir) / "benchmark-evaluation.json"),
+                "dataset_summary": str(Path(tmpdir) / "benchmark-dataset-summary.json"),
+                "report": str(Path(tmpdir) / "benchmark-report.md"),
+            }
+            temp_manifest_path = Path(tmpdir) / "benchmark.json"
+            temp_manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            summary = run_experiment_manifest(temp_manifest_path)
+            dataset_summary = json.loads(
+                (Path(tmpdir) / "benchmark-dataset-summary.json").read_text(encoding="utf-8")
+            )
+            evaluation = json.loads((Path(tmpdir) / "benchmark-evaluation.json").read_text(encoding="utf-8"))
+            report = (Path(tmpdir) / "benchmark-report.md").read_text(encoding="utf-8")
+
+        self.assertEqual(summary["scenario_count"], 6)
+        self.assertGreaterEqual(summary["dataset_summary"]["empty_action_mask_count"], 1)
+        self.assertGreaterEqual(dataset_summary["trainable_transition_count"], 5)
+        self.assertEqual(dataset_summary["validation_gates"]["status"], "passed")
+        expected_groups = {
+            "coverage_dominant",
+            "risk_dominant",
+            "path_cost_dominant",
+            "sparse_candidates",
+            "high_unreachable_rate",
+            "missing_experimental_fields",
+        }
+        self.assertEqual(set(evaluation["groups"]), expected_groups)
+        self.assertEqual(set(summary["split_summaries"]["benchmark"]["groups"]), expected_groups)
+        self.assertIn("## Benchmark Groups", report)
+        self.assertIn("missing_experimental_fields", report)
 
 
 class PolicyScriptTests(unittest.TestCase):
