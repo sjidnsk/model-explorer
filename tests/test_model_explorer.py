@@ -816,6 +816,204 @@ class RolloutCollectorTests(unittest.TestCase):
         self.assertEqual(reward_info.risk, 0.0)
 
 
+class PathPlanningAdapterTests(unittest.TestCase):
+    def test_contract_cost_planner_uses_finite_defaults_when_fields_are_missing(self):
+        from model_explorer.policy.planning import ContractCostPlanner, PathPlanRequest
+
+        contract = load_contract_from_dict(
+            minimal_contract(goals=[{"cell": [2, 1], "utility": 0.42, "reachable": True}])
+        )
+        selected_goal = contract.top_goals[0]
+
+        result = ContractCostPlanner().plan(
+            PathPlanRequest(
+                contract=contract,
+                step_index=0,
+                action_index=0,
+                selected_goal=selected_goal,
+                current_cell=(0, 0),
+            )
+        )
+
+        self.assertTrue(result.feasible)
+        self.assertEqual(result.path_cost, 0.0)
+        self.assertEqual(result.risk, 0.0)
+        self.assertIsNone(result.failure_reason)
+
+    def test_straight_line_proxy_planner_computes_deterministic_grid_distance(self):
+        from model_explorer.policy.planning import PathPlanRequest, StraightLineProxyPlanner
+
+        contract = load_contract_from_dict(
+            minimal_contract(goals=[{"cell": [3, 4], "utility": 0.4, "reachable": True, "risk": 0.25}])
+        )
+        selected_goal = contract.top_goals[0]
+
+        result = StraightLineProxyPlanner().plan(
+            PathPlanRequest(
+                contract=contract,
+                step_index=0,
+                action_index=0,
+                selected_goal=selected_goal,
+                current_cell=(0, 0),
+            )
+        )
+
+        self.assertTrue(result.feasible)
+        self.assertAlmostEqual(result.path_length, 5.0)
+        self.assertAlmostEqual(result.path_cost, 5.0)
+        self.assertAlmostEqual(result.risk, 0.25)
+
+    def test_grid_astar_planner_avoids_obstacles_and_reports_blocked_paths(self):
+        from model_explorer.policy.planning import GridAStarPlanner, PathPlanRequest
+
+        contract = load_contract_from_dict(
+            minimal_contract(goals=[{"cell": [2, 2], "utility": 0.4, "reachable": True}])
+        )
+        selected_goal = contract.top_goals[0]
+        planner = GridAStarPlanner(
+            passable_grid=[
+                [True, True, True],
+                [False, False, True],
+                [True, True, True],
+            ]
+        )
+
+        result = planner.plan(
+            PathPlanRequest(
+                contract=contract,
+                step_index=0,
+                action_index=0,
+                selected_goal=selected_goal,
+                current_cell=(0, 0),
+            )
+        )
+
+        self.assertTrue(result.feasible)
+        self.assertEqual(result.path_length, 4.0)
+        self.assertEqual(result.metadata["path_cells"], [[0, 0], [1, 0], [2, 0], [2, 1], [2, 2]])
+
+        blocked_result = GridAStarPlanner(
+            passable_grid=[
+                [True, False, True],
+                [False, False, True],
+                [True, True, True],
+            ]
+        ).plan(
+            PathPlanRequest(
+                contract=contract,
+                step_index=0,
+                action_index=0,
+                selected_goal=selected_goal,
+                current_cell=(0, 0),
+            )
+        )
+
+        self.assertFalse(blocked_result.feasible)
+        self.assertEqual(blocked_result.failure_reason, "path_blocked")
+
+    def test_future_gcs_planner_is_explicitly_unavailable_without_importing_gcs(self):
+        from model_explorer.policy.planning import FutureGcsPlannerAdapter, PathPlanRequest
+
+        contract = load_contract_from_dict(
+            minimal_contract(goals=[{"cell": [1, 1], "utility": 0.4, "reachable": True}])
+        )
+        selected_goal = contract.top_goals[0]
+
+        result = FutureGcsPlannerAdapter().plan(
+            PathPlanRequest(
+                contract=contract,
+                step_index=0,
+                action_index=0,
+                selected_goal=selected_goal,
+                current_cell=(0, 0),
+            )
+        )
+
+        self.assertFalse(result.feasible)
+        self.assertEqual(result.failure_reason, "gcs_adapter_unavailable")
+        self.assertTrue(result.replan_required)
+        self.assertNotIn("a_gcs_ws", sys.modules)
+
+    def test_collector_uses_planning_result_for_reward_and_failure_metrics(self):
+        from model_explorer.policy.collector import collect_dynamic_rollout_episode
+        from model_explorer.policy.planning import PathPlanResult
+        from model_explorer.policy.provider import SequenceContractProvider
+
+        class FixedPlanner:
+            def __init__(self, result):
+                self.result = result
+                self.requests = []
+
+            def plan(self, request):
+                self.requests.append(request)
+                return self.result
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[{"cell": [1, 1], "utility": 0.4, "reachable": True, "path_cost": 100.0, "risk": 0.9}],
+                observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.2},
+            )
+        )
+
+        successful_episode = collect_dynamic_rollout_episode(
+            SequenceContractProvider([contract]),
+            planning_adapter=FixedPlanner(PathPlanResult(feasible=True, path_cost=4.0, path_length=4.0, risk=0.25)),
+            max_steps=1,
+        )
+
+        self.assertEqual(successful_episode.transitions[0].info.path_cost, 4.0)
+        self.assertEqual(successful_episode.transitions[0].info.risk, 0.25)
+        self.assertAlmostEqual(successful_episode.transitions[0].reward, 0.2 - 0.1 * 0.04 - 0.2 * 0.25)
+        self.assertEqual(successful_episode.metrics.total_path_cost, 4.0)
+        self.assertEqual(successful_episode.metrics.failure_count, 0)
+
+        failed_episode = collect_dynamic_rollout_episode(
+            SequenceContractProvider([contract]),
+            planning_adapter=FixedPlanner(
+                PathPlanResult(
+                    feasible=False,
+                    path_cost=7.0,
+                    path_length=7.0,
+                    risk=0.5,
+                    failure_reason="path_blocked",
+                    replan_required=True,
+                )
+            ),
+            max_steps=1,
+        )
+
+        self.assertEqual(failed_episode.transitions[0].action_index, 0)
+        self.assertEqual(failed_episode.transitions[0].info.failure_reason, "path_blocked")
+        self.assertEqual(failed_episode.transitions[0].info.path_cost, 7.0)
+        self.assertEqual(failed_episode.metrics.failure_count, 1)
+        self.assertEqual(failed_episode.metrics.replan_count, 1)
+
+    def test_collector_applies_reward_config_to_planning_path_cost(self):
+        from model_explorer.policy.collector import collect_dynamic_rollout_episode
+        from model_explorer.policy.planning import PathPlanResult
+        from model_explorer.policy.provider import SequenceContractProvider
+
+        class FixedPlanner:
+            def plan(self, request):
+                return PathPlanResult(feasible=True, path_cost=10.0, path_length=10.0, risk=0.0)
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[{"cell": [1, 1], "utility": 0.4, "reachable": True}],
+                observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 1.0},
+            )
+        )
+
+        episode = collect_dynamic_rollout_episode(
+            SequenceContractProvider([contract]),
+            planning_adapter=FixedPlanner(),
+            reward_config={"path_cost_weight": 0.5, "path_cost_normalizer": 10.0},
+            max_steps=1,
+        )
+
+        self.assertAlmostEqual(episode.transitions[0].reward, 0.5)
+
+
 class RolloutIoTests(unittest.TestCase):
     def test_rollout_episode_round_trips_through_json_file(self):
         from model_explorer.policy.collector import collect_rollout_episode
@@ -1092,6 +1290,37 @@ class BaselineEvaluationTests(unittest.TestCase):
         self.assertAlmostEqual(report["utility"]["average_final_coverage_rate"], 0.2)
         self.assertAlmostEqual(report["utility"]["value_coverage"], 0.6)
 
+    def test_baseline_evaluation_uses_planning_feedback_for_path_metrics(self):
+        from model_explorer.policy.evaluation import evaluate_policy_baselines
+        from model_explorer.policy.planning import PathPlanResult
+
+        class FixedPlanner:
+            def plan(self, request):
+                return PathPlanResult(
+                    feasible=False,
+                    path_cost=8.0,
+                    path_length=8.0,
+                    risk=0.4,
+                    failure_reason="path_blocked",
+                    replan_required=True,
+                )
+
+        scenario = [
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[{"cell": [1, 1], "utility": 0.4, "reachable": True, "path_cost": 100.0}],
+                    observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.05},
+                )
+            )
+        ]
+
+        report = evaluate_policy_baselines(scenario, planning_adapter=FixedPlanner())
+
+        self.assertEqual(report["utility"]["total_path_cost"], 8.0)
+        self.assertEqual(report["utility"]["average_risk"], 0.4)
+        self.assertEqual(report["utility"]["failure_count"], 1)
+        self.assertEqual(report["utility"]["replan_count"], 1)
+
 
 class PolicyScriptTests(unittest.TestCase):
     def test_collect_rollout_script_writes_episode_json(self):
@@ -1327,6 +1556,68 @@ class PolicyScriptTests(unittest.TestCase):
         self.assertTrue(checkpoint_exists)
         self.assertEqual(result["sample_count"], 2)
         self.assertIn("total_loss", result)
+
+    def test_experiment_runner_manifest_writes_rollouts_and_evaluation(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first_scenario_path = Path(tmpdir) / "scenario-a.json"
+            second_scenario_path = Path(tmpdir) / "scenario-b.json"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            rollout_path = Path(tmpdir) / "rollouts.jsonl"
+            evaluation_path = Path(tmpdir) / "evaluation.json"
+            first_scenario_path.write_text(
+                json.dumps(
+                    minimal_contract(
+                        goals=[{"cell": [3, 1], "utility": 0.5, "reachable": True}],
+                        observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.05},
+                    )
+                ),
+                encoding="utf-8",
+            )
+            second_scenario_path.write_text(
+                json.dumps(
+                    minimal_contract(
+                        goals=[{"cell": [1, 2], "utility": 0.4, "reachable": True}],
+                        observation_update={"coverage_rate": 0.2, "coverage_rate_delta": 0.1},
+                    )
+                ),
+                encoding="utf-8",
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "scenarios": [str(first_scenario_path), str(second_scenario_path)],
+                        "planner": {"backend": "straight_line"},
+                        "outputs": {
+                            "rollouts": str(rollout_path),
+                            "evaluation": str(evaluation_path),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "run_experiment.py"),
+                    str(manifest_path),
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            summary = json.loads(completed.stdout)
+            rollout_lines = rollout_path.read_text(encoding="utf-8").splitlines()
+            evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(summary["scenario_count"], 2)
+        self.assertEqual(summary["planner"], "straight_line")
+        self.assertEqual(len(rollout_lines), 2)
+        self.assertIn("utility", evaluation)
+        self.assertIn("coverage_heuristic", evaluation)
 
 
 class CliTests(unittest.TestCase):

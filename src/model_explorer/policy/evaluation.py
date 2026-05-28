@@ -6,6 +6,7 @@ from typing import Any
 from ..core.interfaces import GoalCandidate, ModelExplorerContract
 from ..decision.selector import select_goal
 from ..io.scenario import Scenario
+from .planning import PathPlanRequest, PathPlanningAdapter
 from .reward import compute_step_reward
 
 
@@ -13,6 +14,7 @@ def evaluate_policy_baselines(
     scenario_or_snapshots: Scenario | Iterable[ModelExplorerContract],
     *,
     torch_policy=None,
+    planning_adapter: PathPlanningAdapter | None = None,
 ) -> dict[str, dict[str, Any]]:
     snapshots = (
         scenario_or_snapshots.snapshots
@@ -21,16 +23,18 @@ def evaluate_policy_baselines(
     )
 
     report = {
-        "utility": _evaluate_strategy(snapshots, _select_utility_goal),
+        "utility": _evaluate_strategy(snapshots, _select_utility_goal, planning_adapter=planning_adapter),
         "coverage_heuristic": _evaluate_strategy(
             snapshots,
             lambda contract: select_goal(contract).selected_goal,
+            planning_adapter=planning_adapter,
         ),
     }
     if torch_policy is not None:
         report["torch_policy"] = _evaluate_strategy(
             snapshots,
             lambda contract: select_goal(contract, policy=torch_policy).selected_goal,
+            planning_adapter=planning_adapter,
         )
     return report
 
@@ -39,9 +43,14 @@ def evaluate_policy_baseline_scenarios(
     scenarios_or_snapshots: Iterable[Scenario | Iterable[ModelExplorerContract]],
     *,
     torch_policy=None,
+    planning_adapter: PathPlanningAdapter | None = None,
 ) -> dict[str, dict[str, Any]]:
     reports = [
-        evaluate_policy_baselines(scenario_or_snapshots, torch_policy=torch_policy)
+        evaluate_policy_baselines(
+            scenario_or_snapshots,
+            torch_policy=torch_policy,
+            planning_adapter=planning_adapter,
+        )
         for scenario_or_snapshots in scenarios_or_snapshots
     ]
     if not reports:
@@ -76,6 +85,8 @@ def evaluate_policy_baseline_scenarios(
 def _evaluate_strategy(
     snapshots: tuple[ModelExplorerContract, ...],
     selector,
+    *,
+    planning_adapter: PathPlanningAdapter | None,
 ) -> dict[str, Any]:
     selected_cells: list[list[int] | None] = []
     cumulative_coverage_rate_delta = 0.0
@@ -87,8 +98,9 @@ def _evaluate_strategy(
     replan_count = 0
     value_coverage = 0.0
     previous_goal: GoalCandidate | None = None
+    current_cell = (0, 0)
 
-    for contract in snapshots:
+    for step_index, contract in enumerate(snapshots):
         selected_goal = selector(contract)
         if selected_goal is None:
             failure_count += 1
@@ -97,16 +109,40 @@ def _evaluate_strategy(
             previous_goal = None
             continue
 
-        reward_info = compute_step_reward(selected_goal, contract.observation_update)
+        planning_result = None
+        action_index = _selected_action_index(contract, selected_goal)
+        if planning_adapter is not None:
+            planning_result = planning_adapter.plan(
+                PathPlanRequest(
+                    contract=contract,
+                    step_index=step_index,
+                    action_index=action_index,
+                    selected_goal=selected_goal,
+                    current_cell=current_cell,
+                )
+            )
+            if not planning_result.feasible:
+                failure_count += 1
+
+        reward_info = compute_step_reward(
+            selected_goal,
+            contract.observation_update,
+            path_cost_override=None if planning_result is None else planning_result.path_cost,
+            risk_override=None if planning_result is None else planning_result.risk,
+        )
         selected_cells.append([selected_goal.cell[0], selected_goal.cell[1]])
         cumulative_coverage_rate_delta += reward_info.coverage_rate_delta
         total_path_cost += reward_info.path_cost
         total_risk += reward_info.risk
         final_coverage_rate = _coverage_rate(contract.observation_update, fallback=final_coverage_rate)
         value_coverage += _value_coverage(contract.observation_update)
-        if _should_count_replan(contract, selected_goal, previous_goal):
+        if _should_count_replan(contract, selected_goal, previous_goal) or (
+            planning_result is not None and planning_result.replan_required
+        ):
             replan_count += 1
         selected_count += 1
+        if planning_result is None or planning_result.feasible:
+            current_cell = selected_goal.cell
         previous_goal = selected_goal
 
     return {
@@ -126,6 +162,13 @@ def _select_utility_goal(contract: ModelExplorerContract) -> GoalCandidate | Non
     if not reachable_goals:
         return None
     return sorted(reachable_goals, key=lambda goal: (-goal.utility, goal.cell[0], goal.cell[1]))[0]
+
+
+def _selected_action_index(contract: ModelExplorerContract, selected_goal: GoalCandidate) -> int:
+    for index, goal in enumerate(contract.top_goals):
+        if goal.cell == selected_goal.cell:
+            return index
+    return -1
 
 
 def _coverage_rate(observation_update: dict[str, Any], *, fallback: float) -> float:

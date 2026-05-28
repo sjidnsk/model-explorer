@@ -8,6 +8,7 @@ from ..decision.selector import select_goal
 from ..io.scenario import Scenario
 from .execution import ExecutionFeasibilityAdapter, ExecutionFeasibilityRequest
 from .features import extract_policy_observation
+from .planning import ContractCostPlanner, PathPlanRequest, PathPlanResult, PathPlanningAdapter
 from .provider import ContractProvider, ProviderStepRequest, SequenceContractProvider
 from .reward import compute_step_reward
 from .rollout import EpisodeMetrics, RolloutEpisode, RolloutInfo, RolloutTransition
@@ -18,6 +19,8 @@ def collect_rollout_episode(
     *,
     policy=None,
     max_candidates: int | None = None,
+    planning_adapter: PathPlanningAdapter | None = None,
+    reward_config: dict[str, Any] | None = None,
 ) -> RolloutEpisode:
     snapshots = (
         scenario_or_snapshots.snapshots
@@ -32,6 +35,8 @@ def collect_rollout_episode(
         policy=policy,
         max_steps=len(snapshots),
         max_candidates=max_candidates,
+        planning_adapter=planning_adapter,
+        reward_config=reward_config,
     )
 
 
@@ -41,7 +46,9 @@ def collect_dynamic_rollout_episode(
     policy=None,
     max_steps: int | None = None,
     max_candidates: int | None = None,
+    planning_adapter: PathPlanningAdapter | None = None,
     execution_adapter: ExecutionFeasibilityAdapter | None = None,
+    reward_config: dict[str, Any] | None = None,
 ) -> RolloutEpisode:
     transitions: list[RolloutTransition] = []
     total_path_cost = 0.0
@@ -56,6 +63,9 @@ def collect_dynamic_rollout_episode(
     current_contract = provider.initial_contract()
     step_limit = max_steps if max_steps is not None else getattr(provider, "total_steps", None)
     step_index = 0
+    current_cell = (0, 0)
+    default_planner = ContractCostPlanner()
+    reward_kwargs = _reward_kwargs(reward_config)
 
     while current_contract is not None and (step_limit is None or step_index < step_limit):
         remaining_steps = _remaining_steps(step_limit, step_index)
@@ -71,8 +81,26 @@ def collect_dynamic_rollout_episode(
         action_index = -1 if selected_goal is None else _selected_action_index(current_contract, selected_goal.cell)
         extra_info: dict[str, Any] = {}
 
+        planning_result: PathPlanResult | None = None
+        planner = planning_adapter if planning_adapter is not None else default_planner
+        if selected_goal is not None:
+            planning_result = planner.plan(
+                PathPlanRequest(
+                    contract=current_contract,
+                    step_index=step_index,
+                    action_index=action_index,
+                    selected_goal=selected_goal,
+                    current_cell=current_cell,
+                )
+            )
+            extra_info["planning_feasible"] = bool(planning_result.feasible)
+            extra_info["planning_metadata"] = dict(planning_result.metadata)
+            extra_info["path_length"] = float(planning_result.path_length)
+            if not planning_result.feasible:
+                failure_reason = planning_result.failure_reason or "path_planning_failed"
+
         execution_response = None
-        if selected_goal is not None and execution_adapter is not None:
+        if selected_goal is not None and execution_adapter is not None and planning_adapter is None:
             execution_response = execution_adapter.check_feasibility(
                 ExecutionFeasibilityRequest(
                     schema_version=current_contract.schema_version,
@@ -109,9 +137,8 @@ def collect_dynamic_rollout_episode(
             decision,
             previous_decision,
             provider_result.replan_reasons,
-            execution_replan_required=(
-                bool(execution_response.replan_required) if execution_response is not None else False
-            ),
+            planner_replan_required=bool(planning_result.replan_required) if planning_result is not None else False,
+            execution_replan_required=bool(execution_response.replan_required) if execution_response is not None else False,
         )
         extra_info["replan_reasons"] = list(replan_reasons)
 
@@ -124,6 +151,9 @@ def collect_dynamic_rollout_episode(
             selected_goal,
             current_contract.observation_update,
             failure_reason=failure_reason,
+            path_cost_override=None if planning_result is None else planning_result.path_cost,
+            risk_override=None if planning_result is None else planning_result.risk,
+            **reward_kwargs,
         )
         final_coverage_rate = _coverage_rate(current_contract.observation_update, fallback=final_coverage_rate)
         value_coverage += _value_coverage(current_contract.observation_update)
@@ -172,6 +202,8 @@ def collect_dynamic_rollout_episode(
         )
 
         previous_decision = decision
+        if selected_goal is not None and failure_reason is None:
+            current_cell = selected_goal.cell
         current_contract = next_contract
         step_index += 1
 
@@ -227,10 +259,13 @@ def _combined_replan_reasons(
     previous_decision: ExplorerDecision | None,
     provider_reasons: tuple[str, ...],
     *,
+    planner_replan_required: bool,
     execution_replan_required: bool,
 ) -> tuple[str, ...]:
     reasons = _local_replan_reasons(contract, decision, previous_decision)
     reasons.extend(provider_reasons)
+    if planner_replan_required:
+        reasons.append("path_planning_failed")
     if execution_replan_required:
         reasons.append("execution_infeasible")
     return _dedupe_strings(reasons)
@@ -294,3 +329,10 @@ def _dedupe_strings(values: Iterable[str]) -> tuple[str, ...]:
         seen.add(value)
         result.append(value)
     return tuple(result)
+
+
+def _reward_kwargs(config: dict[str, Any] | None) -> dict[str, float]:
+    allowed = ("path_cost_weight", "path_cost_normalizer", "risk_weight", "failure_penalty")
+    if config is None:
+        return {}
+    return {key: float(config[key]) for key in allowed if key in config}

@@ -24,10 +24,24 @@ def compute_step_reward(
     path_cost_normalizer: float = 100.0,
     risk_weight: float = 0.20,
     failure_penalty: float = 1.0,
+    path_cost_override: float | None = None,
+    risk_override: float | None = None,
 ) -> RewardInfo:
     coverage_rate_delta = _numeric_mapping_value(observation_update, "coverage_rate_delta") or 0.0
-    path_cost = _numeric_experimental(selected_goal, "path_cost") if selected_goal is not None else 0.0
-    risk = _numeric_experimental(selected_goal, "risk") if selected_goal is not None else 0.0
+    path_cost = (
+        float(path_cost_override)
+        if path_cost_override is not None
+        else _numeric_experimental(selected_goal, "path_cost")
+        if selected_goal is not None
+        else 0.0
+    )
+    risk = (
+        float(risk_override)
+        if risk_override is not None
+        else _numeric_experimental(selected_goal, "risk")
+        if selected_goal is not None
+        else 0.0
+    )
     normalized_path_cost = path_cost / max(path_cost_normalizer, 1.0)
 
     reward = coverage_rate_delta - path_cost_weight * normalized_path_cost - risk_weight * risk
