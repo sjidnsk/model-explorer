@@ -6,6 +6,8 @@ from math import hypot, isfinite, log1p
 from ..core.interfaces import GoalCandidate, ModelExplorerContract
 
 
+OBSERVATION_SCHEMA_VERSION = "policy-observation/v1.1"
+
 CANDIDATE_FEATURE_NAMES = (
     "cell_x",
     "cell_y",

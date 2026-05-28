@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -130,6 +131,130 @@ class ExperimentCliEntrypointTests(unittest.TestCase):
         error = json.loads(completed.stderr)
         self.assertEqual(error["status"], "error")
         self.assertIn("scenarios", error["message"])
+
+    def test_experiment_dry_run_training_matrix_does_not_import_torch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            scenario_path = root / "scenario.json"
+            manifest_path = root / "experiment.json"
+            scenario_path.write_text(json.dumps(minimal_contract()), encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "name": "dry-run-no-torch",
+                        "scenarios": [str(scenario_path)],
+                        "outputs": {"root": str(root / "out")},
+                        "train": {
+                            "seed": 17,
+                            "architectures": ["mlp_v1", "mlp_missing_v1", "candidate_attention_v1"],
+                            "hidden_size": 16,
+                            "epochs": 1,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            code = f"""
+import builtins
+import json
+import sys
+from pathlib import Path
+
+original_import = builtins.__import__
+
+def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == "torch" or name.startswith("torch."):
+        raise AssertionError("dry-run imported torch")
+    return original_import(name, globals, locals, fromlist, level)
+
+builtins.__import__ = guarded_import
+sys.path.insert(0, {str(SRC)!r})
+from model_explorer.policy.experiment import dry_run_experiment_manifest
+summary = dry_run_experiment_manifest(Path({str(manifest_path)!r}))
+print(json.dumps({{"status": summary["status"], "training_enabled": summary["training_enabled"]}}))
+"""
+            completed = subprocess.run(
+                [sys.executable, "-c", code],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout), {"status": "dry_run", "training_enabled": True})
+
+    def test_experiment_dry_run_training_matrix_reports_architecture_seed_outputs(self):
+        from model_explorer.policy.experiment import dry_run_experiment_manifest
+
+        architectures = ["mlp_v1", "mlp_missing_v1", "candidate_attention_v1"]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            scenario_path = root / "scenario.json"
+            manifest_path = root / "experiment.json"
+            scenario_path.write_text(json.dumps(minimal_contract()), encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "name": "dry-run-matrix-paths",
+                        "run_id": "run-001",
+                        "scenarios": [str(scenario_path)],
+                        "outputs": {"root": str(root / "out")},
+                        "train": {
+                            "seeds": [17, 19],
+                            "architectures": architectures,
+                            "hidden_size": 16,
+                            "epochs": 1,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = dry_run_experiment_manifest(manifest_path)
+
+        would_write = "\n".join(summary["would_write"])
+        self.assertEqual(summary["status"], "dry_run")
+        for architecture in architectures:
+            for seed in (17, 19):
+                self.assertIn(f"{architecture}", would_write)
+                self.assertIn(f"seed-{seed}", would_write)
+                self.assertIn(str(Path(architecture) / f"seed-{seed}" / "checkpoint.pt"), would_write)
+                self.assertIn(str(Path(architecture) / f"seed-{seed}" / "training-summary.json"), would_write)
+
+    def test_experiment_dry_run_matrix_explicit_paths_append_missing_dimensions(self):
+        from model_explorer.policy.experiment import dry_run_experiment_manifest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            scenario_path = root / "scenario.json"
+            manifest_path = root / "experiment.json"
+            scenario_path.write_text(json.dumps(minimal_contract()), encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "name": "dry-run-explicit-matrix-paths",
+                        "scenarios": [str(scenario_path)],
+                        "outputs": {"root": str(root / "out")},
+                        "train": {
+                            "seeds": [17, 19],
+                            "architectures": ["mlp_v1", "mlp_missing_v1"],
+                            "checkpoint": str(root / "checkpoints" / "policy-{seed}.pt"),
+                            "loss_log": str(root / "logs" / "losses-{architecture}.jsonl"),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = dry_run_experiment_manifest(manifest_path)
+
+        would_write = "\n".join(summary["would_write"])
+        self.assertIn(str(Path("mlp_v1") / "seed-17" / "policy-17.pt"), would_write)
+        self.assertIn(str(Path("mlp_missing_v1") / "seed-19" / "policy-19.pt"), would_write)
+        self.assertIn(str(Path("mlp_v1") / "seed-17" / "losses-mlp_v1.jsonl"), would_write)
+        self.assertIn(str(Path("mlp_missing_v1") / "seed-19" / "losses-mlp_missing_v1.jsonl"), would_write)
 
 
 class SyntheticBenchmarkGeneratorTests(unittest.TestCase):
@@ -373,7 +498,11 @@ class VerifyEntrypointTests(unittest.TestCase):
         self.assertEqual(summary["status"], "dry_run")
         self.assertEqual(
             [step["name"] for step in summary["steps"]],
-            ["unittest", "benchmark_smoke", "git_diff_check"],
+            ["unittest", "benchmark_smoke", "forbidden_import_check", "git_diff_check"],
+        )
+        self.assertEqual(
+            [step["kind"] for step in summary["steps"]],
+            ["subprocess", "python", "python_scan", "subprocess"],
         )
 
     def test_verify_supports_json_output_and_skip_benchmark_smoke(self):
@@ -394,8 +523,26 @@ class VerifyEntrypointTests(unittest.TestCase):
         self.assertEqual(stdout_summary, file_summary)
         self.assertEqual(
             [step["name"] for step in stdout_summary["steps"]],
-            ["unittest", "git_diff_check"],
+            ["unittest", "forbidden_import_check", "git_diff_check"],
         )
+        self.assertEqual(stdout_summary["steps"][1]["forbidden_patterns"], ["a_gcs_ws", "dev-platform-constraints"])
+
+    def test_verify_forbidden_import_check_reports_readable_failures(self):
+        from model_explorer.verification import _run_forbidden_import_check
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            src_dir = root / "src"
+            src_dir.mkdir()
+            bad_file = src_dir / "bad_import.py"
+            bad_file.write_text("import a_gcs_ws\n", encoding="utf-8")
+
+            result = _run_forbidden_import_check(root)
+
+        self.assertEqual(result["name"], "forbidden_import_check")
+        self.assertEqual(result["returncode"], 1)
+        self.assertIn("bad_import.py", result["violations"][0]["path"])
+        self.assertEqual(result["violations"][0]["pattern"], "a_gcs_ws")
 
     def test_verify_cli_returns_nonzero_when_verification_fails(self):
         from model_explorer.cli import main
@@ -411,6 +558,76 @@ class VerifyEntrypointTests(unittest.TestCase):
 
 
 class BenchmarkDocumentationTests(unittest.TestCase):
+    def test_pyproject_keeps_torch_optional_for_training_extra(self):
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+        default_dependencies = pyproject["project"].get("dependencies", [])
+        training_extra = pyproject["project"]["optional-dependencies"]["training"]
+
+        self.assertFalse(any(str(item).startswith("torch") for item in default_dependencies))
+        self.assertTrue(any(str(item).startswith("torch") for item in training_extra))
+
+    def test_ubuntu_readiness_doc_defines_linux_install_and_validation_boundary(self):
+        ubuntu_doc = (ROOT / "docs" / "ubuntu-readiness.md").read_text(encoding="utf-8")
+
+        for text in (
+            "Ubuntu 24.04",
+            "Python 3.12",
+            "python3.12 -m venv .venv",
+            "pip install -e .",
+            "pip install -e .[training]",
+            "PYTHONPATH=src python -m model_explorer verify",
+            "默认安装不强制安装 PyTorch",
+            "Windows 本机验证",
+            "Ubuntu 目标验证",
+        ):
+            self.assertIn(text, ubuntu_doc)
+
+    def test_progress_doc_marks_v1_2_release_candidate_and_has_no_stale_gaps(self):
+        progress_doc = (ROOT / "docs" / "network-architecture-v1.1-progress.md").read_text(encoding="utf-8")
+
+        self.assertIn("| Phase | Network Architecture v1.2 release candidate |", progress_doc)
+        self.assertIn("Current release-candidate properties:", progress_doc)
+        self.assertNotIn("Current gaps:", progress_doc)
+        for stale_gap in (
+            "Missing experimental fields are not exposed as tensor indicators",
+            "Architecture selection is not configurable in manifest",
+            "Candidate self-attention is not implemented",
+        ):
+            self.assertNotIn(stale_gap, progress_doc)
+        self.assertIn("Ubuntu 24.04 target environment has not been executed in this Windows session", progress_doc)
+        self.assertIn("Synthetic benchmark remains smoke/regression evidence only", progress_doc)
+
+    def test_release_readiness_checklist_covers_v1_2_gates(self):
+        checklist = (ROOT / "docs" / "network-architecture-v1.2-release-checklist.md").read_text(
+            encoding="utf-8"
+        )
+
+        for text in (
+            "Network Architecture v1.2 Release Readiness",
+            "default install does not require PyTorch",
+            "model-explorer[training]",
+            "verify JSON",
+            "train.architectures",
+            "observation_schema_version",
+            "forbidden_import_check",
+            "action mask safety",
+            "PYTHONPATH=src python -m model_explorer verify",
+            "$env:PYTHONPATH='src'; python -m model_explorer verify",
+        ):
+            self.assertIn(text, checklist)
+
+    def test_manifest_docs_define_architecture_matrix_precedence_and_paths(self):
+        manifest_doc = (ROOT / "docs" / "experiment-manifest.md").read_text(encoding="utf-8")
+
+        for text in (
+            "`train.architecture` and `train.architectures` are compatible",
+            "`train.architectures` takes precedence when present",
+            "`outputs.root/<name>/<run_id>/<architecture>/seed-<seed>/checkpoint.pt`",
+            "`train.checkpoint` and `train.loss_log` may use `{architecture}` and `{seed}`",
+        ):
+            self.assertIn(text, manifest_doc)
+
     def test_benchmark_and_manifest_docs_define_current_synthetic_scope(self):
         benchmark_doc = (ROOT / "docs" / "benchmark-readiness.md").read_text(encoding="utf-8")
         manifest_doc = (ROOT / "docs" / "experiment-manifest.md").read_text(encoding="utf-8")

@@ -1668,7 +1668,10 @@ class ExperimentManifestTests(unittest.TestCase):
         self.assertEqual(formal_payload["train"]["seeds"], [11, 13])
         architecture_payload = json.loads(architecture_smoke_manifest.read_text(encoding="utf-8"))
         self.assertEqual(architecture_payload["train"]["seed"], 17)
-        self.assertEqual(architecture_payload["train"]["architecture"], "candidate_attention_v1")
+        self.assertEqual(
+            architecture_payload["train"]["architectures"],
+            ["mlp_v1", "mlp_missing_v1", "candidate_attention_v1"],
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             temp_manifest_path = Path(tmpdir) / "experiment.json"

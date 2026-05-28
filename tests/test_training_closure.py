@@ -462,6 +462,11 @@ class TrainingClosureTests(unittest.TestCase):
         self.assertEqual(metadata.get("architecture"), "mlp_v1")
         self.assertEqual(metadata["candidate_feature_names"], checkpoint["candidate_feature_names"])
         self.assertEqual(metadata["global_feature_names"], checkpoint["global_feature_names"])
+        self.assertEqual(metadata["observation_schema_version"], "policy-observation/v1.1")
+        self.assertEqual(
+            metadata["candidate_missing_indicator_names"],
+            checkpoint["candidate_missing_indicator_names"],
+        )
         self.assertEqual(metadata["action_count"], 2)
         self.assertEqual(metadata["seed"], 23)
         self.assertEqual(metadata["sample_count"], 1)
@@ -653,6 +658,94 @@ class TrainingClosureTests(unittest.TestCase):
             "value_coverage",
         ):
             self.assertIn(metric_name, summary["training"]["baseline_evaluation"]["torch_policy"])
+
+    def test_experiment_train_block_supports_architecture_matrix_outputs(self):
+        from model_explorer.policy.experiment import run_experiment_manifest
+
+        architectures = ["mlp_v1", "mlp_missing_v1", "candidate_attention_v1"]
+        scenario_payload = minimal_contract(
+            goals=[
+                {
+                    "cell": [1, 1],
+                    "utility": 0.5,
+                    "reachable": True,
+                    "expected_coverage_rate_delta": 0.2,
+                    "risk": 0.1,
+                    "path_cost": 1.0,
+                },
+                {
+                    "cell": [2, 1],
+                    "utility": 0.4,
+                    "reachable": True,
+                    "expected_coverage_rate_delta": 0.1,
+                    "risk": 0.2,
+                    "path_cost": 2.0,
+                },
+            ],
+            observation_update={
+                "coverage_rate": 0.2,
+                "coverage_rate_delta": 0.1,
+                "value_coverage": 0.2,
+            },
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first_scenario_path = Path(tmpdir) / "scenario-a.json"
+            second_scenario_path = Path(tmpdir) / "scenario-b.json"
+            output_root = Path(tmpdir) / "out"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            first_scenario_path.write_text(json.dumps(scenario_payload), encoding="utf-8")
+            second_scenario_path.write_text(json.dumps(scenario_payload), encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "name": "architecture-matrix-smoke",
+                        "run_id": "run-001",
+                        "scenarios": [str(first_scenario_path), str(second_scenario_path)],
+                        "max_candidates": 2,
+                        "outputs": {"root": str(output_root)},
+                        "train": {
+                            "seed": 17,
+                            "architectures": architectures,
+                            "hidden_size": 16,
+                            "epochs": 1,
+                            "validation_fraction": 0.5,
+                            "evaluate_trained_policy": True,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_experiment_manifest(manifest_path)
+            report = (output_root / "architecture-matrix-smoke" / "run-001" / "report.md").read_text(
+                encoding="utf-8"
+            )
+            checkpoint_records = [
+                {
+                    "architecture": run["architecture"],
+                    "seed": run["seed"],
+                    "parts": Path(run["checkpoint"]).parts,
+                    "exists": Path(run["checkpoint"]).exists(),
+                    "baseline_deltas": run.get("baseline_deltas", {}),
+                }
+                for run in summary["training"]["runs"]
+            ]
+
+        training = summary["training"]
+        self.assertEqual(training["architectures"], architectures)
+        self.assertEqual(training["run_count"], 3)
+        self.assertEqual({run["architecture"] for run in training["runs"]}, set(architectures))
+        self.assertEqual(set(summary["architecture_deltas"]), set(architectures))
+        for record in checkpoint_records:
+            self.assertTrue(record["exists"])
+            self.assertIn(record["architecture"], record["parts"])
+            self.assertIn("seed-17", record["parts"])
+            self.assertEqual(record["seed"], 17)
+            self.assertIn("utility", record["baseline_deltas"])
+            self.assertIn("coverage_heuristic", record["baseline_deltas"])
+        self.assertIn("synthetic smoke / regression suite", report)
+        for architecture in architectures:
+            self.assertIn(architecture, report)
 
     def test_experiment_train_block_supports_multi_seed_outputs_and_summary(self):
         from model_explorer.policy.experiment import run_experiment_manifest

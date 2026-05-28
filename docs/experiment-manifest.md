@@ -14,6 +14,27 @@ It is intentionally file based so the runner does not import external projects.
 - `train.architecture`: optional policy network architecture. Defaults to
   `mlp_v1`; supported values are `mlp_v1`, `mlp_missing_v1`, and
   `candidate_attention_v1`.
+- `train.architectures`: optional architecture matrix. When present, the
+  runner trains every listed architecture for every configured seed and writes
+  separate checkpoints under architecture and seed-specific output directories.
+
+`train.architecture` and `train.architectures` are compatible with older
+single-architecture manifests. `train.architecture` keeps the previous default
+single-model behavior. `train.architectures` takes precedence when present and
+trains each listed architecture for every configured seed.
+
+With `outputs.root`, matrix checkpoints are derived as:
+
+```text
+`outputs.root/<name>/<run_id>/<architecture>/seed-<seed>/checkpoint.pt`
+```
+
+`train.checkpoint` and `train.loss_log` may use `{architecture}` and `{seed}`
+placeholders. For matrix or multi-seed runs, placeholders in parent directories
+are treated as output dimensions. If an explicit path does not place
+architecture or seed in parent directories, the runner appends architecture and
+seed directories to avoid overwriting checkpoints, loss logs, and sidecar
+summaries.
 
 ## Stable Report Sections
 
@@ -29,6 +50,9 @@ baseline sections. The current benchmark hardening fields add:
 - `Architecture Deltas` reports the trained architecture's `torch_policy`
   deltas against `utility` and `coverage_heuristic` when trained-policy
   evaluation is enabled.
+- Matrix training keeps per-run `architecture`, `seed`, `checkpoint`, and
+  baseline deltas in the JSON summary so reports can compare `mlp_v1`,
+  `mlp_missing_v1`, and `candidate_attention_v1`.
 
 The JSON summary exposes matching machine-readable keys:
 `policy_ranking`, `baseline_deltas`, `per_group_winners`, `failure_scenarios`,

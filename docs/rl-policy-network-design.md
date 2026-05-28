@@ -71,7 +71,8 @@ reachable hard filter -> policy probability rank -> deterministic tie-break
 
 ### 3.1 Observation Schema v1.1
 
-v1.1 observation 由四类张量组成：
+v1.1 observation 由四类张量组成，checkpoint metadata 中记录为
+`observation_schema_version = policy-observation/v1.1`：
 
 | 组件 | 名称 | 形状 | 规则 |
 |---|---|---:|---|

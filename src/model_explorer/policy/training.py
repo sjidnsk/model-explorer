@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .dataset import validate_rollout_dataset
+from .features import OBSERVATION_SCHEMA_VERSION
 from .rollout import RolloutEpisode, RolloutTransition
 
 
@@ -363,6 +364,7 @@ def _save_policy_checkpoint(
                 "version": 2,
                 "format_version": "model-explorer-masked-policy/v2",
                 "architecture": network.architecture_name,
+                "observation_schema_version": OBSERVATION_SCHEMA_VERSION,
                 "candidate_feature_names": tuple(candidate_feature_names),
                 "global_feature_names": tuple(global_feature_names),
                 "candidate_missing_indicator_names": tuple(candidate_missing_indicator_names),

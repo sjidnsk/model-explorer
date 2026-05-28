@@ -8,6 +8,9 @@ version = "0.1.0"
 description = "Exploration decision and closed-loop orchestration prototype for lunar path planning."
 requires-python = ">=3.12,<3.13"
 
+[project.optional-dependencies]
+training = ["torch>=2.0"]
+
 [project.scripts]
 model-explorer = "model_explorer.cli:main"
 

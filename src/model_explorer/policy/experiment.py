@@ -532,34 +532,42 @@ def _training_would_write_paths(manifest: ExperimentManifest, *, base_dir: Path)
         return ()
     config = manifest.train_config
     seeds = _training_seeds(config)
+    architectures = _training_architectures(config)
     multi_seed = len(seeds) > 1
+    multi_architecture = len(architectures) > 1
     paths: list[Path] = []
-    for seed in seeds:
-        checkpoint = _training_output_path(
-            config,
-            "checkpoint",
-            seed=seed,
-            base_dir=base_dir,
-            run_output_dir=manifest.run_output_dir,
-            default_name="checkpoint.pt",
-            multi_seed=multi_seed,
-            required=True,
-        )
-        loss_log = _training_output_path(
-            config,
-            "loss_log",
-            seed=seed,
-            base_dir=base_dir,
-            run_output_dir=manifest.run_output_dir,
-            default_name="losses.jsonl",
-            multi_seed=multi_seed,
-            required=False,
-        )
-        paths.append(checkpoint)
-        if loss_log is not None:
-            paths.append(loss_log)
-        paths.append(checkpoint.parent / "training-summary.json")
-        paths.append(checkpoint.parent / "validation-evaluation.json")
+    for architecture in architectures:
+        architecture_name = _normalize_training_architecture_name(architecture)
+        for seed in seeds:
+            checkpoint = _training_output_path(
+                config,
+                "checkpoint",
+                seed=seed,
+                architecture=architecture_name,
+                base_dir=base_dir,
+                run_output_dir=manifest.run_output_dir,
+                default_name="checkpoint.pt",
+                multi_seed=multi_seed,
+                multi_architecture=multi_architecture,
+                required=True,
+            )
+            loss_log = _training_output_path(
+                config,
+                "loss_log",
+                seed=seed,
+                architecture=architecture_name,
+                base_dir=base_dir,
+                run_output_dir=manifest.run_output_dir,
+                default_name="losses.jsonl",
+                multi_seed=multi_seed,
+                multi_architecture=multi_architecture,
+                required=False,
+            )
+            paths.append(checkpoint)
+            if loss_log is not None:
+                paths.append(loss_log)
+            paths.append(checkpoint.parent / "training-summary.json")
+            paths.append(checkpoint.parent / "validation-evaluation.json")
     return tuple(paths)
 
 
@@ -686,71 +694,80 @@ def _run_training(
     validation_episodes = validation_episodes or ()
     evaluation_scenarios = validation_scenarios or scenarios
     seeds = _training_seeds(config)
+    architectures = _training_architectures(config)
     multi_seed = len(seeds) > 1
+    multi_architecture = len(architectures) > 1
     runs: list[dict[str, Any]] = []
 
-    for seed in seeds:
-        checkpoint = _training_output_path(
-            config,
-            "checkpoint",
-            seed=seed,
-            base_dir=base_dir,
-            run_output_dir=run_output_dir,
-            default_name="checkpoint.pt",
-            multi_seed=multi_seed,
-            required=True,
-        )
-        loss_log = _training_output_path(
-            config,
-            "loss_log",
-            seed=seed,
-            base_dir=base_dir,
-            run_output_dir=run_output_dir,
-            default_name="losses.jsonl",
-            multi_seed=multi_seed,
-            required=False,
-        )
-        _ensure_parent_dir(checkpoint)
-        result = train_policy_on_episodes(
-            train_episodes,
-            checkpoint_path=checkpoint,
-            seed=seed,
-            hidden_size=int(config.get("hidden_size", 64)),
-            learning_rate=float(config.get("learning_rate", 1.0e-3)),
-            epochs=int(config.get("epochs", 1)),
-            return_mode=str(config.get("return_mode", "reward_as_return")),
-            discount_factor=float(config.get("discount_factor", 0.99)),
-            architecture=config.get("architecture"),
-        )
-        if loss_log is not None:
-            _ensure_parent_dir(loss_log)
-            loss_records = result.get("epoch_losses", [])
-            if not isinstance(loss_records, list) or not loss_records:
-                loss_records = [result]
-            loss_log.write_text(
-                "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in loss_records),
-                encoding="utf-8",
+    for architecture in architectures:
+        architecture_name = _normalize_training_architecture_name(architecture)
+        for seed in seeds:
+            checkpoint = _training_output_path(
+                config,
+                "checkpoint",
+                seed=seed,
+                architecture=architecture_name,
+                base_dir=base_dir,
+                run_output_dir=run_output_dir,
+                default_name="checkpoint.pt",
+                multi_seed=multi_seed,
+                multi_architecture=multi_architecture,
+                required=True,
             )
-        result["checkpoint"] = str(checkpoint)
-        if loss_log is not None:
-            result["loss_log"] = str(loss_log)
-        result["train_episode_count"] = len(train_episodes)
-        result["validation_episode_count"] = len(validation_episodes)
-        if evaluation_scenarios:
-            trained_policy = load_policy_checkpoint(checkpoint)
-            validation_evaluation = evaluate_policy_baseline_scenarios(
-                evaluation_scenarios,
-                torch_policy=trained_policy,
-                planning_adapter=planner,
+            loss_log = _training_output_path(
+                config,
+                "loss_log",
+                seed=seed,
+                architecture=architecture_name,
+                base_dir=base_dir,
+                run_output_dir=run_output_dir,
+                default_name="losses.jsonl",
+                multi_seed=multi_seed,
+                multi_architecture=multi_architecture,
+                required=False,
             )
-            result["validation_evaluation"] = validation_evaluation
-            validation_output = checkpoint.parent / "validation-evaluation.json"
-            _write_json(validation_output, validation_evaluation)
-            result["validation_evaluation_output"] = str(validation_output)
-        training_summary_output = checkpoint.parent / "training-summary.json"
-        _write_json(training_summary_output, result)
-        result["training_summary_output"] = str(training_summary_output)
-        runs.append(result)
+            _ensure_parent_dir(checkpoint)
+            result = train_policy_on_episodes(
+                train_episodes,
+                checkpoint_path=checkpoint,
+                seed=seed,
+                hidden_size=int(config.get("hidden_size", 64)),
+                learning_rate=float(config.get("learning_rate", 1.0e-3)),
+                epochs=int(config.get("epochs", 1)),
+                return_mode=str(config.get("return_mode", "reward_as_return")),
+                discount_factor=float(config.get("discount_factor", 0.99)),
+                architecture=architecture,
+            )
+            if loss_log is not None:
+                _ensure_parent_dir(loss_log)
+                loss_records = result.get("epoch_losses", [])
+                if not isinstance(loss_records, list) or not loss_records:
+                    loss_records = [result]
+                loss_log.write_text(
+                    "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in loss_records),
+                    encoding="utf-8",
+                )
+            result["checkpoint"] = str(checkpoint)
+            if loss_log is not None:
+                result["loss_log"] = str(loss_log)
+            result["train_episode_count"] = len(train_episodes)
+            result["validation_episode_count"] = len(validation_episodes)
+            if evaluation_scenarios:
+                trained_policy = load_policy_checkpoint(checkpoint)
+                validation_evaluation = evaluate_policy_baseline_scenarios(
+                    evaluation_scenarios,
+                    torch_policy=trained_policy,
+                    planning_adapter=planner,
+                )
+                result["validation_evaluation"] = validation_evaluation
+                result["baseline_deltas"] = _baseline_deltas(validation_evaluation).get("torch_policy", {})
+                validation_output = checkpoint.parent / "validation-evaluation.json"
+                _write_json(validation_output, validation_evaluation)
+                result["validation_evaluation_output"] = str(validation_output)
+            training_summary_output = checkpoint.parent / "training-summary.json"
+            _write_json(training_summary_output, result)
+            result["training_summary_output"] = str(training_summary_output)
+            runs.append(result)
 
     best_run = _select_best_training_run(
         runs,
@@ -765,6 +782,8 @@ def _run_training(
     selected["last_checkpoint"] = runs[-1]["checkpoint"]
     selected["last_checkpoint_path"] = runs[-1]["checkpoint"]
     selected["seeds"] = list(seeds)
+    selected["architectures"] = [_normalize_training_architecture_name(architecture) for architecture in architectures]
+    selected["architecture_count"] = len(architectures)
     selected["run_count"] = len(runs)
     selected["runs"] = runs
     selected["multi_seed_summary"] = _multi_seed_evaluation_summary(runs)
@@ -830,30 +849,54 @@ def _training_seeds(config: dict[str, Any]) -> tuple[int, ...]:
     return tuple(int(seed) for seed in raw_seeds)
 
 
+def _training_architectures(config: dict[str, Any]) -> tuple[str | None, ...]:
+    if "architectures" not in config:
+        return (config.get("architecture"),)
+    raw_architectures = config["architectures"]
+    if not isinstance(raw_architectures, list) or not raw_architectures:
+        raise ValueError("train.architectures must be a non-empty list")
+    return tuple(str(architecture) for architecture in raw_architectures)
+
+
+def _normalize_training_architecture_name(value: str | None) -> str:
+    return "mlp_v1" if value is None or str(value).strip() == "" else str(value)
+
+
 def _training_output_path(
     config: dict[str, Any],
     key: str,
     *,
     seed: int,
+    architecture: str,
     base_dir: Path,
     run_output_dir: Path | None,
     default_name: str,
     multi_seed: bool,
+    multi_architecture: bool,
     required: bool,
 ) -> Path | None:
     value = config.get(key)
     if value is not None:
         text = str(value)
-        formatted = text.format(seed=seed)
+        formatted = text.format(seed=seed, architecture=architecture)
         path = _resolve_path(base_dir, formatted)
-        if multi_seed and formatted == text and "{seed}" not in text:
-            path = path.parent / f"seed-{seed}" / path.name
+        parent = path.parent
+        if multi_architecture and not _path_parent_contains_placeholder(text, "{architecture}"):
+            parent = parent / architecture
+        if (multi_seed or multi_architecture) and not _path_parent_contains_placeholder(text, "{seed}"):
+            parent = parent / f"seed-{seed}"
+        path = parent / path.name
         return path
     if run_output_dir is not None:
-        return run_output_dir / f"seed-{seed}" / default_name
+        parent = run_output_dir / architecture if multi_architecture else run_output_dir
+        return parent / f"seed-{seed}" / default_name
     if required:
         raise ValueError(f"train.{key} is required when outputs.root is not configured")
     return None
+
+
+def _path_parent_contains_placeholder(path_text: str, placeholder: str) -> bool:
+    return any(placeholder in part for part in Path(path_text).parent.parts)
 
 
 def _select_best_training_run(runs: list[dict[str, Any]], *, policy: str, metric: str) -> dict[str, Any]:
@@ -1102,6 +1145,19 @@ def _architecture_deltas(summary: dict[str, Any], baseline_deltas: dict[str, Any
     training = summary.get("training")
     if not isinstance(training, dict):
         return {}
+    runs = training.get("runs")
+    if isinstance(runs, list):
+        per_architecture: dict[str, Any] = {}
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            architecture = run.get("architecture")
+            deltas = run.get("baseline_deltas")
+            if not architecture or not isinstance(deltas, dict) or not deltas:
+                continue
+            per_architecture.setdefault(str(architecture), deltas)
+        if per_architecture:
+            return per_architecture
     architecture = training.get("architecture")
     torch_deltas = baseline_deltas.get("torch_policy") if isinstance(baseline_deltas, dict) else None
     if not architecture or not isinstance(torch_deltas, dict):
@@ -1204,6 +1260,7 @@ def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str
         f"- planner: {summary['planner']}",
         f"- scenario_count: {summary['scenario_count']}",
         f"- transition_count: {summary['transition_count']}",
+        "- benchmark_scope: synthetic smoke / regression suite; not a real-world generalization benchmark",
         "",
         "## Rollout Metrics",
         "",
@@ -1496,8 +1553,8 @@ def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str
                     "",
                     "## Per-Seed Metrics",
                     "",
-                    "| seed | checkpoint | final_coverage_rate | total_path_cost | loss | policy_loss | value_loss | entropy |",
-                    "|---:|---|---:|---:|---:|---:|---:|---:|",
+                    "| architecture | seed | checkpoint | final_coverage_rate | total_path_cost | loss | policy_loss | value_loss | entropy |",
+                    "|---|---:|---|---:|---:|---:|---:|---:|---:|",
                 ]
             )
             for run in runs:
@@ -1511,6 +1568,7 @@ def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str
                     "| "
                     + " | ".join(
                         (
+                            str(run.get("architecture", "")),
                             str(run.get("seed", "")),
                             str(run.get("checkpoint", "")),
                             str(torch_metrics.get("final_coverage_rate", 0.0)),

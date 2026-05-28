@@ -24,7 +24,7 @@
   },
   "train": {
     "seed": 17,
-    "architecture": "candidate_attention_v1",
+    "architectures": ["mlp_v1", "mlp_missing_v1", "candidate_attention_v1"],
     "hidden_size": 16,
     "learning_rate": 0.001,
     "epochs": 1,

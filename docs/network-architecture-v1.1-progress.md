@@ -4,7 +4,7 @@
 
 | Field | Value |
 |---|---|
-| Phase | Network Architecture v1.1 verified |
+| Phase | Network Architecture v1.2 release candidate |
 | Current baseline | `mlp_v1` masked candidate policy |
 | Scope | Candidate-list policy over `ModelExplorerContract.top_goals` |
 | Out of scope | Full-map action space, external project imports, contract v1 breaking changes |
@@ -23,6 +23,17 @@
 | NA-6 | Architecture Benchmark Matrix | Completed | Training JSON/Markdown report include architecture; `architecture_deltas` records trained architecture deltas against utility and coverage heuristic; `python -m unittest discover -s tests -v` passed 100 tests | Run final verification |
 | NA-7 | Final Verification and Readiness Review | Completed | Final verification passed: unittest 100 tests, `python -m model_explorer verify`, `git diff --check`, and forbidden import `rg` check | Keep v1.1 as candidate-list architecture baseline for future experiments |
 
+## Ubuntu Readiness / Network Architecture v1.2 Progress
+
+| ID | Task | Status | Evidence | Next Action |
+|---|---|---|---|---|
+| UR-0 | Ubuntu installation and validation documentation | Completed | Added `docs/ubuntu-readiness.md` with Ubuntu 24.04, Python 3.12, Linux shell verify commands, default install, `model-explorer[training]`, and Windows-vs-Ubuntu validation boundary; `python -m unittest discover -s tests -v` passed 110 tests | Validate commands in target Ubuntu environment when available |
+| UR-1 | Dependency extras | Completed | `pyproject.toml` defines `project.optional-dependencies.training` with PyTorch while default dependencies do not require torch; docs and tests cover optional training install; dry-run matrix test guards against importing torch; `python -m unittest discover -s tests -v` passed 110 tests | Keep non-training paths importable without PyTorch |
+| UR-2 | Verify cross-platform hardening | Completed | `model_explorer verify --dry-run` now reports `unittest`, `benchmark_smoke`, `forbidden_import_check`, and `git_diff_check` with machine-readable `kind`; forbidden import check is a Python scan over `src`, `tests`, and `scripts`; `python -m unittest discover -s tests -v` passed 110 tests | Run final verify and external `rg` gate before completion |
+| AR-8 | Multi-architecture benchmark manifest | Completed | `architecture-smoke-experiment.json` uses fixed seed 17 and `train.architectures` for `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1`; experiment runner writes per-architecture/per-seed checkpoints and per-run baseline deltas; reports mark the suite as synthetic smoke / regression; `python -m unittest discover -s tests -v` passed 110 tests | Validate matrix manifest in Ubuntu with `model-explorer[training]` installed |
+| AR-9 | Reproducibility metadata audit | Completed | Checkpoint metadata records architecture, seed, hidden size, candidate/global/missing feature names, and `observation_schema_version = policy-observation/v1.1`; old checkpoint fallback still loads as `mlp_v1`; `python -m unittest discover -s tests -v` passed 110 tests | Do not require bitwise-identical floating point training results |
+| UR-3 | Linux CI/script preparation | Completed | `docs/ubuntu-readiness.md` provides POSIX shell install and validation commands; `model_explorer verify` uses Python-native forbidden import scanning instead of PowerShell-only commands; `python -m unittest discover -s tests -v` passed 110 tests | Re-run final gates before handoff |
+
 ## Current Architecture Snapshot
 
 ```text
@@ -34,20 +45,16 @@ contract JSON
 -> PPO loss / TorchPolicyScorer
 ```
 
-Current properties:
+Current release-candidate properties:
 
 - Candidate action space is limited to `top_goals`.
 - `reachable=false` and padding actions are masked.
-- Missing experimental fields use compatibility fallback values.
-- PPO training, checkpoint save/load, and report integration exist.
-
-Current gaps:
-
-- Missing experimental fields are not exposed as tensor indicators.
-- Global and cost feature scales are not fully normalized.
-- Architecture selection is not configurable in manifest.
-- Candidate self-attention is not implemented.
-- Synthetic benchmark supports regression, not real-world generalization claims.
+- Missing experimental fields use compatibility fallback values plus explicit missing indicators.
+- Candidate and global features use bounded, finite normalization rules.
+- `train.architecture` supports single-model compatibility; `train.architectures` supports architecture matrix runs.
+- `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1` are selectable, trainable, checkpointable, and mask-safe.
+- PPO training, checkpoint save/load, report integration, and architecture deltas exist.
+- Ubuntu Readiness documents default install, `model-explorer[training]`, Linux shell verification, and Windows-vs-Ubuntu validation boundaries.
 
 ## Decision Log
 
@@ -87,6 +94,16 @@ git diff --check
 Result: returned 0; Windows line-ending warnings only
 rg forbidden import check
 Result: no forbidden import matches in src, tests, or scripts
+
+UR/AR v1.2 Ubuntu readiness and architecture matrix
+python -m unittest discover -s tests -v
+Result: passed 110 tests
+$env:PYTHONPATH='src'; python -m model_explorer verify
+Result: passed; unittest, benchmark_smoke, forbidden_import_check, and git_diff_check returned 0
+git diff --check
+Result: returned 0; Windows line-ending warnings only
+rg forbidden import check
+Result: no forbidden import matches in src, tests, or scripts
 ```
 
 ## Risk Register
@@ -94,6 +111,8 @@ Result: no forbidden import matches in src, tests, or scripts
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Synthetic benchmark overfitting | Network changes may look better without real-world value | Treat synthetic results as smoke/regression only |
+| Synthetic benchmark remains smoke/regression evidence only | Architecture deltas can be misread as real-world generalization | Reports and release checklist explicitly avoid real-world generalization claims |
+| Ubuntu 24.04 target environment has not been executed in this Windows session | Linux install commands are documented but not proven in a target VM/container here | Run the documented Ubuntu command block in target CI or an Ubuntu 24.04 environment before external release |
 | Feature schema churn | Checkpoints and rollout logs may become hard to load | Version observation schema and preserve loader fallback |
 | Mask regression | Policy could score unreachable or padding actions | Add tests for unreachable and padding masks for every architecture |
 | Config sprawl | Too many knobs make experiments hard to compare | Keep v1.1 architecture options to `mlp_v1`, `mlp_missing_v1`, `candidate_attention_v1` |
