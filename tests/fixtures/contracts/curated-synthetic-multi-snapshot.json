@@ -1,0 +1,95 @@
+{
+  "snapshots": [
+    {
+      "schema_version": "model-explorer-contract/v1",
+      "grid": {
+        "width": 7,
+        "height": 6,
+        "resolution": 0.5,
+        "frame_id": "moon_local",
+        "origin": [0.0, 0.0],
+        "layers": ["confidence", "cost", "risk"]
+      },
+      "constraints": {
+        "violation_count": 1,
+        "passable_ratio": 0.76,
+        "reason_counts": {"obstacle": 1, "slope": 0}
+      },
+      "top_goals": [
+        {
+          "cell": [5, 2],
+          "utility": 0.3,
+          "reachable": true,
+          "expected_coverage_rate_delta": 0.24,
+          "risk": 0.2,
+          "path_cost": 4.0
+        },
+        {
+          "cell": [2, 4],
+          "utility": 0.9,
+          "reachable": false,
+          "expected_coverage_rate_delta": 0.5,
+          "risk": 0.7,
+          "path_cost": 9.5
+        }
+      ],
+      "top_sequences": [
+        {
+          "cells": [[5, 2]],
+          "utility": 0.3,
+          "coverage_area": 2.0
+        }
+      ],
+      "observation_update": {
+        "coverage_rate": 0.24,
+        "coverage_rate_delta": 0.24,
+        "visible_cell_count": 14,
+        "updated_cell_count": 11
+      }
+    },
+    {
+      "schema_version": "model-explorer-contract/v1",
+      "grid": {
+        "width": 7,
+        "height": 6,
+        "resolution": 0.5,
+        "frame_id": "moon_local",
+        "origin": [0.0, 0.0],
+        "layers": ["confidence", "cost", "risk"]
+      },
+      "constraints": {
+        "violation_count": 0,
+        "passable_ratio": 0.82,
+        "reason_counts": {"obstacle": 0, "slope": 0}
+      },
+      "top_goals": [
+        {
+          "cell": [6, 4],
+          "utility": 0.34,
+          "reachable": true,
+          "expected_coverage_rate_delta": 0.18,
+          "risk": 0.15,
+          "path_cost": 3.2
+        },
+        {
+          "cell": [1, 5],
+          "utility": 0.31,
+          "reachable": true
+        }
+      ],
+      "top_sequences": [
+        {
+          "cells": [[6, 4]],
+          "utility": 0.34,
+          "coverage_area": 1.5
+        }
+      ],
+      "observation_update": {
+        "coverage_rate": 0.42,
+        "coverage_rate_delta": 0.18,
+        "visible_cell_count": 10,
+        "updated_cell_count": 8
+      }
+    }
+  ]
+}

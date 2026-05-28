@@ -246,11 +246,27 @@ def run_experiment_manifest(path: str | Path) -> dict[str, Any]:
             )
             summary["training"]["baseline_evaluation"] = _comparison_from_evaluation(evaluation)
             summary["baseline_deltas"] = _baseline_deltas(_comparison_from_evaluation(evaluation))
+    summary.update(_daily_report_summary(summary, evaluation))
     _write_json(manifest.evaluation_output, evaluation)
     if manifest.report_output is not None:
         _ensure_parent_dir(manifest.report_output)
         manifest.report_output.write_text(_markdown_report(summary, evaluation), encoding="utf-8")
         summary["report_output"] = str(manifest.report_output)
+    return summary
+
+
+def validate_experiment_manifest(path: str | Path) -> dict[str, Any]:
+    manifest = load_experiment_manifest(path)
+    split_scenarios = _load_split_scenarios(manifest)
+    return _manifest_inspection_summary(manifest, split_scenarios=split_scenarios, status="valid")
+
+
+def dry_run_experiment_manifest(path: str | Path) -> dict[str, Any]:
+    manifest = load_experiment_manifest(path)
+    split_scenarios = _load_split_scenarios(manifest)
+    summary = _manifest_inspection_summary(manifest, split_scenarios=split_scenarios, status="dry_run")
+    summary["would_write"] = _would_write_paths(manifest, base_dir=Path(path).parent)
+    summary["training_enabled"] = manifest.train_config is not None
     return summary
 
 
@@ -453,6 +469,98 @@ def _all_split_scenarios(split_scenarios: dict[str, tuple[Scenario, ...]]) -> tu
 
 def _all_split_episodes(split_episodes: dict[str, tuple[RolloutEpisode, ...]]) -> tuple[RolloutEpisode, ...]:
     return tuple(episode for episodes in split_episodes.values() for episode in episodes)
+
+
+def _manifest_inspection_summary(
+    manifest: ExperimentManifest,
+    *,
+    split_scenarios: dict[str, tuple[Scenario, ...]],
+    status: str,
+) -> dict[str, Any]:
+    scenarios = _all_split_scenarios(split_scenarios)
+    return {
+        "status": status,
+        "schema_version": manifest.schema_version,
+        "experiment_name": manifest.experiment_name,
+        "run_id": manifest.run_id,
+        "scenario_count": len(scenarios),
+        "group_count": len(manifest.scenario_groups),
+        "groups": [
+            {"name": group.name, "scenario_count": len(group.scenarios)}
+            for group in manifest.scenario_groups
+        ],
+        "splits": {
+            split_name: {
+                "scenario_count": len(split.scenarios),
+                "groups": {
+                    group.name: len(group.scenarios)
+                    for group in split.scenario_groups
+                },
+            }
+            for split_name, split in manifest.splits.items()
+        },
+        "planner": str(manifest.planner_config.get("backend", "contract_cost")),
+        "outputs": {
+            "rollouts": str(manifest.rollout_output),
+            "evaluation": str(manifest.evaluation_output),
+            "report": None if manifest.report_output is None else str(manifest.report_output),
+            "dataset_summary": None
+            if manifest.dataset_summary_output is None
+            else str(manifest.dataset_summary_output),
+            "resolved_manifest": str(manifest.resolved_manifest_output),
+        },
+    }
+
+
+def _would_write_paths(manifest: ExperimentManifest, *, base_dir: Path) -> list[str]:
+    paths = [
+        str(manifest.rollout_output),
+        str(manifest.evaluation_output),
+        str(manifest.resolved_manifest_output),
+    ]
+    if manifest.report_output is not None:
+        paths.append(str(manifest.report_output))
+    if manifest.dataset_summary_output is not None:
+        paths.append(str(manifest.dataset_summary_output))
+    if manifest.train_config is not None:
+        paths.extend(str(path) for path in _training_would_write_paths(manifest, base_dir=base_dir))
+    return paths
+
+
+def _training_would_write_paths(manifest: ExperimentManifest, *, base_dir: Path) -> tuple[Path, ...]:
+    if manifest.train_config is None:
+        return ()
+    config = manifest.train_config
+    seeds = _training_seeds(config)
+    multi_seed = len(seeds) > 1
+    paths: list[Path] = []
+    for seed in seeds:
+        checkpoint = _training_output_path(
+            config,
+            "checkpoint",
+            seed=seed,
+            base_dir=base_dir,
+            run_output_dir=manifest.run_output_dir,
+            default_name="checkpoint.pt",
+            multi_seed=multi_seed,
+            required=True,
+        )
+        loss_log = _training_output_path(
+            config,
+            "loss_log",
+            seed=seed,
+            base_dir=base_dir,
+            run_output_dir=manifest.run_output_dir,
+            default_name="losses.jsonl",
+            multi_seed=multi_seed,
+            required=False,
+        )
+        paths.append(checkpoint)
+        if loss_log is not None:
+            paths.append(loss_log)
+        paths.append(checkpoint.parent / "training-summary.json")
+        paths.append(checkpoint.parent / "validation-evaluation.json")
+    return tuple(paths)
 
 
 def _evaluation_split_name(manifest: ExperimentManifest) -> str:
@@ -976,6 +1084,103 @@ def _aggregate_rollout_metrics(episodes: tuple[RolloutEpisode, ...]) -> dict[str
     }
 
 
+def _daily_report_summary(summary: dict[str, Any], evaluation: dict[str, Any]) -> dict[str, Any]:
+    comparison = _comparison_from_evaluation(evaluation)
+    baseline_deltas = _baseline_deltas(comparison)
+    return {
+        "policy_ranking": _policy_ranking(comparison),
+        "baseline_deltas": baseline_deltas,
+        "per_group_winners": _per_group_winners(evaluation),
+        "failure_scenarios": _failure_scenarios(evaluation),
+        "gate_summary": _gate_summary(summary.get("dataset_summary")),
+    }
+
+
+def _policy_ranking(evaluation_comparison: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for policy_name, metrics in evaluation_comparison.items():
+        if not isinstance(metrics, dict):
+            continue
+        rows.append(
+            {
+                "policy": str(policy_name),
+                "final_coverage_rate": _metric_value(metrics, "final_coverage_rate"),
+                "cumulative_coverage_rate_delta": _metric_value(metrics, "cumulative_coverage_rate_delta"),
+                "total_path_cost": _metric_value(metrics, "total_path_cost"),
+                "average_risk": _metric_value(metrics, "average_risk"),
+                "failure_count": int(_metric_value(metrics, "failure_count")),
+                "value_coverage": _metric_value(metrics, "value_coverage"),
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            -float(item["final_coverage_rate"]),
+            int(item["failure_count"]),
+            float(item["total_path_cost"]),
+            str(item["policy"]),
+        )
+    )
+    for index, item in enumerate(rows, start=1):
+        item["rank"] = index
+    return rows
+
+
+def _per_group_winners(evaluation: dict[str, Any]) -> dict[str, Any]:
+    groups = evaluation.get("groups") if isinstance(evaluation, dict) else None
+    if not isinstance(groups, dict):
+        return {}
+    winners: dict[str, Any] = {}
+    for group_name, group_evaluation in groups.items():
+        if not isinstance(group_evaluation, dict):
+            continue
+        ranking = _policy_ranking(_comparison_from_evaluation(group_evaluation))
+        winners[str(group_name)] = None if not ranking else ranking[0]
+    return winners
+
+
+def _failure_scenarios(evaluation: dict[str, Any]) -> list[dict[str, Any]]:
+    per_scenario = evaluation.get("per_scenario") if isinstance(evaluation, dict) else None
+    if not isinstance(per_scenario, list):
+        return []
+    failures: list[dict[str, Any]] = []
+    for item in per_scenario:
+        if not isinstance(item, dict):
+            continue
+        metrics = item.get("metrics")
+        if not isinstance(metrics, dict):
+            continue
+        failed_policies: list[str] = []
+        for policy_name, policy_metrics in metrics.items():
+            if not isinstance(policy_metrics, dict):
+                continue
+            selected_cells = policy_metrics.get("selected_cells", [])
+            has_no_selection = isinstance(selected_cells, list) and any(cell is None for cell in selected_cells)
+            if _metric_value(policy_metrics, "failure_count") > 0 or has_no_selection:
+                failed_policies.append(str(policy_name))
+        if failed_policies:
+            failures.append({"path": str(item.get("path", "")), "policies": failed_policies})
+    return failures
+
+
+def _gate_summary(dataset_summary: Any) -> dict[str, Any]:
+    if not isinstance(dataset_summary, dict):
+        return {"status": "not_configured", "warnings": [], "errors": [], "violation_count": 0}
+    validation_gates = dataset_summary.get("validation_gates")
+    violations = []
+    status = "not_configured"
+    if isinstance(validation_gates, dict):
+        status = str(validation_gates.get("status", "unknown"))
+        raw_violations = validation_gates.get("violations", [])
+        violations = raw_violations if isinstance(raw_violations, list) else []
+    return {
+        "status": status,
+        "warnings": list(dataset_summary.get("warnings", [])),
+        "errors": list(dataset_summary.get("errors", [])),
+        "violation_count": len(violations),
+        "violations": violations,
+    }
+
+
 def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str:
     metrics = summary["rollout_metrics"]
     evaluation_comparison = _comparison_from_evaluation(evaluation)
@@ -1070,6 +1275,106 @@ def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str
                     )
                     + " |"
                 )
+
+    policy_ranking = summary.get("policy_ranking", [])
+    lines.extend(
+        [
+            "",
+            "## Policy Ranking",
+            "",
+            "| rank | policy | final_coverage_rate | failures | total_path_cost | value_coverage |",
+            "|---:|---|---:|---:|---:|---:|",
+        ]
+    )
+    if isinstance(policy_ranking, list) and policy_ranking:
+        for row in policy_ranking:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                "| "
+                + " | ".join(
+                    (
+                        str(row.get("rank", "")),
+                        str(row.get("policy", "")),
+                        str(row.get("final_coverage_rate", 0.0)),
+                        str(row.get("failure_count", 0)),
+                        str(row.get("total_path_cost", 0.0)),
+                        str(row.get("value_coverage", 0.0)),
+                    )
+                )
+                + " |"
+            )
+
+    lines.extend(
+        [
+            "",
+            "## Torch Policy Deltas",
+            "",
+            "| baseline | metric | delta |",
+            "|---|---|---:|",
+        ]
+    )
+    torch_deltas_for_section = summary.get("baseline_deltas", {})
+    torch_deltas_for_section = (
+        torch_deltas_for_section.get("torch_policy")
+        if isinstance(torch_deltas_for_section, dict)
+        else None
+    )
+    if isinstance(torch_deltas_for_section, dict) and torch_deltas_for_section:
+        for baseline_name, metrics in torch_deltas_for_section.items():
+            if not isinstance(metrics, dict):
+                continue
+            for metric, delta in metrics.items():
+                lines.append(f"| {baseline_name} | {metric} | {delta} |")
+    else:
+        lines.append("| none | torch_policy unavailable | 0.0 |")
+
+    per_group_winners = summary.get("per_group_winners", {})
+    lines.extend(
+        [
+            "",
+            "## Per-Group Winners",
+            "",
+            "| group | winner | final_coverage_rate | failures |",
+            "|---|---|---:|---:|",
+        ]
+    )
+    if isinstance(per_group_winners, dict) and per_group_winners:
+        for group_name, winner in per_group_winners.items():
+            if isinstance(winner, dict):
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        (
+                            str(group_name),
+                            str(winner.get("policy", "")),
+                            str(winner.get("final_coverage_rate", 0.0)),
+                            str(winner.get("failure_count", 0)),
+                        )
+                    )
+                    + " |"
+                )
+            else:
+                lines.append(f"| {group_name} | none | 0.0 | 0 |")
+
+    failure_scenarios = summary.get("failure_scenarios", [])
+    lines.extend(["", "## Failure Scenarios", "", "| scenario | policies |", "|---|---|"])
+    if isinstance(failure_scenarios, list) and failure_scenarios:
+        for item in failure_scenarios:
+            if not isinstance(item, dict):
+                continue
+            policies = item.get("policies", [])
+            policy_text = ", ".join(str(policy) for policy in policies) if isinstance(policies, list) else ""
+            lines.append(f"| {item.get('path', '')} | {policy_text} |")
+    else:
+        lines.append("| none | none |")
+
+    gate_summary = summary.get("gate_summary", {})
+    lines.extend(["", "## Gate Summary", ""])
+    if isinstance(gate_summary, dict):
+        lines.append(f"- status: {gate_summary.get('status', 'unknown')}")
+        lines.append(f"- warning_count: {len(gate_summary.get('warnings', []))}")
+        lines.append(f"- violation_count: {gate_summary.get('violation_count', 0)}")
 
     if "training" in summary:
         training = summary["training"]

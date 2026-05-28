@@ -1,0 +1,62 @@
+{
+  "schema_version": "model-explorer-contract/v1",
+  "grid": {
+    "width": 6,
+    "height": 5,
+    "resolution": 0.5,
+    "frame_id": "moon_local",
+    "origin": [0.0, 0.0],
+    "layers": ["confidence", "cost", "risk"]
+  },
+  "constraints": {
+    "violation_count": 0,
+    "passable_ratio": 0.92,
+    "reason_counts": {"obstacle": 0, "slope": 0}
+  },
+  "top_goals": [
+    {
+      "cell": [4, 2],
+      "utility": 0.45,
+      "reachable": true,
+      "expected_coverage_rate_delta": 0.32,
+      "information_gain": 0.4,
+      "confidence_gain": 0.2,
+      "value": 0.3,
+      "risk": 0.1,
+      "path_cost": 2.0,
+      "energy_cost": 1.0
+    },
+    {
+      "cell": [1, 1],
+      "utility": 0.9,
+      "reachable": false,
+      "expected_coverage_rate_delta": 0.8,
+      "risk": 0.6,
+      "path_cost": 8.0
+    }
+  ],
+  "top_sequences": [
+    {
+      "cells": [[4, 2]],
+      "utility": 0.45,
+      "coverage_area": 3.0,
+      "expected_coverage_rate_delta": 0.32
+    }
+  ],
+  "observation_update": {
+    "coverage_rate": 0.32,
+    "coverage_rate_delta": 0.32,
+    "visible_cell_count": 12,
+    "updated_cell_count": 10,
+    "value_coverage": 0.3
+  },
+  "experimental_fields": [
+    "expected_coverage_rate_delta",
+    "information_gain",
+    "confidence_gain",
+    "value",
+    "risk",
+    "path_cost",
+    "energy_cost"
+  ]
+}
