@@ -5,6 +5,7 @@
 | Field | Value |
 |---|---|
 | Phase | Network Architecture v1.3 network architecture experiments |
+| Current stage | v1 quasi-real stability evaluation |
 | Current baseline | `mlp_v1` masked candidate policy |
 | Scope | Candidate-list policy over `ModelExplorerContract.top_goals` |
 | Out of scope | Full-map action space, external project imports, contract v1 breaking changes |
@@ -42,6 +43,39 @@
 | NA-9 | Candidate Attention Mask Invariance | Completed | Regression test mutates unreachable and padding candidate tensors and reorders candidate rows; valid action logits/probabilities remain invariant up to the same permutation; masked candidates stay probability zero; `python -m unittest discover -s tests -v` passed 112 tests | Run final verify |
 | NA-10 | Architecture Diagnostics | Completed | Training JSON summary and Markdown report include `architecture_diagnostics` with architecture, parsed config, observation schema, feature dimensions, missing indicator dimension, and valid action mask count distribution; `python -m unittest discover -s tests -v` passed 112 tests | Run final verify |
 
+## Quasi-real South Pole Dataset Pipeline v1 Progress
+
+| ID | Task | Status | Evidence | Next Action |
+|---|---|---|---|---|
+| QD-0 | LRO LOLA local manifest | Completed | `data/manifests/lunar_south_pole_lro_lola_gdr_875s_20m.json` records `dataset_id`, `data_class=quasi_real`, source URLs, byte sizes, SHA-256 hashes, projection, and intended model-explorer use; `data/raw/` and `data/processed/` are git-ignored | Keep raw and processed products out of commits |
+| QD-1 | Manifest validation | Completed | `model_explorer.data.manifest.validate_data_manifest` checks existence, bytes, and SHA-256; missing and mismatched files return readable `DataManifestIssue` entries; tests cover valid, missing, hash mismatch, and readable `require_valid()` failure | Use validation before generating training samples |
+| QD-2 | Optional raster adapter | Completed | `model_explorer.data.raster.read_raster_window` reads finite raster windows through optional Pillow/JPEG2000 support and raises `RasterDecodeUnavailable` with a readable diagnostic when decoding is unavailable; tests use a small fixture instead of large JP2 files | Add a dependency note if Pillow/JPEG2000 is absent in another environment |
+| QD-3 | LOLA south-pole ROI contract generation | Completed | `model_explorer.data.lola_south_pole` derives relative elevation, slope proxy, roughness proxy, observation-count confidence, risk, path cost, energy cost, and coverage/value signals; generated contracts stay in `model-explorer-contract/v1` and only expose candidate-list `top_goals` | Add more ROIs after first smoke remains stable |
+| QD-4 | Quasi-real rollout JSONL | Completed | `write_lola_south_pole_rollouts_from_manifest_jsonl` produced `data/processed/quasi_real/lunar_south_pole/lro_lola_gdr_875s_20m/rollouts_roi_3700_3700_32.jsonl` with 3 episodes, 3 trainable transitions, finite rewards, `dataset_id=lunar_south_pole_lro_lola_gdr_875s_20m`, and `data_class=quasi_real` | Treat this as smoke data, not a performance benchmark |
+| QD-5 | Quasi-real architecture smoke | Completed | Real LOLA ROI experiment `quasi-real-lola-south-pole-architecture-smoke/roi-3700-3700-32` trained `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1`; JSON summary and Markdown report include `data_class`, `dataset_id`, and architecture metadata; `python -m unittest discover -s tests -v` passed 119 tests | Expand ROI set only after smoke data review |
+| QD-6 | Final verification gates | Completed | `$env:PYTHONPATH='src'; python -m model_explorer verify` passed with 120 unittest cases, benchmark smoke, forbidden import scan over 43 files, and `git diff --check`; explicit forbidden import `rg` returned no matches | Keep goal outputs uncommitted until user asks for commit |
+
+## Quasi-real South Pole Evaluation Matrix v1 Progress
+
+| ID | Task | Status | Evidence | Next Action |
+|---|---|---|---|---|
+| EM-0 | Multi-ROI evaluation manifest | Completed | Added `model-explorer-quasi-real-evaluation/v1` manifest loader/validator/dry-run and `model_explorer quasi-real validate/dry-run/run`; real manifest `data/processed/qreal_eval_roi32_v1/matrix.json` validates `lunar_south_pole_lro_lola_gdr_875s_20m` with 6 checked files / 40,631,113 bytes and reports scope `quasi-real evaluation; not real-world generalization benchmark` | Keep generated manifest under ignored `data/processed/` |
+| EM-1 | Multi-ROI sample generation | Completed | Real matrix run generated 10 scenarios from 5 ROI entries / 4 ROI groups: `smooth_high_confidence`, `rim_or_steep_slope`, `low_observation_count`, `mixed_risk`; split counts are train 4, validation 2, test 2, benchmark 2; provenance records `dataset_id`, `data_class=quasi_real`, region, ROI, resolution, seed, and generator version; source ROI offsets are preserved in contract `grid.origin` | Add broader ROI discovery only after v1 matrix review |
+| EM-2 | Dataset quality gates | Completed | Real run dataset summary: 10 episodes, 10 transitions, 10 trainable transitions, reward std 0.016618254713438904, action_mask_valid_mean 1.0, unreachable_candidate_rate 0.0, non_finite_reward_count 0; configured gates passed with no violations | Continue treating labels as derived quasi-real proxies |
+| EM-3 | Architecture evaluation matrix | Completed | Real run trained `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1`; each run wrote checkpoint, `training-summary.json`, `validation-evaluation.json`, and `losses.jsonl`; `matrix-report.md` includes quality gates, policy ranking, per-group winners, and architecture delta details against `utility` and `coverage_heuristic` | Compare stability over more seeds only after this v1 matrix is accepted |
+| EM-4 | Final verification gates | Completed | Final verification passed after matrix report and ROI origin enhancements: `python -m unittest discover -s tests -v` passed 123 tests; `$env:PYTHONPATH='src'; python -m model_explorer verify` passed 123 unittest cases plus benchmark smoke, forbidden import scan over 44 files, and `git diff --check`; explicit forbidden import `rg` over `src tests scripts docs data` returned no matches; `git status --short --ignored` shows raw/processed outputs only as ignored data | Keep generated matrix outputs out of commits; do not claim real-world generalization |
+
+## Quasi-real v1 Stability Evaluation Progress
+
+| ID | Task | Status | Evidence | Next Action |
+|---|---|---|---|---|
+| VS-0 | Stability manifest template | Completed | Added tracked `data/manifests/lunar_south_pole_lro_lola_stability_matrix_v1.json`; it references the existing LOLA GDR 875S 20 m data manifest, writes under ignored `data/processed/qreal_stability_v1`, covers 12 ROI windows across 4 ROI groups, has train/validation/test split counts of 4 each, and configures 3 seeds x 3 v1 architectures | Keep raw and processed products ignored |
+| VS-1 | Multi-seed stability summary | Completed | `summary.json` now includes `stability_summary` with per-architecture `run_count`, mean/std/min/max for loss metrics and `torch_policy` metrics, plus global loss distribution and baseline delta distributions; Markdown report adds `Architecture Stability`, `Loss Distribution`, and `Baseline Delta Summary` sections | Treat values as quasi-real stability evidence only |
+| VS-2 | ROI/split/group report consistency | Completed | Fixture regression checks JSON summary and Markdown report agree on ROI groups, split counts, and report sections; real run produced 12 scenarios from `smooth_high_confidence`, `rim_or_steep_slope`, `low_observation_count`, and `mixed_risk` | Add broader ROI discovery later, not in v1 stability hardening |
+| VS-3 | Sample coverage warnings | Completed | Report emits non-fatal warnings `no_unreachable_candidates` and `no_mask_stress_samples` when the matrix lacks unreachable candidates or mask-stress rows; real stability run returned both warnings while keeping finite metrics and passing quality gates | Add dedicated mask-stress ROI/sample generation in a later data-quality pass |
+| VS-4 | Real stability run | Completed | `$env:PYTHONPATH='src'; python -m model_explorer quasi-real run data\manifests\lunar_south_pole_lro_lola_stability_matrix_v1.json` completed 9 architecture/seed runs; loss distribution count 9, mean 0.05742432177066803, std 0.01835056203905026; per-architecture run counts are 3 for `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1` | Run final repository verification gates |
+| VS-5 | Final verification gates | Completed | `python -m unittest discover -s tests -v` passed 126 tests; `$env:PYTHONPATH='src'; python -m model_explorer verify` passed 126 unittest cases, benchmark smoke, forbidden import scan over 44 files, and `git diff --check`; external `git diff --check` returned 0 with CRLF warnings only; external forbidden import `rg` returned no matches | Keep stability outputs under ignored `data/processed/` and do not claim real-world generalization |
+
 ## Current Architecture Snapshot
 
 ```text
@@ -67,6 +101,8 @@ Current network-architecture properties:
 - Training summaries and reports include architecture diagnostics for reproducibility and comparison.
 - PPO training, checkpoint save/load, report integration, and architecture deltas exist.
 - Ubuntu Readiness documents default install, `model-explorer[training]`, Linux shell verification, and Windows-vs-Ubuntu validation boundaries.
+- Quasi-real LRO LOLA south-pole data can now be validated from manifest, decoded through an optional raster adapter, converted into candidate-list contracts, written as rollout JSONL, and used for three-architecture training smoke without expanding the action space beyond `top_goals`.
+- The v1 stability matrix can compare `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1` over multiple seeds with mean/std summaries while preserving the `quasi_real` and `not real-world generalization benchmark` labels.
 
 ## Decision Log
 
@@ -123,6 +159,38 @@ python -m unittest tests.test_model_explorer.TorchPolicyNetworkTests tests.test_
 Result: passed 15 tests
 python -m unittest discover -s tests -v
 Result: passed 112 tests
+
+Quasi-real South Pole Dataset Pipeline v1
+python -m unittest tests.test_quasi_real_data_pipeline -v
+Result: passed 8 tests
+python -m unittest discover -s tests -v
+Result: passed 120 tests
+Real LOLA ROI smoke:
+manifest validation passed for 6 files / 40,631,113 bytes
+generated rollout JSONL has 3 episodes, 3 trainable transitions, and 0 non-finite rewards
+real ROI experiment trained `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1`
+$env:PYTHONPATH='src'; python -m model_explorer verify
+Result: passed; unittest, benchmark_smoke, forbidden_import_check, and git_diff_check returned 0
+rg forbidden import check
+Result: no forbidden import matches in src, tests, scripts, docs, or data
+
+Quasi-real v1 Stability Evaluation
+python -m unittest tests.test_quasi_real_data_pipeline.QuasiRealEvaluationMatrixTests -v
+Result: passed 6 tests
+$env:PYTHONPATH='src'; python -m model_explorer quasi-real validate data\manifests\lunar_south_pole_lro_lola_stability_matrix_v1.json
+Result: valid; 12 ROI windows, train/validation/test split counts of 4 each, 3 architectures
+$env:PYTHONPATH='src'; python -m model_explorer quasi-real dry-run data\manifests\lunar_south_pole_lro_lola_stability_matrix_v1.json
+Result: dry_run; output paths remain under ignored data\processed\qreal_stability_v1
+$env:PYTHONPATH='src'; python -m model_explorer quasi-real run data\manifests\lunar_south_pole_lro_lola_stability_matrix_v1.json
+Result: completed; 12 scenarios, 9 architecture/seed runs, loss mean 0.05742432177066803, loss std 0.01835056203905026, warnings no_unreachable_candidates/no_mask_stress_samples
+python -m unittest discover -s tests -v
+Result: passed 126 tests
+$env:PYTHONPATH='src'; python -m model_explorer verify
+Result: passed; unittest, benchmark_smoke, forbidden_import_check, and git_diff_check returned 0
+git diff --check
+Result: returned 0; Windows line-ending warnings only
+rg forbidden import check
+Result: no forbidden import matches in src, tests, scripts, docs, or data
 ```
 
 ## Risk Register
@@ -137,6 +205,10 @@ Result: passed 112 tests
 | Attention leakage | Masked candidates could affect valid candidate logits through attention context | v1.3 regression mutates unreachable/padding tensors and checks valid output invariance |
 | Config sprawl | Too many knobs make experiments hard to compare | Keep v1.1 architecture options to `mlp_v1`, `mlp_missing_v1`, `candidate_attention_v1` |
 | PyTorch optional dependency | Non-training workflows could fail when PyTorch is absent | Keep train-specific tests skippable and non-training paths independent |
+| JP2 optional decoder availability | Another environment may lack Pillow/JPEG2000 support and be unable to decode LOLA JP2 products | Keep raster decoding optional and return `RasterDecodeUnavailable` diagnostics; fixture tests avoid requiring large JP2 files |
+| Quasi-real ROI smoke is not mission ground truth | Terrain-derived labels are generated proxies and can bias policy evaluation | Mark data as `quasi_real`, keep provenance in rollout/report, and avoid claiming real-world generalization |
+| Windows long output paths | Deep ignored output roots plus long experiment names can exceed legacy Windows path limits during report writes | Use short local output roots such as `data/processed/qreal_eval_roi32_v1` for current v1 matrix; defer path-prefix hardening unless it blocks tracked workflows |
+| Stability matrix lacks mask-stress samples | Current real stability run has no unreachable candidates, so mask-stress coverage is only fixture-tested | Emit non-fatal report warnings and keep separate mask-safety unit tests; add a dedicated mask-stress sample source before using stability results for stronger claims |
 
 ## Completion Criteria
 

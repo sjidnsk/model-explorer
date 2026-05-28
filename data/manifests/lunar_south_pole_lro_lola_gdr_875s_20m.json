@@ -1,0 +1,83 @@
+{
+  "dataset_id": "lunar_south_pole_lro_lola_gdr_875s_20m",
+  "data_class": "quasi_real",
+  "target": "Moon",
+  "region": "lunar_south_pole",
+  "mission": "Lunar Reconnaissance Orbiter",
+  "instrument": "Lunar Orbiter Laser Altimeter",
+  "pds_data_set_id": "LRO-L-LOLA-4-GDR-V1.0",
+  "source_page": "https://imbrium.mit.edu/BROWSE/LOLA_GDR/POLAR/SOUTH_POLE/",
+  "local_raw_dir": "data/raw/quasi_real/lunar_south_pole/lro_lola_gdr_875s_20m",
+  "projection": {
+    "type": "polar stereographic",
+    "center_latitude_degrees": -90,
+    "center_longitude_degrees": 0,
+    "latitude_min_degrees": -90,
+    "latitude_max_degrees": -87.5,
+    "map_scale_meters_per_pixel": 20,
+    "lines": 7584,
+    "line_samples": 7584
+  },
+  "products": [
+    {
+      "product_id": "LDEM_875S_20M",
+      "role": "shape_map_radius",
+      "unit": "meter",
+      "description": "South-pole LOLA gridded shape map stored as JPEG2000.",
+      "files": [
+        {
+          "name": "LDEM_875S_20M.JP2",
+          "url": "https://imbrium.mit.edu/DATA/LOLA_GDR/POLAR/JP2/LDEM_875S_20M.JP2",
+          "bytes": 21462406,
+          "sha256": "FFF7C2017A192788066A0867D78FD1CCF783216E26974B5E65287669AA472BAC"
+        },
+        {
+          "name": "LDEM_875S_20M_JP2.LBL",
+          "url": "https://imbrium.mit.edu/DATA/LOLA_GDR/POLAR/JP2/LDEM_875S_20M_JP2.LBL",
+          "bytes": 6360,
+          "sha256": "9318F41503C7D02251ED643E6DD74B737D76378BE49CD492C3ABB9E05D431AAA"
+        },
+        {
+          "name": "LDEM_875S_20M_AUX.XML",
+          "url": "https://imbrium.mit.edu/DATA/LOLA_GDR/POLAR/JP2/LDEM_875S_20M_AUX.XML",
+          "bytes": 2415,
+          "sha256": "848913F84866476F1209F73BB855F652605BBB674D41BC04727E3FD6E72C1650"
+        }
+      ]
+    },
+    {
+      "product_id": "LDEC_875S_20M",
+      "role": "observation_count",
+      "unit": "count",
+      "description": "South-pole LOLA spot-count map corresponding to the DEM grid.",
+      "files": [
+        {
+          "name": "LDEC_875S_20M.JP2",
+          "url": "https://imbrium.mit.edu/DATA/LOLA_GDR/POLAR/JP2/LDEC_875S_20M.JP2",
+          "bytes": 19152672,
+          "sha256": "774699EE4AEDED6E6D78BFC1E5D43CC165EC427B79324DBF6FFE1C7E30D6486F"
+        },
+        {
+          "name": "LDEC_875S_20M_JP2.LBL",
+          "url": "https://imbrium.mit.edu/DATA/LOLA_GDR/POLAR/JP2/LDEC_875S_20M_JP2.LBL",
+          "bytes": 5922,
+          "sha256": "E24F8813DA85A1ADD0D25485643822BFAA3E0528EF0DF5565B344E2E19AA79B3"
+        },
+        {
+          "name": "LDEC_875S_20M_AUX.XML",
+          "url": "https://imbrium.mit.edu/DATA/LOLA_GDR/POLAR/JP2/LDEC_875S_20M_AUX.XML",
+          "bytes": 1338,
+          "sha256": "FDB90375704FBA5B15809AC7F9C830884BBC7921267AE92917707AF5D7DEE84D"
+        }
+      ]
+    }
+  ],
+  "intended_model_explorer_use": {
+    "allowed_scope": "Build offline quasi-real candidate-list scenarios and evaluation fixtures.",
+    "not_allowed_scope": "Do not change model-explorer-contract/v1 semantics and do not expand policy actions outside top_goals.",
+    "notes": [
+      "Treat derived training rows as quasi_real until cross-validated with mission planning labels.",
+      "Use observation_count as a data-quality or confidence proxy, not as ground-truth traversability."
+    ]
+  }
+}

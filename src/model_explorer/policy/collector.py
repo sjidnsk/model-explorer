@@ -22,11 +22,12 @@ def collect_rollout_episode(
     planning_adapter: PathPlanningAdapter | None = None,
     reward_config: dict[str, Any] | None = None,
 ) -> RolloutEpisode:
-    snapshots = (
-        scenario_or_snapshots.snapshots
-        if isinstance(scenario_or_snapshots, Scenario)
-        else tuple(scenario_or_snapshots)
-    )
+    if isinstance(scenario_or_snapshots, Scenario):
+        snapshots = scenario_or_snapshots.snapshots
+        rollout_metadata = dict(scenario_or_snapshots.metadata)
+    else:
+        snapshots = tuple(scenario_or_snapshots)
+        rollout_metadata = {}
     if not snapshots:
         return RolloutEpisode(transitions=(), metrics=EpisodeMetrics())
 
@@ -37,6 +38,7 @@ def collect_rollout_episode(
         max_candidates=max_candidates,
         planning_adapter=planning_adapter,
         reward_config=reward_config,
+        rollout_metadata=rollout_metadata,
     )
 
 
@@ -49,6 +51,7 @@ def collect_dynamic_rollout_episode(
     planning_adapter: PathPlanningAdapter | None = None,
     execution_adapter: ExecutionFeasibilityAdapter | None = None,
     reward_config: dict[str, Any] | None = None,
+    rollout_metadata: dict[str, Any] | None = None,
 ) -> RolloutEpisode:
     transitions: list[RolloutTransition] = []
     total_path_cost = 0.0
@@ -79,7 +82,7 @@ def collect_dynamic_rollout_episode(
         selected_goal = decision.selected_goal
         failure_reason = None if selected_goal is not None else "no_reachable_goal"
         action_index = -1 if selected_goal is None else _selected_action_index(current_contract, selected_goal.cell)
-        extra_info: dict[str, Any] = {}
+        extra_info: dict[str, Any] = _rollout_metadata_info(rollout_metadata)
 
         planning_result: PathPlanResult | None = None
         planner = planning_adapter if planning_adapter is not None else default_planner
@@ -336,3 +339,13 @@ def _reward_kwargs(config: dict[str, Any] | None) -> dict[str, float]:
     if config is None:
         return {}
     return {key: float(config[key]) for key in allowed if key in config}
+
+
+def _rollout_metadata_info(metadata: dict[str, Any] | None) -> dict[str, Any]:
+    if not metadata:
+        return {}
+    info = {"provenance": dict(metadata)}
+    for key in ("dataset_id", "data_class", "region", "generator_version"):
+        if key in metadata:
+            info[key] = metadata[key]
+    return info

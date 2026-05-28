@@ -1299,6 +1299,11 @@ def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str
     if isinstance(dataset_summary, dict):
         lines.extend(["", "## Dataset Summary", "", "| metric | value |", "|---|---:|"])
         for key in (
+            "data_class",
+            "dataset_id",
+            "region",
+            "generator_version",
+            "roi_count",
             "episode_count",
             "transition_count",
             "trainable_transition_count",
@@ -1533,6 +1538,11 @@ def _markdown_report(summary: dict[str, Any], evaluation: dict[str, Any]) -> str
         training_dataset = training.get("dataset_summary", {})
         if isinstance(training_dataset, dict):
             for key in (
+                "data_class",
+                "dataset_id",
+                "region",
+                "generator_version",
+                "roi_count",
                 "episode_count",
                 "transition_count",
                 "trainable_transition_count",

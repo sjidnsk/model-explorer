@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +19,7 @@ from ..core.interfaces import (
 @dataclass(frozen=True)
 class Scenario:
     snapshots: tuple[ModelExplorerContract, ...]
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def load_scenario(path: str | Path) -> Scenario:
@@ -28,7 +29,8 @@ def load_scenario(path: str | Path) -> Scenario:
     if not isinstance(payload, dict):
         raise ContractValidationError("scenario root must be a JSON object")
 
-    if "snapshots" in payload:
+    has_scenario_wrapper = "snapshots" in payload
+    if has_scenario_wrapper:
         raw_snapshots = payload["snapshots"]
         if not isinstance(raw_snapshots, list):
             raise ContractValidationError("snapshots must be a list")
@@ -38,7 +40,16 @@ def load_scenario(path: str | Path) -> Scenario:
     if not raw_snapshots:
         raise ContractValidationError("snapshots must contain at least one contract")
 
-    return Scenario(tuple(_parse_contract(item, f"snapshots[{index}]") for index, item in enumerate(raw_snapshots)))
+    metadata = payload.get("metadata", {}) if has_scenario_wrapper else {}
+    if metadata is None:
+        metadata = {}
+    if not isinstance(metadata, dict):
+        raise ContractValidationError("metadata must be an object when present")
+
+    return Scenario(
+        tuple(_parse_contract(item, f"snapshots[{index}]") for index, item in enumerate(raw_snapshots)),
+        metadata=dict(metadata),
+    )
 
 
 def _parse_contract(payload: Any, prefix: str) -> ModelExplorerContract:

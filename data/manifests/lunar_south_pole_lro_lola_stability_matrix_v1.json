@@ -1,0 +1,131 @@
+{
+  "schema_version": "model-explorer-quasi-real-evaluation/v1",
+  "name": "qreal-sp-stability-v1",
+  "run_id": "roi32-3seed-v1",
+  "dataset_manifest": "lunar_south_pole_lro_lola_gdr_875s_20m.json",
+  "output_root": "../processed/qreal_stability_v1",
+  "candidate_count": 8,
+  "episode_count": 1,
+  "seed": 20260528,
+  "rois": [
+    {
+      "name": "smooth_high_confidence",
+      "split": "train",
+      "roi_x": 3700,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "validation",
+      "roi_x": 3740,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "test",
+      "roi_x": 3700,
+      "roi_y": 3740,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "train",
+      "roi_x": 3900,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "validation",
+      "roi_x": 3940,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "test",
+      "roi_x": 3900,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "low_observation_count",
+      "split": "train",
+      "roi_x": 20,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "low_observation_count",
+      "split": "validation",
+      "roi_x": 60,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "low_observation_count",
+      "split": "test",
+      "roi_x": 20,
+      "roi_y": 60,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "mixed_risk",
+      "split": "train",
+      "roi_x": 3600,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "mixed_risk",
+      "split": "validation",
+      "roi_x": 3640,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "mixed_risk",
+      "split": "test",
+      "roi_x": 3600,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32
+    }
+  ],
+  "dataset_validation": {
+    "min_trainable_transition_count": 8,
+    "require_finite_reward": true,
+    "min_reward_std": 0.0,
+    "min_action_mask_valid_mean": 0.1,
+    "max_unreachable_candidate_rate": 0.95
+  },
+  "train": {
+    "seeds": [
+      20260528,
+      20260529,
+      20260530
+    ],
+    "architectures": [
+      "mlp_v1",
+      "mlp_missing_v1",
+      "candidate_attention_v1"
+    ],
+    "hidden_size": 16,
+    "learning_rate": 0.001,
+    "epochs": 1,
+    "evaluate_trained_policy": true
+  }
+}

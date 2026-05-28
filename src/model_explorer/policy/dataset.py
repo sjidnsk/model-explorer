@@ -56,6 +56,7 @@ def summarize_rollout_dataset(episodes: Iterable[RolloutEpisode]) -> dict[str, A
     no_op_transition_count = sum(1 for transition in transitions if transition.action_index < 0)
     failure_transition_count = sum(1 for transition in transitions if transition.info.failure_reason is not None)
     risks = tuple(float(transition.info.risk) for transition in transitions if isfinite(float(transition.info.risk)))
+    provenance_summary = _provenance_summary(transitions)
 
     summary = {
         "episode_count": len(episode_tuple),
@@ -86,6 +87,7 @@ def summarize_rollout_dataset(episodes: Iterable[RolloutEpisode]) -> dict[str, A
         "warnings": [],
         "errors": [],
     }
+    summary.update(provenance_summary)
     warnings: list[str] = summary["warnings"]
     errors: list[str] = summary["errors"]
     if not transitions:
@@ -213,6 +215,73 @@ def _candidate_quality_summary(transitions: tuple[RolloutTransition, ...]) -> di
             missing_feature_count / experimental_feature_count if experimental_feature_count else 0.0
         ),
     }
+
+
+def _provenance_summary(transitions: tuple[RolloutTransition, ...]) -> dict[str, Any]:
+    records = tuple(_transition_provenance(transition) for transition in transitions)
+    records = tuple(record for record in records if record)
+    data_classes = _unique_strings(record.get("data_class") for record in records)
+    dataset_ids = _unique_strings(record.get("dataset_id") for record in records)
+    regions = _unique_strings(record.get("region") for record in records)
+    generator_versions = _unique_strings(record.get("generator_version") for record in records)
+    roi_names = _unique_strings(record.get("roi_name") for record in records)
+    splits = _unique_strings(record.get("split") for record in records)
+    summary: dict[str, Any] = {
+        "data_classes": list(data_classes),
+        "dataset_ids": list(dataset_ids),
+        "regions": list(regions),
+        "generator_versions": list(generator_versions),
+        "roi_names": list(roi_names),
+        "roi_count": len(roi_names),
+        "splits": list(splits),
+        "split_counts": _counts_by_key(records, "split"),
+    }
+    if len(data_classes) == 1:
+        summary["data_class"] = data_classes[0]
+    if len(dataset_ids) == 1:
+        summary["dataset_id"] = dataset_ids[0]
+    if len(regions) == 1:
+        summary["region"] = regions[0]
+    if len(generator_versions) == 1:
+        summary["generator_version"] = generator_versions[0]
+    return summary
+
+
+def _transition_provenance(transition: RolloutTransition) -> dict[str, Any]:
+    extra = transition.info.extra
+    provenance = extra.get("provenance")
+    if isinstance(provenance, dict):
+        return dict(provenance)
+    return {
+        key: extra[key]
+        for key in ("data_class", "dataset_id", "region", "generator_version", "roi_name", "split")
+        if key in extra
+    }
+
+
+def _unique_strings(values) -> tuple[str, ...]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value is None:
+            continue
+        text = str(value)
+        if text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return tuple(result)
+
+
+def _counts_by_key(records: tuple[dict[str, Any], ...], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for record in records:
+        value = record.get(key)
+        if value is None:
+            continue
+        text = str(value)
+        counts[text] = counts.get(text, 0) + 1
+    return counts
 
 
 def _present_experimental_feature_count(

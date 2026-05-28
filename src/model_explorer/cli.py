@@ -15,6 +15,11 @@ from .policy.experiment import (
     run_experiment_manifest,
     validate_experiment_manifest,
 )
+from .data.evaluation_matrix import (
+    dry_run_quasi_real_evaluation_manifest,
+    run_quasi_real_evaluation_manifest,
+    validate_quasi_real_evaluation_manifest,
+)
 from .verification import run_verification
 
 
@@ -38,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _main(args_list: list[str]) -> int:
-    if args_list and args_list[0] not in {"experiment", "benchmark", "verify", "-h", "--help"}:
+    if args_list and args_list[0] not in {"experiment", "benchmark", "quasi-real", "verify", "-h", "--help"}:
         return _run_legacy_scenario(args_list)
 
     parser = argparse.ArgumentParser(description="model-explorer benchmark and orchestration entrypoint.")
@@ -58,6 +63,12 @@ def _main(args_list: list[str]) -> int:
     generate_parser.add_argument("--scenario-count", type=int, default=1)
     generate_parser.add_argument("--group", choices=BENCHMARK_GROUPS, action="append", default=None)
     generate_parser.add_argument("--difficulty", choices=("easy", "medium", "hard"), default="medium")
+
+    quasi_real_parser = subparsers.add_parser("quasi-real", help="Quasi-real LOLA evaluation matrix utilities.")
+    quasi_real_subparsers = quasi_real_parser.add_subparsers(dest="quasi_real_command", required=True)
+    for command in ("run", "validate", "dry-run"):
+        command_parser = quasi_real_subparsers.add_parser(command)
+        command_parser.add_argument("manifest", type=Path, help="Path to quasi-real evaluation matrix JSON.")
 
     verify_parser = subparsers.add_parser("verify", help="Run the daily verification chain.")
     verify_parser.add_argument("--dry-run", action="store_true", help="Report verification steps without running them.")
@@ -87,6 +98,14 @@ def _main(args_list: list[str]) -> int:
                 difficulty=args.difficulty,
             )
         )
+        return 0
+    if args.command == "quasi-real":
+        if args.quasi_real_command == "run":
+            _print_json(run_quasi_real_evaluation_manifest(args.manifest))
+        elif args.quasi_real_command == "validate":
+            _print_json(validate_quasi_real_evaluation_manifest(args.manifest))
+        elif args.quasi_real_command == "dry-run":
+            _print_json(dry_run_quasi_real_evaluation_manifest(args.manifest))
         return 0
     if args.command == "verify":
         summary = run_verification(
