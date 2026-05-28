@@ -1,0 +1,160 @@
+{
+  "schema_version": "model-explorer-quasi-real-evaluation/v1",
+  "name": "qreal-sp-architecture-selection-v1",
+  "run_id": "roi32-selection-v1",
+  "dataset_manifest": "lunar_south_pole_lro_lola_gdr_875s_20m.json",
+  "output_root": "../processed/qreal_selection_v1",
+  "candidate_count": 8,
+  "episode_count": 1,
+  "seed": 20260601,
+  "rois": [
+    {
+      "name": "smooth_high_confidence",
+      "split": "train",
+      "roi_x": 3700,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "validation",
+      "roi_x": 3740,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "test",
+      "roi_x": 3700,
+      "roi_y": 3740,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "train",
+      "roi_x": 3900,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "validation",
+      "roi_x": 3940,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "test",
+      "roi_x": 3900,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "low_observation_count",
+      "split": "train",
+      "roi_x": 20,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6
+    },
+    {
+      "name": "low_observation_count",
+      "split": "validation",
+      "roi_x": 60,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "low_observation_count",
+      "split": "test",
+      "roi_x": 20,
+      "roi_y": 60,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "mixed_risk",
+      "split": "train",
+      "roi_x": 3600,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6
+    },
+    {
+      "name": "mixed_risk",
+      "split": "validation",
+      "roi_x": 3640,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "mixed_risk",
+      "split": "test",
+      "roi_x": 3600,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32
+    }
+  ],
+  "mask_stress": {
+    "enabled": true,
+    "label": "mask_stress_augmented",
+    "profile": "deterministic-v1",
+    "unreachable_candidate_count": 1,
+    "missing_experimental_fields": [
+      "risk",
+      "path_cost",
+      "energy_cost"
+    ]
+  },
+  "selection": {
+    "enabled": true,
+    "metric": "torch_policy.final_coverage_rate",
+    "mode": "max",
+    "min_seed_count": 3,
+    "min_architecture_count": 3,
+    "min_roi_group_count": 4,
+    "min_unreachable_candidate_count": 1,
+    "min_mask_stress_sample_count": 1,
+    "uncertainty_multiplier": 1.0
+  },
+  "dataset_validation": {
+    "min_trainable_transition_count": 8,
+    "require_finite_reward": true,
+    "min_reward_std": 0.0,
+    "min_action_mask_valid_mean": 0.1,
+    "max_unreachable_candidate_rate": 0.95,
+    "min_unreachable_candidate_count": 1,
+    "min_mask_stress_sample_count": 1,
+    "min_roi_group_count": 4
+  },
+  "train": {
+    "seeds": [
+      20260601,
+      20260602,
+      20260603
+    ],
+    "architectures": [
+      "mlp_v1",
+      "mlp_missing_v1",
+      "candidate_attention_v1"
+    ],
+    "hidden_size": 16,
+    "learning_rate": 0.001,
+    "epochs": 1,
+    "evaluate_trained_policy": true
+  }
+}

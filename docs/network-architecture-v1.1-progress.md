@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Phase | Network Architecture v1.3 network architecture experiments |
-| Current stage | v1 mask-stress data quality gate |
+| Current stage | v1 architecture selection gate |
 | Current baseline | `mlp_v1` masked candidate policy |
 | Scope | Candidate-list policy over `ModelExplorerContract.top_goals` |
 | Out of scope | Full-map action space, external project imports, contract v1 breaking changes |
@@ -87,6 +87,18 @@
 | MS-4 | Real mask-stress run | Completed | `$env:PYTHONPATH='src'; python -m model_explorer quasi-real run data\manifests\lunar_south_pole_lro_lola_mask_stress_matrix_v1.json` completed 4 scenarios and 3 architecture runs; dataset summary: `unreachable_candidate_count=4`, `padding_candidate_count=2`, `missing_experimental_feature_candidate_count=30`, `mask_stress_sample_count=4`, `non_finite_reward_count=0`, coverage warnings empty, validation gates passed | Run full repository verification gates |
 | MS-5 | Final verification gates | Completed | `python -m unittest discover -s tests -v` passed 129 tests; `$env:PYTHONPATH='src'; python -m model_explorer verify` passed 129 unittest cases, benchmark smoke, forbidden import scan over 44 files, and `git diff --check`; external `git diff --check` and forbidden import `rg` are part of final handoff gates | Keep generated outputs under ignored `data/processed/`; do not use mask-stress scores as real-world performance evidence |
 
+## v1 Architecture Selection Gate Progress
+
+| ID | Task | Status | Evidence | Next Action |
+|---|---|---|---|---|
+| AS-0 | Selection manifest template | Completed | Added tracked `data/manifests/lunar_south_pole_lro_lola_selection_matrix_v1.json`; it references the LOLA GDR 875S 20 m manifest, writes under ignored `data/processed/qreal_selection_v1`, covers 12 ROI windows across 4 ROI groups, enables explicit `mask_stress_augmented`, and configures 3 seeds x 3 architectures | Keep raw/processed outputs ignored |
+| AS-1 | Selection quality gates | Completed | Dataset validation now accepts `min_roi_group_count`; selection config records `min_seed_count`, `min_architecture_count`, `min_roi_group_count`, `min_unreachable_candidate_count`, and `min_mask_stress_sample_count`; gate violations remain readable and old stability/mask-stress manifests stay compatible | Keep selection gates evidence-oriented, not release gates |
+| AS-2 | Grouped validation per architecture | Completed | Training run validation now preserves validation split groups when explicit splits exist, so each architecture/seed run can report per-group `torch_policy` metrics while keeping aggregate fallback behavior for old summaries | Use grouped metrics only for v1 architecture comparison |
+| AS-3 | Selection report | Completed | Matrix JSON/Markdown now include `architecture_selection` / `Architecture Selection Gate` with `recommended_architecture` or `inconclusive`, architecture mean/std/loss metrics, baseline delta distribution, per-group winners, exception count, and mask-stress coverage | Treat `inconclusive` as a valid outcome when margins are within seed variance |
+| AS-4 | Real selection run | Completed | `$env:PYTHONPATH='src'; python -m model_explorer quasi-real run data\manifests\lunar_south_pole_lro_lola_selection_matrix_v1.json` completed 12 scenarios and 9 architecture/seed runs; dataset summary: `unreachable_candidate_count=12`, `padding_candidate_count=8`, `missing_experimental_feature_candidate_count=88`, `mask_stress_sample_count=12`; selection quality gates passed and decision was `inconclusive` because validation coverage margins were within seed variance | Do not promote a default v1 architecture from this evidence alone |
+| AS-5 | Test evidence | Completed | New fixture tests cover tracked selection manifest, selection report fields, mask-stress coverage in JSON/Markdown, and the no-forced-winner rule; `python -m unittest discover -s tests -v` passed 132 tests | Run final verify, diff check, and forbidden import scan before completion |
+| AS-6 | Final verification gates | Completed | `$env:PYTHONPATH='src'; python -m model_explorer verify` passed 132 unittest cases, benchmark smoke, forbidden import scan over 44 files, and `git diff --check`; external `git diff --check` returned 0 with CRLF warnings only; external forbidden import `rg` returned no matches | Keep selection outputs under ignored `data/processed/`; do not claim a default architecture from an `inconclusive` selection result |
+
 ## Current Architecture Snapshot
 
 ```text
@@ -115,6 +127,7 @@ Current network-architecture properties:
 - Quasi-real LRO LOLA south-pole data can now be validated from manifest, decoded through an optional raster adapter, converted into candidate-list contracts, written as rollout JSONL, and used for three-architecture training smoke without expanding the action space beyond `top_goals`.
 - The v1 stability matrix can compare `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1` over multiple seeds with mean/std summaries while preserving the `quasi_real` and `not real-world generalization benchmark` labels.
 - The v1 mask-stress matrix can produce deterministic unreachable candidates, padding coverage, missing experimental field fallback, and per-architecture finite training metrics while keeping augmentation explicitly labeled.
+- The v1 architecture selection gate combines multi-seed architecture comparison with explicit mask-stress coverage and reports either `recommended_architecture` or `inconclusive` instead of forcing a winner when margins are within seed variance.
 
 ## Decision Log
 
@@ -219,6 +232,26 @@ python -m unittest discover -s tests -v
 Result: passed 129 tests
 $env:PYTHONPATH='src'; python -m model_explorer verify
 Result: passed; unittest, benchmark_smoke, forbidden_import_check, and git_diff_check returned 0
+
+v1 Architecture Selection Gate
+python -m unittest tests.test_quasi_real_data_pipeline.QuasiRealEvaluationMatrixTests -v
+Result: initially failed as expected for missing tracked selection manifest, unknown `min_roi_group_count`, and absent selection decision/report fields
+python -m unittest tests.test_quasi_real_data_pipeline.QuasiRealEvaluationMatrixTests -v
+Result: passed 12 tests after implementation
+$env:PYTHONPATH='src'; python -m model_explorer quasi-real validate data\manifests\lunar_south_pole_lro_lola_selection_matrix_v1.json
+Result: valid; 12 ROI windows, train/validation/test split counts of 4 each, explicit mask-stress coverage, 3 seeds, 3 architectures, selection gates configured
+$env:PYTHONPATH='src'; python -m model_explorer quasi-real dry-run data\manifests\lunar_south_pole_lro_lola_selection_matrix_v1.json
+Result: dry_run; output paths remain under ignored data\processed\qreal_selection_v1
+$env:PYTHONPATH='src'; python -m model_explorer quasi-real run data\manifests\lunar_south_pole_lro_lola_selection_matrix_v1.json
+Result: completed; 12 scenarios, 9 architecture/seed runs, unreachable_candidate_count 12, padding_candidate_count 8, missing_experimental_feature_candidate_count 88, mask_stress_sample_count 12, selection gate status passed, architecture selection decision inconclusive
+python -m unittest discover -s tests -v
+Result: passed 132 tests
+$env:PYTHONPATH='src'; python -m model_explorer verify
+Result: passed; 132 unittest cases, benchmark_smoke, forbidden_import_check over 44 files, and git_diff_check returned 0
+git diff --check
+Result: returned 0; Windows line-ending warnings only
+rg forbidden import check
+Result: no forbidden import matches in src, tests, scripts, docs, or data
 ```
 
 ## Risk Register
@@ -238,6 +271,7 @@ Result: passed; unittest, benchmark_smoke, forbidden_import_check, and git_diff_
 | Windows long output paths | Deep ignored output roots plus long experiment names can exceed legacy Windows path limits during report writes | Use short local output roots such as `data/processed/qreal_eval_roi32_v1` for current v1 matrix; defer path-prefix hardening unless it blocks tracked workflows |
 | Stability matrix lacks mask-stress samples | Current real stability run has no unreachable candidates, so mask-stress coverage is only fixture-tested | Emit non-fatal report warnings and keep separate mask-safety unit tests; add a dedicated mask-stress sample source before using stability results for stronger claims |
 | Mask-stress augmentation can distort quasi-real costs | Removing experimental fields intentionally exercises fallback paths and can make selected path/risk metrics less representative | Keep `mask_stress_augmented` explicit in provenance/report and use this gate only for mask/data-quality evidence |
+| Selection gate can be inconclusive | Current quasi-real selection run ties architectures on validation coverage, so a default model choice would be weaker than the measured variance | Report `inconclusive` and keep `mlp_v1` as compatibility default until broader data or a stronger metric separates architectures |
 
 ## Completion Criteria
 
@@ -246,6 +280,7 @@ Result: passed; unittest, benchmark_smoke, forbidden_import_check, and git_diff_
 - `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1` can be selected by manifest.
 - All architectures preserve action mask safety.
 - Reports include architecture identity and baseline deltas.
+- Selection reports include `recommended_architecture` or `inconclusive`.
 - Checkpoint metadata, JSON summary, and Markdown report include parsed `architecture_config`.
 - `candidate_attention_v1` passes mask invariance tests for unreachable, padding, and reordered candidates.
 - Final verification commands pass.

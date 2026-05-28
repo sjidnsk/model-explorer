@@ -23,6 +23,7 @@ class DatasetValidationGates:
     max_unreachable_candidate_rate: float | None = None
     min_unreachable_candidate_count: int | None = None
     min_mask_stress_sample_count: int | None = None
+    min_roi_group_count: int | None = None
     min_reward_std: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -41,6 +42,7 @@ class DatasetValidationGates:
                 "max_unreachable_candidate_rate": self.max_unreachable_candidate_rate,
                 "min_unreachable_candidate_count": self.min_unreachable_candidate_count,
                 "min_mask_stress_sample_count": self.min_mask_stress_sample_count,
+                "min_roi_group_count": self.min_roi_group_count,
                 "min_reward_std": self.min_reward_std,
             }.items()
             if value is not None and value is not False
@@ -421,6 +423,7 @@ def _coerce_validation_gates(value: dict[str, Any] | DatasetValidationGates | No
         max_unreachable_candidate_rate=_optional_float(value, "max_unreachable_candidate_rate"),
         min_unreachable_candidate_count=_optional_int(value, "min_unreachable_candidate_count"),
         min_mask_stress_sample_count=_optional_int(value, "min_mask_stress_sample_count"),
+        min_roi_group_count=_optional_int(value, "min_roi_group_count"),
         min_reward_std=_optional_float(value, "min_reward_std"),
     )
 
@@ -489,6 +492,7 @@ def _validation_gate_violations(
         summary["mask_stress_sample_count"],
         gates.min_mask_stress_sample_count,
     )
+    _append_min_violation(violations, "min_roi_group_count", summary["roi_count"], gates.min_roi_group_count)
     _append_min_violation(violations, "min_reward_std", summary["reward"]["std"], gates.min_reward_std)
     if gates.require_finite_reward and summary["non_finite_reward_count"] > 0:
         violations.append(

@@ -518,6 +518,34 @@ class QuasiRealEvaluationMatrixTests(unittest.TestCase):
         self.assertGreaterEqual(manifest.dataset_validation["min_unreachable_candidate_count"], 1)
         self.assertGreaterEqual(manifest.dataset_validation["min_mask_stress_sample_count"], 1)
 
+    def test_selection_manifest_template_is_tracked_and_requires_stability_plus_mask_stress(self):
+        from model_explorer.data.evaluation_matrix import load_quasi_real_evaluation_manifest
+
+        manifest_path = ROOT / "data" / "manifests" / "lunar_south_pole_lro_lola_selection_matrix_v1.json"
+
+        manifest = load_quasi_real_evaluation_manifest(manifest_path)
+        roi_counts: dict[str, int] = {}
+        for roi in manifest.rois:
+            roi_counts[roi.name] = roi_counts.get(roi.name, 0) + 1
+
+        self.assertTrue(manifest_path.exists())
+        self.assertEqual(manifest.dataset_manifest.name, "lunar_south_pole_lro_lola_gdr_875s_20m.json")
+        self.assertEqual(manifest.output_root.name, "qreal_selection_v1")
+        self.assertEqual(manifest.output_root.parent.name, "processed")
+        self.assertTrue(manifest.mask_stress_config["enabled"])
+        self.assertEqual(manifest.mask_stress_config["label"], "mask_stress_augmented")
+        self.assertEqual(set(manifest.train_config["architectures"]), {"mlp_v1", "mlp_missing_v1", "candidate_attention_v1"})
+        self.assertGreaterEqual(len(manifest.train_config["seeds"]), 3)
+        self.assertTrue(manifest.selection_config["enabled"])
+        self.assertGreaterEqual(manifest.selection_config["min_seed_count"], 3)
+        self.assertGreaterEqual(manifest.selection_config["min_architecture_count"], 3)
+        self.assertGreaterEqual(manifest.selection_config["min_roi_group_count"], 4)
+        self.assertGreaterEqual(manifest.dataset_validation["min_unreachable_candidate_count"], 1)
+        self.assertGreaterEqual(manifest.dataset_validation["min_mask_stress_sample_count"], 1)
+        self.assertGreaterEqual(manifest.dataset_validation["min_roi_group_count"], 4)
+        for roi_name in ("smooth_high_confidence", "rim_or_steep_slope", "low_observation_count", "mixed_risk"):
+            self.assertGreaterEqual(roi_counts.get(roi_name, 0), 2)
+
     def test_evaluation_manifest_validate_and_dry_run_do_not_write_outputs(self):
         from model_explorer.data.evaluation_matrix import (
             dry_run_quasi_real_evaluation_manifest,
@@ -651,6 +679,75 @@ class QuasiRealEvaluationMatrixTests(unittest.TestCase):
         ):
             self.assertIn(text, report)
 
+    def test_selection_report_summarizes_architecture_decision_and_quality_gates(self):
+        try:
+            import torch  # noqa: F401
+        except ImportError:
+            self.skipTest("PyTorch is not available in this environment")
+        from model_explorer.data.evaluation_matrix import run_quasi_real_evaluation_manifest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            matrix_manifest = _write_fixture_matrix_manifest(
+                Path(tmpdir),
+                seeds=[31, 37],
+                mask_stress=True,
+                selection=True,
+            )
+
+            summary = run_quasi_real_evaluation_manifest(matrix_manifest)
+            report = Path(summary["report_output"]).read_text(encoding="utf-8")
+
+        selection = summary["architecture_selection"]
+        self.assertIn(selection["status"], {"selected", "inconclusive"})
+        self.assertIn("decision", selection)
+        self.assertIn("recommended_architecture", selection)
+        self.assertEqual(selection["quality_gates"]["status"], "passed")
+        self.assertEqual(set(selection["architectures"]), {"mlp_v1", "mlp_missing_v1", "candidate_attention_v1"})
+        self.assertIn("loss_distribution", selection)
+        self.assertIn("baseline_delta_distribution", selection)
+        self.assertIn("per_group_winners", selection)
+        self.assertGreater(selection["mask_stress_coverage"]["unreachable_candidate_count"], 0)
+        self.assertGreater(selection["mask_stress_coverage"]["padding_candidate_count"], 0)
+        self.assertGreater(selection["mask_stress_coverage"]["missing_experimental_feature_candidate_count"], 0)
+        self.assertGreater(selection["mask_stress_coverage"]["mask_stress_sample_count"], 0)
+        for architecture, details in selection["architectures"].items():
+            self.assertEqual(details["run_count"], 2)
+            self.assertEqual(details["exception_count"], 0)
+            self.assertIn("loss", details)
+            self.assertIn("selection_metric", details)
+            self.assertTrue(math.isfinite(details["loss"]["mean"]))
+        for group_name in ("smooth_high_confidence", "rim_or_steep_slope", "low_observation_count", "mixed_risk"):
+            self.assertIn(group_name, selection["per_group_winners"])
+        for text in (
+            "## Architecture Selection Gate",
+            "recommended_architecture",
+            "inconclusive",
+            "selection_metric",
+            "baseline_delta_distribution",
+            "mask_stress_sample_count",
+            "not real-world generalization benchmark",
+        ):
+            self.assertIn(text, report)
+
+    def test_selection_decision_is_inconclusive_when_margin_is_within_seed_variance(self):
+        from model_explorer.data.evaluation_matrix import _selection_decision
+
+        decision = _selection_decision(
+            {
+                "mlp_v1": {"count": 3, "mean": 0.50, "std": 0.10, "min": 0.40, "max": 0.60},
+                "mlp_missing_v1": {"count": 3, "mean": 0.54, "std": 0.08, "min": 0.46, "max": 0.62},
+                "candidate_attention_v1": {"count": 3, "mean": 0.49, "std": 0.07, "min": 0.42, "max": 0.56},
+            },
+            metric="torch_policy.final_coverage_rate",
+            mode="max",
+            uncertainty_multiplier=1.0,
+        )
+
+        self.assertEqual(decision["status"], "inconclusive")
+        self.assertIsNone(decision["recommended_architecture"])
+        self.assertEqual(decision["decision"], "inconclusive")
+        self.assertIn("within seed variance", decision["reason"])
+
     def test_matrix_report_warns_when_dataset_has_no_mask_stress_samples(self):
         try:
             import torch  # noqa: F401
@@ -740,6 +837,7 @@ def _write_fixture_matrix_manifest(
     seeds: list[int] | None = None,
     all_reachable: bool = False,
     mask_stress: bool = False,
+    selection: bool = False,
     dataset_validation_overrides: dict[str, object] | None = None,
 ) -> Path:
     try:
@@ -816,6 +914,8 @@ def _write_fixture_matrix_manifest(
                 "min_mask_stress_sample_count": 1,
             }
         )
+    if selection:
+        dataset_validation.update({"min_roi_group_count": 4})
     if dataset_validation_overrides:
         dataset_validation.update(dataset_validation_overrides)
     matrix_manifest = root / "matrix.json"
@@ -842,6 +942,36 @@ def _write_fixture_matrix_manifest(
                     },
                     {"name": "rim_or_steep_slope", "split": "train", "roi_x": 4, "roi_y": 4, "roi_width": 4, "roi_height": 4},
                     {"name": "low_observation_count", "split": "validation", "roi_x": 4, "roi_y": 0, "roi_width": 4, "roi_height": 4},
+                    *(
+                        [
+                            {
+                                "name": "smooth_high_confidence",
+                                "split": "validation",
+                                "roi_x": 0,
+                                "roi_y": 0,
+                                "roi_width": 4,
+                                "roi_height": 4,
+                            },
+                            {
+                                "name": "rim_or_steep_slope",
+                                "split": "validation",
+                                "roi_x": 4,
+                                "roi_y": 4,
+                                "roi_width": 4,
+                                "roi_height": 4,
+                            },
+                            {
+                                "name": "mixed_risk",
+                                "split": "validation",
+                                "roi_x": 0,
+                                "roi_y": 4,
+                                "roi_width": 4,
+                                "roi_height": 4,
+                            },
+                        ]
+                        if selection
+                        else []
+                    ),
                     {"name": "mixed_risk", "split": "test", "roi_x": 0, "roi_y": 4, "roi_width": 4, "roi_height": 4},
                     {"name": "mixed_risk", "split": "benchmark", "roi_x": 0, "roi_y": 4, "roi_width": 4, "roi_height": 4, "seed": 41},
                 ],
@@ -851,6 +981,17 @@ def _write_fixture_matrix_manifest(
                     "unreachable_candidate_count": 1,
                     "missing_experimental_fields": ["risk", "path_cost", "energy_cost"],
                 } if mask_stress else {"enabled": False},
+                "selection": {
+                    "enabled": True,
+                    "metric": "torch_policy.final_coverage_rate",
+                    "mode": "max",
+                    "min_seed_count": 2,
+                    "min_architecture_count": 3,
+                    "min_roi_group_count": 4,
+                    "min_unreachable_candidate_count": 1,
+                    "min_mask_stress_sample_count": 1,
+                    "uncertainty_multiplier": 1.0,
+                } if selection else {"enabled": False},
                 "dataset_validation": dataset_validation,
                 "train": {
                     "seed": 31,

@@ -56,6 +56,7 @@ class QuasiRealEvaluationManifest:
     output_root: Path
     rois: tuple[RoiSpec, ...]
     mask_stress_config: dict[str, Any]
+    selection_config: dict[str, Any]
     dataset_validation: dict[str, Any]
     train_config: dict[str, Any]
     planner_config: dict[str, Any]
@@ -210,6 +211,7 @@ def load_quasi_real_evaluation_manifest(path: str | Path) -> QuasiRealEvaluation
         output_root=_resolve_path(base_dir, payload.get("output_root", "data/processed/quasi_real/evaluation-matrix")),
         rois=rois,
         mask_stress_config=_normalize_mask_stress_config(payload.get("mask_stress", {})),
+        selection_config=_normalize_selection_config(payload.get("selection", {})),
         dataset_validation=dict(payload.get("dataset_validation", {})),
         train_config=dict(payload.get("train", _default_train_config(seed))),
         planner_config=dict(payload.get("planner", {"backend": "contract_cost"})),
@@ -282,6 +284,7 @@ def _inspection_summary(
         "splits": split_counts,
         "architectures": list(manifest.train_config.get("architectures", [manifest.train_config.get("architecture", "mlp_v1")])),
         "mask_stress": _mask_stress_summary(manifest.mask_stress_config),
+        "selection": _selection_config_summary(manifest.selection_config),
         "dataset_validation": data_validation,
         "quality_gates": dict(manifest.dataset_validation),
     }
@@ -328,6 +331,7 @@ def _run_summary(
     experiment_manifest_path: Path,
     experiment_summary: dict[str, Any],
 ) -> dict[str, Any]:
+    stability_summary = _stability_summary(experiment_summary)
     return {
         "status": "completed",
         "schema_version": QUASI_REAL_EVALUATION_SCHEMA_VERSION,
@@ -349,7 +353,12 @@ def _run_summary(
         "experiment_manifest": str(experiment_manifest_path),
         "experiment": experiment_summary,
         "coverage_warnings": _coverage_warnings(experiment_summary.get("dataset_summary", {})),
-        "stability_summary": _stability_summary(experiment_summary),
+        "stability_summary": stability_summary,
+        "architecture_selection": _architecture_selection_summary(
+            manifest,
+            experiment_summary,
+            stability_summary=stability_summary,
+        ),
     }
 
 
@@ -439,6 +448,89 @@ def _markdown_report(summary: dict[str, Any]) -> str:
             lines.append(f"- {warning}")
     else:
         lines.append("- none")
+    selection = summary.get("architecture_selection", {})
+    if isinstance(selection, dict):
+        lines.extend(["", "## Architecture Selection Gate", "", "| field | value |", "|---|---|"])
+        for key in (
+            "enabled",
+            "status",
+            "decision",
+            "recommended_architecture",
+            "metric",
+            "mode",
+            "reason",
+            "decision_boundary",
+            "baseline_delta_distribution",
+        ):
+            value = selection.get(key)
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value, ensure_ascii=False, sort_keys=True)
+            lines.append(f"| {key} | {value} |")
+        quality = selection.get("quality_gates", {})
+        if isinstance(quality, dict):
+            lines.append(f"| quality_gate_status | {quality.get('status', 'unknown')} |")
+            violations = quality.get("violations", [])
+            if isinstance(violations, list):
+                lines.append(f"| quality_gate_violation_count | {len(violations)} |")
+        mask_coverage = selection.get("mask_stress_coverage", {})
+        if isinstance(mask_coverage, dict):
+            for key in (
+                "unreachable_candidate_count",
+                "padding_candidate_count",
+                "missing_experimental_feature_candidate_count",
+                "mask_stress_sample_count",
+            ):
+                lines.append(f"| {key} | {mask_coverage.get(key, 0)} |")
+        architectures = selection.get("architectures", {})
+        if isinstance(architectures, dict) and architectures:
+            lines.extend(
+                [
+                    "",
+                    "### Architecture Selection Metrics",
+                    "",
+                    "| architecture | run_count | exception_count | failure_count_mean | selection_metric_mean | selection_metric_std | loss_mean | loss_std |",
+                    "|---|---:|---:|---:|---:|---:|---:|---:|",
+                ]
+            )
+            for architecture, details in architectures.items():
+                if not isinstance(details, dict):
+                    continue
+                metric_stats = details.get("selection_metric", {})
+                loss_stats = details.get("loss", {})
+                failure_stats = details.get("failure_count", {})
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        (
+                            str(architecture),
+                            str(details.get("run_count", 0)),
+                            str(details.get("exception_count", 0)),
+                            str(failure_stats.get("mean", 0.0) if isinstance(failure_stats, dict) else 0.0),
+                            str(metric_stats.get("mean", 0.0) if isinstance(metric_stats, dict) else 0.0),
+                            str(metric_stats.get("std", 0.0) if isinstance(metric_stats, dict) else 0.0),
+                            str(loss_stats.get("mean", 0.0) if isinstance(loss_stats, dict) else 0.0),
+                            str(loss_stats.get("std", 0.0) if isinstance(loss_stats, dict) else 0.0),
+                        )
+                    )
+                    + " |"
+                )
+        per_group = selection.get("per_group_winners", {})
+        if isinstance(per_group, dict) and per_group:
+            lines.extend(
+                [
+                    "",
+                    "### Architecture Per-Group Winners",
+                    "",
+                    "| group | winner | reason |",
+                    "|---|---|---|",
+                ]
+            )
+            for group_name, winner in per_group.items():
+                if not isinstance(winner, dict):
+                    continue
+                lines.append(
+                    f"| {group_name} | {winner.get('decision', winner.get('recommended_architecture'))} | {winner.get('reason', '')} |"
+                )
     quality_gates = summary.get("quality_gates", {})
     lines.extend(["", "## Quality Gates", "", "| gate | value |", "|---|---:|"])
     if isinstance(quality_gates, dict) and quality_gates:
@@ -669,6 +761,36 @@ def _mask_stress_metadata(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_selection_config(value: Any) -> dict[str, Any]:
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError("selection must be an object")
+    mode = str(value.get("mode", "max"))
+    if mode not in {"max", "min"}:
+        raise ValueError("selection.mode must be 'max' or 'min'")
+    return {
+        "enabled": bool(value.get("enabled", False)),
+        "metric": str(value.get("metric", "torch_policy.final_coverage_rate")),
+        "mode": mode,
+        "min_seed_count": _optional_selection_int(value, "min_seed_count"),
+        "min_architecture_count": _optional_selection_int(value, "min_architecture_count"),
+        "min_roi_group_count": _optional_selection_int(value, "min_roi_group_count"),
+        "min_unreachable_candidate_count": _optional_selection_int(value, "min_unreachable_candidate_count"),
+        "min_mask_stress_sample_count": _optional_selection_int(value, "min_mask_stress_sample_count"),
+        "uncertainty_multiplier": float(value.get("uncertainty_multiplier", 1.0)),
+    }
+
+
+def _optional_selection_int(value: dict[str, Any], key: str) -> int | None:
+    return None if value.get(key) is None else int(value[key])
+
+
+def _selection_config_summary(config: dict[str, Any]) -> dict[str, Any]:
+    normalized = _normalize_selection_config(config)
+    return {key: value for key, value in normalized.items() if value is not None}
+
+
 def _apply_mask_stress_to_scenario_json(path: Path, config: dict[str, Any]) -> None:
     normalized = _normalize_mask_stress_config(config)
     if not bool(normalized["enabled"]):
@@ -751,6 +873,409 @@ def _coverage_warnings(dataset_summary: Any) -> list[str]:
     return warnings
 
 
+def _architecture_selection_summary(
+    manifest: QuasiRealEvaluationManifest,
+    experiment: Any,
+    *,
+    stability_summary: dict[str, Any],
+) -> dict[str, Any]:
+    config = _normalize_selection_config(manifest.selection_config)
+    metric = str(config["metric"])
+    mode = str(config["mode"])
+    runs = _training_runs(experiment)
+    architectures = _manifest_architectures(manifest)
+    seeds = _manifest_seeds(manifest)
+    dataset_summary = experiment.get("dataset_summary", {}) if isinstance(experiment, dict) else {}
+    per_architecture_values: dict[str, list[float]] = {architecture: [] for architecture in architectures}
+    loss_values: dict[str, list[float]] = {architecture: [] for architecture in architectures}
+    exception_counts: dict[str, int] = {architecture: 0 for architecture in architectures}
+
+    for run in runs:
+        architecture = str(run.get("architecture", "unknown")) if isinstance(run, dict) else "unknown"
+        if architecture not in per_architecture_values:
+            per_architecture_values[architecture] = []
+            loss_values[architecture] = []
+            exception_counts[architecture] = 0
+        if not isinstance(run, dict):
+            exception_counts[architecture] += 1
+            continue
+        if "error" in run or "exception" in run:
+            exception_counts[architecture] += 1
+        _append_metric({architecture: per_architecture_values[architecture]}, architecture, _run_selection_metric(run, metric))
+        _append_metric({architecture: loss_values[architecture]}, architecture, run.get("loss"))
+
+    metric_stats = {
+        architecture: _numeric_summary(tuple(values))
+        for architecture, values in per_architecture_values.items()
+    }
+    loss_stats = {
+        architecture: _numeric_summary(tuple(values))
+        for architecture, values in loss_values.items()
+    }
+    quality_gates = _selection_quality_gates(
+        config,
+        architectures=architectures,
+        seeds=seeds,
+        runs=runs,
+        metric_stats=metric_stats,
+        loss_stats=loss_stats,
+        exception_counts=exception_counts,
+        dataset_summary=dataset_summary,
+    )
+    architecture_stability = (
+        stability_summary.get("architectures", {}) if isinstance(stability_summary, dict) else {}
+    )
+    architecture_details = {}
+    for architecture in architectures:
+        stability_metrics = architecture_stability.get(architecture, {}) if isinstance(architecture_stability, dict) else {}
+        architecture_details[architecture] = {
+            "run_count": _architecture_run_count(runs, architecture),
+            "exception_count": exception_counts.get(architecture, 0),
+            "failure_count": (
+                stability_metrics.get("torch_policy.failure_count", _numeric_summary(()))
+                if isinstance(stability_metrics, dict)
+                else _numeric_summary(())
+            ),
+            "selection_metric": metric_stats.get(architecture, _numeric_summary(())),
+            "loss": loss_stats.get(architecture, _numeric_summary(())),
+            "baseline_deltas": (
+                stability_summary.get("baseline_deltas", {}).get(architecture, {})
+                if isinstance(stability_summary.get("baseline_deltas", {}), dict)
+                else {}
+            ),
+            "dataset": {
+                key: stability_metrics.get(f"dataset.{key}", {})
+                for key in (
+                    "unreachable_candidate_count",
+                    "padding_candidate_count",
+                    "missing_experimental_feature_candidate_count",
+                    "mask_stress_sample_count",
+                )
+            }
+            if isinstance(stability_metrics, dict)
+            else {},
+        }
+
+    base_summary: dict[str, Any] = {
+        "enabled": bool(config["enabled"]),
+        "metric": metric,
+        "mode": mode,
+        "decision_boundary": "recommended_architecture or inconclusive based on seed variance",
+        "quality_gates": quality_gates,
+        "architectures": architecture_details,
+        "loss_distribution": stability_summary.get("loss_distribution", {}) if isinstance(stability_summary, dict) else {},
+        "baseline_delta_distribution": (
+            stability_summary.get("baseline_deltas", {}) if isinstance(stability_summary, dict) else {}
+        ),
+        "per_group_winners": _per_group_architecture_winners(
+            runs,
+            metric=metric,
+            mode=mode,
+            uncertainty_multiplier=float(config["uncertainty_multiplier"]),
+        ),
+        "mask_stress_coverage": _mask_stress_coverage(dataset_summary),
+        "evaluation_scope": EVALUATION_SCOPE,
+    }
+    if not bool(config["enabled"]):
+        base_summary.update(
+            {
+                "status": "not_configured",
+                "decision": "inconclusive",
+                "recommended_architecture": None,
+                "reason": "selection.enabled is false",
+            }
+        )
+        return base_summary
+    if quality_gates["status"] != "passed":
+        base_summary.update(
+            {
+                "status": "failed",
+                "decision": "inconclusive",
+                "recommended_architecture": None,
+                "reason": "selection quality gates failed",
+            }
+        )
+        return base_summary
+    decision = _selection_decision(
+        metric_stats,
+        metric=metric,
+        mode=mode,
+        uncertainty_multiplier=float(config["uncertainty_multiplier"]),
+    )
+    base_summary.update(decision)
+    return base_summary
+
+
+def _training_runs(experiment: Any) -> list[dict[str, Any]]:
+    if not isinstance(experiment, dict):
+        return []
+    training = experiment.get("training", {})
+    runs = training.get("runs", []) if isinstance(training, dict) else []
+    return [run for run in runs if isinstance(run, dict)] if isinstance(runs, list) else []
+
+
+def _manifest_architectures(manifest: QuasiRealEvaluationManifest) -> list[str]:
+    raw = manifest.train_config.get("architectures")
+    if isinstance(raw, list) and raw:
+        return [str(architecture) for architecture in raw]
+    architecture = manifest.train_config.get("architecture", "mlp_v1")
+    return ["mlp_v1" if architecture is None or str(architecture).strip() == "" else str(architecture)]
+
+
+def _manifest_seeds(manifest: QuasiRealEvaluationManifest) -> list[int]:
+    raw = manifest.train_config.get("seeds")
+    if isinstance(raw, list) and raw:
+        return [int(seed) for seed in raw]
+    return [int(manifest.train_config.get("seed", 0))]
+
+
+def _architecture_run_count(runs: list[dict[str, Any]], architecture: str) -> int:
+    return sum(1 for run in runs if str(run.get("architecture", "unknown")) == architecture)
+
+
+def _run_selection_metric(run: dict[str, Any], metric: str) -> Any:
+    if metric in run:
+        return run.get(metric)
+    evaluation = run.get("validation_evaluation", {})
+    return _evaluation_metric(evaluation, metric)
+
+
+def _evaluation_metric(evaluation: Any, metric: str) -> Any:
+    if not isinstance(evaluation, dict):
+        return None
+    if "aggregate" in evaluation and isinstance(evaluation["aggregate"], dict):
+        evaluation = evaluation["aggregate"]
+    parts = metric.split(".")
+    if len(parts) == 1:
+        return evaluation.get(parts[0]) if isinstance(evaluation, dict) else None
+    current: Any = evaluation
+    for part in parts:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    return current
+
+
+def _selection_quality_gates(
+    config: dict[str, Any],
+    *,
+    architectures: list[str],
+    seeds: list[int],
+    runs: list[dict[str, Any]],
+    metric_stats: dict[str, dict[str, Any]],
+    loss_stats: dict[str, dict[str, Any]],
+    exception_counts: dict[str, int],
+    dataset_summary: Any,
+) -> dict[str, Any]:
+    violations: list[dict[str, Any]] = []
+    dataset_summary = dataset_summary if isinstance(dataset_summary, dict) else {}
+    _append_selection_min_violation(violations, "min_seed_count", len(seeds), config.get("min_seed_count"))
+    _append_selection_min_violation(
+        violations,
+        "min_architecture_count",
+        len(architectures),
+        config.get("min_architecture_count"),
+    )
+    _append_selection_min_violation(
+        violations,
+        "min_roi_group_count",
+        _int_value(dataset_summary.get("roi_count")),
+        config.get("min_roi_group_count"),
+    )
+    _append_selection_min_violation(
+        violations,
+        "min_unreachable_candidate_count",
+        _int_value(dataset_summary.get("unreachable_candidate_count")),
+        config.get("min_unreachable_candidate_count"),
+    )
+    _append_selection_min_violation(
+        violations,
+        "min_mask_stress_sample_count",
+        _int_value(dataset_summary.get("mask_stress_sample_count")),
+        config.get("min_mask_stress_sample_count"),
+    )
+    expected_runs_per_architecture = len(seeds)
+    for architecture in architectures:
+        run_count = _architecture_run_count(runs, architecture)
+        if run_count < expected_runs_per_architecture:
+            violations.append(
+                {
+                    "gate": "architecture_run_count",
+                    "architecture": architecture,
+                    "expected": expected_runs_per_architecture,
+                    "actual": run_count,
+                    "message": (
+                        f"architecture_run_count expected >= {expected_runs_per_architecture}, "
+                        f"actual {run_count} for {architecture}"
+                    ),
+                }
+            )
+        if exception_counts.get(architecture, 0) > 0:
+            violations.append(
+                {
+                    "gate": "exception_count",
+                    "architecture": architecture,
+                    "expected": 0,
+                    "actual": exception_counts.get(architecture, 0),
+                    "message": f"exception_count expected 0 for {architecture}",
+                }
+            )
+        if loss_stats.get(architecture, {}).get("count", 0) < run_count:
+            violations.append(
+                {
+                    "gate": "finite_loss",
+                    "architecture": architecture,
+                    "expected": run_count,
+                    "actual": loss_stats.get(architecture, {}).get("count", 0),
+                    "message": f"finite_loss expected {run_count} finite losses for {architecture}",
+                }
+            )
+        if metric_stats.get(architecture, {}).get("count", 0) < run_count:
+            violations.append(
+                {
+                    "gate": "finite_selection_metric",
+                    "architecture": architecture,
+                    "expected": run_count,
+                    "actual": metric_stats.get(architecture, {}).get("count", 0),
+                    "message": f"finite_selection_metric expected {run_count} finite metrics for {architecture}",
+                }
+            )
+    return {
+        "status": "failed" if violations else "passed",
+        "configured": {key: value for key, value in config.items() if key.startswith("min_") and value is not None},
+        "violations": violations,
+    }
+
+
+def _append_selection_min_violation(
+    violations: list[dict[str, Any]],
+    gate: str,
+    actual: int | float,
+    expected: int | float | None,
+) -> None:
+    if expected is None:
+        return
+    if actual < expected:
+        violations.append(
+            {
+                "gate": gate,
+                "expected": expected,
+                "actual": actual,
+                "message": f"{gate} expected >= {expected}, actual {actual}",
+            }
+        )
+
+
+def _mask_stress_coverage(dataset_summary: Any) -> dict[str, Any]:
+    dataset_summary = dataset_summary if isinstance(dataset_summary, dict) else {}
+    return {
+        "unreachable_candidate_count": _int_value(dataset_summary.get("unreachable_candidate_count")),
+        "padding_candidate_count": _int_value(dataset_summary.get("padding_candidate_count")),
+        "missing_experimental_feature_candidate_count": _int_value(
+            dataset_summary.get("missing_experimental_feature_candidate_count")
+        ),
+        "mask_stress_sample_count": _int_value(dataset_summary.get("mask_stress_sample_count")),
+        "mask_stress_augmented": bool(dataset_summary.get("mask_stress_augmented", False)),
+    }
+
+
+def _selection_decision(
+    architecture_stats: dict[str, dict[str, Any]],
+    *,
+    metric: str,
+    mode: str,
+    uncertainty_multiplier: float,
+) -> dict[str, Any]:
+    candidates = [
+        (architecture, stats)
+        for architecture, stats in architecture_stats.items()
+        if isinstance(stats, dict) and int(stats.get("count", 0)) > 0 and isfinite(float(stats.get("mean", 0.0)))
+    ]
+    if not candidates:
+        return {
+            "status": "inconclusive",
+            "decision": "inconclusive",
+            "recommended_architecture": None,
+            "reason": f"no finite values for {metric}",
+        }
+    reverse = mode == "max"
+    candidates.sort(key=lambda item: float(item[1].get("mean", 0.0)), reverse=reverse)
+    best_architecture, best_stats = candidates[0]
+    if len(candidates) == 1:
+        return {
+            "status": "selected",
+            "decision": str(best_architecture),
+            "recommended_architecture": str(best_architecture),
+            "reason": f"only architecture with finite {metric}",
+        }
+    second_architecture, second_stats = candidates[1]
+    best_mean = float(best_stats.get("mean", 0.0))
+    second_mean = float(second_stats.get("mean", 0.0))
+    margin = best_mean - second_mean if mode == "max" else second_mean - best_mean
+    uncertainty = max(float(best_stats.get("std", 0.0)), float(second_stats.get("std", 0.0))) * uncertainty_multiplier
+    if margin <= uncertainty:
+        return {
+            "status": "inconclusive",
+            "decision": "inconclusive",
+            "recommended_architecture": None,
+            "reason": (
+                f"best {metric} margin {margin} between {best_architecture} and "
+                f"{second_architecture} is within seed variance {uncertainty}"
+            ),
+            "best_candidate": str(best_architecture),
+            "runner_up": str(second_architecture),
+            "margin": margin,
+            "uncertainty": uncertainty,
+        }
+    return {
+        "status": "selected",
+        "decision": str(best_architecture),
+        "recommended_architecture": str(best_architecture),
+        "reason": (
+            f"best {metric} margin {margin} over {second_architecture} exceeds "
+            f"seed variance threshold {uncertainty}"
+        ),
+        "runner_up": str(second_architecture),
+        "margin": margin,
+        "uncertainty": uncertainty,
+    }
+
+
+def _per_group_architecture_winners(
+    runs: list[dict[str, Any]],
+    *,
+    metric: str,
+    mode: str,
+    uncertainty_multiplier: float,
+) -> dict[str, Any]:
+    group_values: dict[str, dict[str, list[float]]] = {}
+    for run in runs:
+        architecture = str(run.get("architecture", "unknown"))
+        evaluation = run.get("validation_evaluation", {})
+        groups = evaluation.get("groups", {}) if isinstance(evaluation, dict) else {}
+        if not isinstance(groups, dict):
+            continue
+        for group_name, group_evaluation in groups.items():
+            value = _evaluation_metric(group_evaluation, metric)
+            group_architectures = group_values.setdefault(str(group_name), {})
+            _append_metric(group_architectures, architecture, value)
+    winners: dict[str, Any] = {}
+    for group_name, architecture_values in group_values.items():
+        stats = {
+            architecture: _numeric_summary(tuple(values))
+            for architecture, values in architecture_values.items()
+        }
+        decision = _selection_decision(
+            stats,
+            metric=metric,
+            mode=mode,
+            uncertainty_multiplier=uncertainty_multiplier,
+        )
+        decision["architectures"] = stats
+        winners[group_name] = decision
+    return winners
+
+
 def _stability_summary(experiment: Any) -> dict[str, Any]:
     if not isinstance(experiment, dict):
         return {"architectures": {}, "loss_distribution": {}, "baseline_deltas": {}}
@@ -782,6 +1307,8 @@ def _stability_summary(experiment: Any) -> dict[str, Any]:
             ):
                 _append_metric(arch_metrics, f"dataset.{metric}", run_dataset.get(metric))
         validation = run.get("validation_evaluation", {})
+        if isinstance(validation, dict) and "aggregate" in validation and isinstance(validation["aggregate"], dict):
+            validation = validation["aggregate"]
         torch_policy = validation.get("torch_policy", {}) if isinstance(validation, dict) else {}
         if isinstance(torch_policy, dict):
             for metric in ("final_coverage_rate", "total_path_cost", "average_risk", "failure_count"):

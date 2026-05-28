@@ -222,6 +222,16 @@ def run_experiment_manifest(path: str | Path) -> dict[str, Any]:
             train_episodes=split_episodes.get("train") if manifest.explicit_splits else None,
             validation_episodes=split_episodes.get("validation") if manifest.explicit_splits else None,
             validation_scenarios=split_scenarios.get("validation") if manifest.explicit_splits else None,
+            validation_groups=(
+                manifest.splits["validation"].scenario_groups
+                if manifest.explicit_splits and "validation" in manifest.splits
+                else None
+            ),
+            validation_paths=(
+                manifest.splits["validation"].scenarios
+                if manifest.explicit_splits and "validation" in manifest.splits
+                else None
+            ),
         )
         if _should_evaluate_trained_policy(manifest.train_config):
             from .training import load_policy_checkpoint
@@ -672,6 +682,8 @@ def _run_training(
     train_episodes: tuple[RolloutEpisode, ...] | None = None,
     validation_episodes: tuple[RolloutEpisode, ...] | None = None,
     validation_scenarios: tuple[Scenario, ...] | None = None,
+    validation_groups: tuple[ExperimentScenarioGroup, ...] | None = None,
+    validation_paths: tuple[Path, ...] | None = None,
 ) -> dict[str, Any]:
     from .training import train_policy_on_episodes
 
@@ -755,13 +767,27 @@ def _run_training(
             result["validation_episode_count"] = len(validation_episodes)
             if evaluation_scenarios:
                 trained_policy = load_policy_checkpoint(checkpoint)
-                validation_evaluation = evaluate_policy_baseline_scenarios(
+                aggregate_validation_evaluation = evaluate_policy_baseline_scenarios(
                     evaluation_scenarios,
                     torch_policy=trained_policy,
                     planning_adapter=planner,
                 )
+                validation_evaluation = (
+                    _grouped_evaluation(
+                        validation_groups,
+                        evaluation_scenarios,
+                        validation_paths or (),
+                        planner=planner,
+                        aggregate=aggregate_validation_evaluation,
+                        torch_policy=trained_policy,
+                    )
+                    if validation_groups and validation_paths
+                    else aggregate_validation_evaluation
+                )
                 result["validation_evaluation"] = validation_evaluation
-                result["baseline_deltas"] = _baseline_deltas(validation_evaluation).get("torch_policy", {})
+                result["baseline_deltas"] = _baseline_deltas(
+                    _comparison_from_evaluation(validation_evaluation)
+                ).get("torch_policy", {})
                 validation_output = checkpoint.parent / "validation-evaluation.json"
                 _write_json(validation_output, validation_evaluation)
                 result["validation_evaluation_output"] = str(validation_output)
@@ -925,6 +951,7 @@ def _training_run_metric(run: dict[str, Any], *, policy: str, metric: str) -> fl
     evaluation = run.get("validation_evaluation", {})
     if not isinstance(evaluation, dict):
         return float("-inf")
+    evaluation = _comparison_from_evaluation(evaluation)
     policy_metrics = evaluation.get(policy, {})
     if not isinstance(policy_metrics, dict):
         return float("-inf")
@@ -941,6 +968,7 @@ def _multi_seed_evaluation_summary(runs: list[dict[str, Any]]) -> dict[str, Any]
         evaluation = run.get("validation_evaluation", {})
         if not isinstance(evaluation, dict):
             continue
+        evaluation = _comparison_from_evaluation(evaluation)
         for policy, metrics in evaluation.items():
             if not isinstance(metrics, dict):
                 continue
@@ -992,6 +1020,7 @@ def _multi_seed_delta_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
         evaluation = run.get("validation_evaluation", {})
         if not isinstance(evaluation, dict):
             continue
+        evaluation = _comparison_from_evaluation(evaluation)
         deltas = _baseline_deltas(evaluation).get("torch_policy", {})
         if not isinstance(deltas, dict):
             continue
