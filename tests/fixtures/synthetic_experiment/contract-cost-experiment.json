@@ -1,0 +1,11 @@
+{
+  "schema_version": "model-explorer-experiment/v1",
+  "scenarios": ["scenario-a.json", "scenario-b.json"],
+  "planner": {
+    "backend": "contract_cost"
+  },
+  "outputs": {
+    "rollouts": "out/contract-cost-rollouts.jsonl",
+    "evaluation": "out/contract-cost-evaluation.json"
+  }
+}

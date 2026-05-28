@@ -16,6 +16,7 @@ if str(SRC) not in sys.path:
 DEV_PLATFORM_CONTRACT_EXAMPLE = (
     ROOT.parent / "dev-platform-constraints" / "docs" / "model-explorer-contract-example.json"
 )
+SYNTHETIC_EXPERIMENT_FIXTURE = ROOT / "tests" / "fixtures" / "synthetic_experiment"
 
 from model_explorer.core.interfaces import ContractValidationError
 from model_explorer.decision.selector import select_goal
@@ -1322,6 +1323,131 @@ class BaselineEvaluationTests(unittest.TestCase):
         self.assertEqual(report["utility"]["replan_count"], 1)
 
 
+class ExperimentManifestTests(unittest.TestCase):
+    def test_manifest_accepts_optional_v1_schema_and_rejects_unknown_schema(self):
+        from model_explorer.policy.experiment import load_experiment_manifest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scenario_path = Path(tmpdir) / "scenario.json"
+            rollout_path = Path(tmpdir) / "rollouts.jsonl"
+            evaluation_path = Path(tmpdir) / "evaluation.json"
+            scenario_path.write_text(json.dumps(minimal_contract()), encoding="utf-8")
+            valid_manifest_path = Path(tmpdir) / "valid.json"
+            valid_manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "model-explorer-experiment/v1",
+                        "scenarios": [str(scenario_path)],
+                        "planner": {"backend": "contract_cost"},
+                        "outputs": {
+                            "rollouts": str(rollout_path),
+                            "evaluation": str(evaluation_path),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            legacy_manifest_path = Path(tmpdir) / "legacy.json"
+            legacy_manifest_path.write_text(
+                json.dumps(
+                    {
+                        "scenarios": [str(scenario_path)],
+                        "outputs": {
+                            "rollouts": str(rollout_path),
+                            "evaluation": str(evaluation_path),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            invalid_manifest_path = Path(tmpdir) / "invalid.json"
+            invalid_manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "model-explorer-experiment/v2",
+                        "scenarios": [str(scenario_path)],
+                        "outputs": {
+                            "rollouts": str(rollout_path),
+                            "evaluation": str(evaluation_path),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            valid_manifest = load_experiment_manifest(valid_manifest_path)
+            legacy_manifest = load_experiment_manifest(legacy_manifest_path)
+
+            with self.assertRaisesRegex(ValueError, "schema_version"):
+                load_experiment_manifest(invalid_manifest_path)
+
+        self.assertEqual(valid_manifest.schema_version, "model-explorer-experiment/v1")
+        self.assertEqual(legacy_manifest.schema_version, "model-explorer-experiment/v1")
+
+    def test_manifest_reports_missing_required_fields(self):
+        from model_explorer.policy.experiment import load_experiment_manifest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_scenarios_path = Path(tmpdir) / "missing-scenarios.json"
+            missing_scenarios_path.write_text(
+                json.dumps({"outputs": {"rollouts": "rollouts.jsonl", "evaluation": "evaluation.json"}}),
+                encoding="utf-8",
+            )
+            missing_rollouts_path = Path(tmpdir) / "missing-rollouts.json"
+            missing_rollouts_path.write_text(
+                json.dumps({"scenarios": ["scenario.json"], "outputs": {"evaluation": "evaluation.json"}}),
+                encoding="utf-8",
+            )
+            missing_evaluation_path = Path(tmpdir) / "missing-evaluation.json"
+            missing_evaluation_path.write_text(
+                json.dumps({"scenarios": ["scenario.json"], "outputs": {"rollouts": "rollouts.jsonl"}}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "scenarios"):
+                load_experiment_manifest(missing_scenarios_path)
+            with self.assertRaisesRegex(ValueError, "outputs.rollouts"):
+                load_experiment_manifest(missing_rollouts_path)
+            with self.assertRaisesRegex(ValueError, "outputs.evaluation"):
+                load_experiment_manifest(missing_evaluation_path)
+
+    def test_experiment_fixture_assets_are_reproducible_and_runnable(self):
+        from model_explorer.policy.experiment import run_experiment_manifest
+
+        manifest_path = SYNTHETIC_EXPERIMENT_FIXTURE / "experiment.json"
+        sidecar_path = SYNTHETIC_EXPERIMENT_FIXTURE / "sidecar-grid.json"
+        contract_cost_manifest = SYNTHETIC_EXPERIMENT_FIXTURE / "contract-cost-experiment.json"
+        straight_line_manifest = SYNTHETIC_EXPERIMENT_FIXTURE / "straight-line-experiment.json"
+
+        self.assertTrue(manifest_path.exists())
+        self.assertTrue(sidecar_path.exists())
+        self.assertTrue(contract_cost_manifest.exists())
+        self.assertTrue(straight_line_manifest.exists())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            temp_manifest_path = Path(tmpdir) / "experiment.json"
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            payload["scenarios"] = [
+                str((SYNTHETIC_EXPERIMENT_FIXTURE / path).resolve())
+                for path in payload["scenarios"]
+            ]
+            payload["planner"]["sidecar_grid"] = str(
+                (SYNTHETIC_EXPERIMENT_FIXTURE / payload["planner"]["sidecar_grid"]).resolve()
+            )
+            payload["outputs"] = {
+                "rollouts": str(Path(tmpdir) / "rollouts.jsonl"),
+                "evaluation": str(Path(tmpdir) / "evaluation.json"),
+                "report": str(Path(tmpdir) / "report.md"),
+            }
+            temp_manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+            summary = run_experiment_manifest(temp_manifest_path)
+
+        self.assertEqual(summary["planner"], "grid_astar")
+        self.assertEqual(summary["scenario_count"], 2)
+        self.assertGreater(summary["transition_count"], 0)
+
+
 class PolicyScriptTests(unittest.TestCase):
     def test_collect_rollout_script_writes_episode_json(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1618,6 +1744,242 @@ class PolicyScriptTests(unittest.TestCase):
         self.assertEqual(len(rollout_lines), 2)
         self.assertIn("utility", evaluation)
         self.assertIn("coverage_heuristic", evaluation)
+
+    def test_experiment_runner_writes_markdown_report_with_core_metrics(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scenario_path = Path(tmpdir) / "scenario.json"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            rollout_path = Path(tmpdir) / "rollouts.jsonl"
+            evaluation_path = Path(tmpdir) / "evaluation.json"
+            report_path = Path(tmpdir) / "report.md"
+            scenario_path.write_text(
+                json.dumps(
+                    minimal_contract(
+                        goals=[{"cell": [2, 1], "utility": 0.4, "reachable": True, "path_cost": 2.0}],
+                        observation_update={
+                            "coverage_rate": 0.25,
+                            "coverage_rate_delta": 0.1,
+                            "value_coverage": 0.3,
+                        },
+                    )
+                ),
+                encoding="utf-8",
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "model-explorer-experiment/v1",
+                        "scenarios": [str(scenario_path)],
+                        "planner": {"backend": "contract_cost"},
+                        "outputs": {
+                            "rollouts": str(rollout_path),
+                            "evaluation": str(evaluation_path),
+                            "report": str(report_path),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "run_experiment.py"), str(manifest_path)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            summary = json.loads(completed.stdout)
+            report = report_path.read_text(encoding="utf-8")
+
+        self.assertEqual(summary["report_output"], str(report_path))
+        for metric_name in (
+            "final_coverage_rate",
+            "cumulative_coverage_rate_delta",
+            "total_path_cost",
+            "average_risk",
+            "failure_count",
+            "replan_count",
+            "value_coverage",
+        ):
+            self.assertIn(metric_name, report)
+        self.assertIn("| utility |", report)
+        self.assertIn("| coverage_heuristic |", report)
+
+    def test_experiment_runner_supports_scenario_groups_and_per_scenario_metrics(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            first_scenario_path = Path(tmpdir) / "scenario-a.json"
+            second_scenario_path = Path(tmpdir) / "scenario-b.json"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            evaluation_path = Path(tmpdir) / "evaluation.json"
+            first_scenario_path.write_text(
+                json.dumps(
+                    minimal_contract(
+                        goals=[{"cell": [1, 1], "utility": 0.5, "reachable": True}],
+                        observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.1},
+                    )
+                ),
+                encoding="utf-8",
+            )
+            second_scenario_path.write_text(
+                json.dumps(
+                    minimal_contract(
+                        goals=[{"cell": [3, 2], "utility": 0.4, "reachable": True}],
+                        observation_update={"coverage_rate": 0.3, "coverage_rate_delta": 0.2},
+                    )
+                ),
+                encoding="utf-8",
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "scenario_groups": [
+                            {"name": "alpha", "scenarios": [str(first_scenario_path)]},
+                            {"name": "beta", "scenarios": [str(second_scenario_path)]},
+                        ],
+                        "planner": {"backend": "straight_line"},
+                        "outputs": {
+                            "rollouts": str(Path(tmpdir) / "rollouts.jsonl"),
+                            "evaluation": str(evaluation_path),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "run_experiment.py"), str(manifest_path)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            summary = json.loads(completed.stdout)
+            evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(summary["scenario_count"], 2)
+        self.assertEqual(summary["group_count"], 2)
+        self.assertEqual([item["name"] for item in summary["groups"]], ["alpha", "beta"])
+        self.assertIn("aggregate", evaluation)
+        self.assertEqual(len(evaluation["per_scenario"]), 2)
+        self.assertIn("alpha", evaluation["groups"])
+        self.assertIn("beta", evaluation["groups"])
+
+    def test_experiment_runner_outputs_reward_ablations(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scenario_path = Path(tmpdir) / "scenario.json"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            scenario_path.write_text(
+                json.dumps(
+                    minimal_contract(
+                        goals=[{"cell": [3, 1], "utility": 0.5, "reachable": True}],
+                        observation_update={"coverage_rate": 1.0, "coverage_rate_delta": 1.0},
+                    )
+                ),
+                encoding="utf-8",
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "scenarios": [str(scenario_path)],
+                        "planner": {"backend": "straight_line"},
+                        "reward_ablations": [
+                            {"name": "default", "reward": {}},
+                            {
+                                "name": "high_path_penalty",
+                                "reward": {"path_cost_weight": 1.0, "path_cost_normalizer": 1.0},
+                            },
+                        ],
+                        "outputs": {
+                            "rollouts": str(Path(tmpdir) / "rollouts.jsonl"),
+                            "evaluation": str(Path(tmpdir) / "evaluation.json"),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "run_experiment.py"), str(manifest_path)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+        summary = json.loads(completed.stdout)
+        default_reward = summary["reward_ablations"]["default"]["rollout_metrics"]["total_reward"]
+        high_penalty_reward = summary["reward_ablations"]["high_path_penalty"]["rollout_metrics"]["total_reward"]
+        self.assertLess(high_penalty_reward, default_reward)
+
+    @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not available")
+    def test_experiment_runner_train_block_writes_checkpoint_and_loss_log(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scenario_path = Path(tmpdir) / "scenario-a.json"
+            second_scenario_path = Path(tmpdir) / "scenario-b.json"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            checkpoint_path = Path(tmpdir) / "policy.pt"
+            loss_log_path = Path(tmpdir) / "losses.jsonl"
+            scenario_payload = minimal_contract(
+                goals=[
+                    {"cell": [1, 1], "utility": 0.5, "reachable": True},
+                    {"cell": [2, 1], "utility": 10.0, "reachable": False},
+                ],
+                observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.1},
+            )
+            scenario_path.write_text(json.dumps(scenario_payload), encoding="utf-8")
+            second_scenario_path.write_text(json.dumps(scenario_payload), encoding="utf-8")
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "scenarios": [str(scenario_path), str(second_scenario_path)],
+                        "max_candidates": 2,
+                        "planner": {"backend": "contract_cost"},
+                        "outputs": {
+                            "rollouts": str(Path(tmpdir) / "rollouts.jsonl"),
+                            "evaluation": str(Path(tmpdir) / "evaluation.json"),
+                        },
+                        "train": {
+                            "checkpoint": str(checkpoint_path),
+                            "loss_log": str(loss_log_path),
+                            "seed": 19,
+                            "hidden_size": 16,
+                            "epochs": 1,
+                            "validation_fraction": 0.5,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            completed = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "run_experiment.py"), str(manifest_path)],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            summary = json.loads(completed.stdout)
+            checkpoint_exists = checkpoint_path.exists()
+            loss_lines = loss_log_path.read_text(encoding="utf-8").splitlines()
+            from model_explorer.policy.training import load_policy_checkpoint
+
+            scorer = load_policy_checkpoint(checkpoint_path)
+            decision = select_goal(load_contract_from_dict(scenario_payload), policy=scorer)
+
+        self.assertTrue(checkpoint_exists)
+        self.assertEqual(summary["training"]["sample_count"], 1)
+        self.assertEqual(summary["training"]["train_episode_count"], 1)
+        self.assertEqual(summary["training"]["validation_episode_count"], 1)
+        self.assertEqual(len(loss_lines), 1)
+        self.assertIsNotNone(decision.selected_goal)
+        self.assertNotEqual(decision.selected_goal.cell, (2, 1))
 
 
 class CliTests(unittest.TestCase):

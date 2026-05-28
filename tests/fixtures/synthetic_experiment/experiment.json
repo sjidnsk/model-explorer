@@ -1,0 +1,19 @@
+{
+  "schema_version": "model-explorer-experiment/v1",
+  "scenarios": ["scenario-a.json", "scenario-b.json"],
+  "planner": {
+    "backend": "grid_astar",
+    "sidecar_grid": "sidecar-grid.json"
+  },
+  "reward": {
+    "path_cost_weight": 0.1,
+    "path_cost_normalizer": 100.0,
+    "risk_weight": 0.2,
+    "failure_penalty": 1.0
+  },
+  "outputs": {
+    "rollouts": "out/rollouts.jsonl",
+    "evaluation": "out/evaluation.json",
+    "report": "out/report.md"
+  }
+}
