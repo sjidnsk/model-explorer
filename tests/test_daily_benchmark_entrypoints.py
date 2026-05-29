@@ -573,15 +573,18 @@ class BenchmarkDocumentationTests(unittest.TestCase):
         for text in (
             "Ubuntu 24.04",
             "Python 3.12",
-            "python3.12 -m venv .venv",
-            "pip install -e .",
-            "pip install -e .[training]",
-            "PYTHONPATH=src python -m model_explorer verify",
+            "D:\\conda_envs\\lunar-explorer",
+            "conda activate D:\\conda_envs\\lunar-explorer",
+            "PYTHONPATH=src python -m unittest discover -s tests -v",
+            "不需要安装 `model-explorer` editable 包",
             "默认安装不强制安装 PyTorch",
+            "PYTHONPATH=src python -m model_explorer verify",
             "Windows 本机验证",
             "Ubuntu 目标验证",
         ):
             self.assertIn(text, ubuntu_doc)
+        self.assertNotIn("python3.12 -m venv .venv", ubuntu_doc)
+        self.assertNotIn("pip install -e .", ubuntu_doc)
 
     def test_progress_doc_marks_v1_3_network_architecture_focus_and_has_no_stale_gaps(self):
         progress_doc = (ROOT / "docs" / "network-architecture-v1.1-progress.md").read_text(encoding="utf-8")
