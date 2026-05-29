@@ -531,6 +531,256 @@ def _markdown_report(summary: dict[str, Any]) -> str:
                 lines.append(
                     f"| {group_name} | {winner.get('decision', winner.get('recommended_architecture'))} | {winner.get('reason', '')} |"
                 )
+        decision_diagnostics = selection.get("decision_diagnostics", {})
+        if isinstance(decision_diagnostics, dict):
+            lines.extend(["", "## Policy Decision Diagnostics", "", "- architecture_agreement_matrix: present"])
+            warnings = decision_diagnostics.get("warnings", [])
+            if isinstance(warnings, list) and warnings:
+                for warning in warnings:
+                    lines.append(f"- warning: {warning}")
+            else:
+                lines.append("- warning: none")
+            matrix = decision_diagnostics.get("architecture_agreement_matrix", {})
+            if isinstance(matrix, dict) and matrix:
+                lines.extend(
+                    [
+                        "",
+                        "| left_architecture | right_architecture | compared | agreement_rate |",
+                        "|---|---|---:|---:|",
+                    ]
+                )
+                for left, row in matrix.items():
+                    if not isinstance(row, dict):
+                        continue
+                    for right, cell in row.items():
+                        if not isinstance(cell, dict):
+                            continue
+                        lines.append(
+                            "| "
+                            + " | ".join(
+                                (
+                                    str(left),
+                                    str(right),
+                                    str(cell.get("compared", 0)),
+                                    str(cell.get("agreement_rate", 0.0)),
+                                )
+                            )
+                            + " |"
+                        )
+            baseline_agreement = decision_diagnostics.get("architecture_baseline_agreement", {})
+            if isinstance(baseline_agreement, dict) and baseline_agreement:
+                lines.extend(
+                    [
+                        "",
+                        "| architecture | samples | utility_agreement_rate | coverage_heuristic_agreement_rate |",
+                        "|---|---:|---:|---:|",
+                    ]
+                )
+                for architecture, agreement in baseline_agreement.items():
+                    if not isinstance(agreement, dict):
+                        continue
+                    lines.append(
+                        "| "
+                        + " | ".join(
+                            (
+                                str(architecture),
+                                str(agreement.get("sample_count", 0)),
+                                str(agreement.get("utility_agreement_rate", 0.0)),
+                                str(agreement.get("coverage_heuristic_agreement_rate", 0.0)),
+                            )
+                        )
+                        + " |"
+                    )
+            per_group_disagreement = decision_diagnostics.get("per_group_disagreement", {})
+            if isinstance(per_group_disagreement, dict) and per_group_disagreement:
+                lines.extend(
+                    [
+                        "",
+                        "| group | compared | disagreement_rate |",
+                        "|---|---:|---:|",
+                    ]
+                )
+                for group, disagreement in per_group_disagreement.items():
+                    if not isinstance(disagreement, dict):
+                        continue
+                    lines.append(
+                        f"| {group} | {disagreement.get('compared', 0)} | {disagreement.get('disagreement_rate', 0.0)} |"
+                    )
+        composite_selection = selection.get("composite_selection", {})
+        lines.extend(["", "## Selection Composite Metrics", "", "| field | value |", "|---|---|"])
+        lines.append(
+            "| selection_composite_weights | "
+            + json.dumps(selection.get("selection_composite_weights", {}), ensure_ascii=False, sort_keys=True)
+            + " |"
+        )
+        if isinstance(composite_selection, dict):
+            for key in ("status", "decision", "recommended_architecture", "reason"):
+                lines.append(f"| composite_{key} | {composite_selection.get(key)} |")
+        architectures = selection.get("architectures", {})
+        if isinstance(architectures, dict) and architectures:
+            lines.extend(
+                [
+                    "",
+                    "| architecture | selection_composite_score_mean | selection_composite_score_std |",
+                    "|---|---:|---:|",
+                ]
+            )
+            for architecture, details in architectures.items():
+                if not isinstance(details, dict):
+                    continue
+                composite_stats = details.get("selection_composite_score", {})
+                if not isinstance(composite_stats, dict):
+                    composite_stats = {}
+                lines.append(
+                    f"| {architecture} | {composite_stats.get('mean', 0.0)} | {composite_stats.get('std', 0.0)} |"
+                )
+        action_sensitive = selection.get("action_sensitive_summary", {})
+        if isinstance(action_sensitive, dict):
+            lines.extend(
+                [
+                    "",
+                    "## Action-Sensitive Metrics",
+                    "",
+                    "| architecture | metric | mean | std | min | max | samples |",
+                    "|---|---|---:|---:|---:|---:|---:|",
+                ]
+            )
+            for architecture, metrics in action_sensitive.items():
+                if not isinstance(metrics, dict):
+                    continue
+                for metric, stats in metrics.items():
+                    if not isinstance(stats, dict):
+                        continue
+                    lines.append(
+                        "| "
+                        + " | ".join(
+                            (
+                                str(architecture),
+                                str(metric),
+                                str(stats.get("mean", 0.0)),
+                                str(stats.get("std", 0.0)),
+                                str(stats.get("min", 0.0)),
+                                str(stats.get("max", 0.0)),
+                                str(stats.get("count", 0)),
+                            )
+                        )
+                        + " |"
+                    )
+        oracle_regret = selection.get("oracle_regret_summary", {})
+        if isinstance(oracle_regret, dict):
+            lines.extend(
+                [
+                    "",
+                    "## Oracle Regret Summary",
+                    "",
+                    "| architecture | metric | mean | std | min | max | samples |",
+                    "|---|---|---:|---:|---:|---:|---:|",
+                ]
+            )
+            for architecture, metrics in oracle_regret.items():
+                if not isinstance(metrics, dict):
+                    continue
+                for metric, stats in metrics.items():
+                    if not isinstance(stats, dict):
+                        continue
+                    lines.append(
+                        "| "
+                        + " | ".join(
+                            (
+                                str(architecture),
+                                str(metric),
+                                str(stats.get("mean", 0.0)),
+                                str(stats.get("std", 0.0)),
+                                str(stats.get("min", 0.0)),
+                                str(stats.get("max", 0.0)),
+                                str(stats.get("count", 0)),
+                            )
+                        )
+                        + " |"
+                    )
+        sample_discriminativeness = selection.get("sample_discriminativeness", {})
+        if isinstance(sample_discriminativeness, dict):
+            lines.extend(["", "## Sample Discriminativeness", ""])
+            warnings = sample_discriminativeness.get("warnings", [])
+            lines.append(f"- status: {sample_discriminativeness.get('status', 'unknown')}")
+            if isinstance(warnings, list) and warnings:
+                for warning in warnings:
+                    lines.append(f"- warning: {warning}")
+            else:
+                lines.append("- warning: none")
+            sample_metrics = sample_discriminativeness.get("metrics", {})
+            if isinstance(sample_metrics, dict):
+                lines.extend(["", "| metric | mean | std | min | max | samples |", "|---|---:|---:|---:|---:|---:|"])
+                for metric, stats in sample_metrics.items():
+                    if not isinstance(stats, dict):
+                        continue
+                    lines.append(
+                        "| "
+                        + " | ".join(
+                            (
+                                str(metric),
+                                str(stats.get("mean", 0.0)),
+                                str(stats.get("std", 0.0)),
+                                str(stats.get("min", 0.0)),
+                                str(stats.get("max", 0.0)),
+                                str(stats.get("count", 0)),
+                            )
+                        )
+                        + " |"
+                    )
+        per_group_action = selection.get("per_group_action_outcomes", {})
+        if isinstance(per_group_action, dict):
+            lines.extend(
+                [
+                    "",
+                    "## Per-ROI Action Outcomes",
+                    "",
+                    "| group | decision | architecture | coverage_regret_mean | composite_regret_mean | selected_expected_coverage_delta_mean | reason |",
+                    "|---|---|---|---:|---:|---:|---|",
+                ]
+            )
+            for group_name, group_summary in per_group_action.items():
+                if not isinstance(group_summary, dict):
+                    continue
+                group_architectures = group_summary.get("architectures", {})
+                if not isinstance(group_architectures, dict):
+                    group_architectures = {}
+                for architecture, metrics in group_architectures.items():
+                    if not isinstance(metrics, dict):
+                        continue
+                    coverage_regret = metrics.get("coverage_regret", {})
+                    composite_regret = metrics.get("composite_regret", {})
+                    selected_coverage = metrics.get("selected_expected_coverage_delta", {})
+                    lines.append(
+                        "| "
+                        + " | ".join(
+                            (
+                                str(group_name),
+                                str(group_summary.get("decision", "inconclusive")),
+                                str(architecture),
+                                str(coverage_regret.get("mean", 0.0) if isinstance(coverage_regret, dict) else 0.0),
+                                str(composite_regret.get("mean", 0.0) if isinstance(composite_regret, dict) else 0.0),
+                                str(selected_coverage.get("mean", 0.0) if isinstance(selected_coverage, dict) else 0.0),
+                                str(group_summary.get("reason", "")),
+                            )
+                        )
+                        + " |"
+                    )
+        held_out = selection.get("held_out_test_audit", {})
+        if isinstance(held_out, dict):
+            lines.extend(["", "## Held-out Test Audit", "", "| field | value |", "|---|---|"])
+            for key in (
+                "status",
+                "used_for_selection",
+                "split",
+                "validation_decision",
+                "validation_recommended_architecture",
+                "stable_with_validation",
+                "reason",
+                "evaluation_scope",
+            ):
+                if key in held_out:
+                    lines.append(f"| {key} | {held_out.get(key)} |")
     quality_gates = summary.get("quality_gates", {})
     lines.extend(["", "## Quality Gates", "", "| gate | value |", "|---|---:|"])
     if isinstance(quality_gates, dict) and quality_gates:
@@ -761,6 +1011,16 @@ def _mask_stress_metadata(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+_DEFAULT_SELECTION_COMPOSITE_WEIGHTS = {
+    "final_coverage_rate": 1.0,
+    "cumulative_coverage_rate_delta": 1.0,
+    "value_coverage": 0.25,
+    "total_path_cost": -0.05,
+    "average_risk": -0.25,
+    "failure_count": -1.0,
+}
+
+
 def _normalize_selection_config(value: Any) -> dict[str, Any]:
     if value is None:
         value = {}
@@ -769,6 +1029,13 @@ def _normalize_selection_config(value: Any) -> dict[str, Any]:
     mode = str(value.get("mode", "max"))
     if mode not in {"max", "min"}:
         raise ValueError("selection.mode must be 'max' or 'min'")
+    composite_weights = dict(_DEFAULT_SELECTION_COMPOSITE_WEIGHTS)
+    raw_composite_weights = value.get("composite_weights", {})
+    if raw_composite_weights is not None:
+        if not isinstance(raw_composite_weights, dict):
+            raise ValueError("selection.composite_weights must be an object")
+        for metric, weight in raw_composite_weights.items():
+            composite_weights[str(metric)] = float(weight)
     return {
         "enabled": bool(value.get("enabled", False)),
         "metric": str(value.get("metric", "torch_policy.final_coverage_rate")),
@@ -779,6 +1046,7 @@ def _normalize_selection_config(value: Any) -> dict[str, Any]:
         "min_unreachable_candidate_count": _optional_selection_int(value, "min_unreachable_candidate_count"),
         "min_mask_stress_sample_count": _optional_selection_int(value, "min_mask_stress_sample_count"),
         "uncertainty_multiplier": float(value.get("uncertainty_multiplier", 1.0)),
+        "composite_weights": composite_weights,
     }
 
 
@@ -882,12 +1150,18 @@ def _architecture_selection_summary(
     config = _normalize_selection_config(manifest.selection_config)
     metric = str(config["metric"])
     mode = str(config["mode"])
+    composite_weights = dict(config["composite_weights"])
     runs = _training_runs(experiment)
     architectures = _manifest_architectures(manifest)
     seeds = _manifest_seeds(manifest)
     dataset_summary = experiment.get("dataset_summary", {}) if isinstance(experiment, dict) else {}
     per_architecture_values: dict[str, list[float]] = {architecture: [] for architecture in architectures}
     loss_values: dict[str, list[float]] = {architecture: [] for architecture in architectures}
+    composite_values: dict[str, list[float]] = {architecture: [] for architecture in architectures}
+    composite_component_values: dict[str, dict[str, list[float]]] = {
+        architecture: {metric_name: [] for metric_name in composite_weights}
+        for architecture in architectures
+    }
     exception_counts: dict[str, int] = {architecture: 0 for architecture in architectures}
 
     for run in runs:
@@ -895,6 +1169,10 @@ def _architecture_selection_summary(
         if architecture not in per_architecture_values:
             per_architecture_values[architecture] = []
             loss_values[architecture] = []
+            composite_values[architecture] = []
+            composite_component_values[architecture] = {
+                metric_name: [] for metric_name in composite_weights
+            }
             exception_counts[architecture] = 0
         if not isinstance(run, dict):
             exception_counts[architecture] += 1
@@ -903,6 +1181,18 @@ def _architecture_selection_summary(
             exception_counts[architecture] += 1
         _append_metric({architecture: per_architecture_values[architecture]}, architecture, _run_selection_metric(run, metric))
         _append_metric({architecture: loss_values[architecture]}, architecture, run.get("loss"))
+        validation_metrics = _evaluation_policy_metrics(run.get("validation_evaluation", {}), "torch_policy")
+        _append_metric(
+            {architecture: composite_values[architecture]},
+            architecture,
+            _selection_composite_score(validation_metrics, composite_weights),
+        )
+        for metric_name in composite_weights:
+            _append_metric(
+                composite_component_values[architecture],
+                metric_name,
+                _metric_value(validation_metrics, metric_name),
+            )
 
     metric_stats = {
         architecture: _numeric_summary(tuple(values))
@@ -911,6 +1201,17 @@ def _architecture_selection_summary(
     loss_stats = {
         architecture: _numeric_summary(tuple(values))
         for architecture, values in loss_values.items()
+    }
+    composite_stats = {
+        architecture: _numeric_summary(tuple(values))
+        for architecture, values in composite_values.items()
+    }
+    composite_component_stats = {
+        architecture: {
+            metric_name: _numeric_summary(tuple(values))
+            for metric_name, values in metrics.items()
+        }
+        for architecture, metrics in composite_component_values.items()
     }
     quality_gates = _selection_quality_gates(
         config,
@@ -937,6 +1238,8 @@ def _architecture_selection_summary(
                 else _numeric_summary(())
             ),
             "selection_metric": metric_stats.get(architecture, _numeric_summary(())),
+            "selection_composite_score": composite_stats.get(architecture, _numeric_summary(())),
+            "selection_composite_components": composite_component_stats.get(architecture, {}),
             "loss": loss_stats.get(architecture, _numeric_summary(())),
             "baseline_deltas": (
                 stability_summary.get("baseline_deltas", {}).get(architecture, {})
@@ -956,11 +1259,41 @@ def _architecture_selection_summary(
             else {},
         }
 
+    decision_diagnostics = _decision_diagnostics_summary(runs, architectures=architectures)
+    action_sensitive_summary = _architecture_nested_metric_summary(
+        runs,
+        architectures=architectures,
+        section="action_sensitive_metrics",
+    )
+    oracle_regret_summary = _architecture_nested_metric_summary(
+        runs,
+        architectures=architectures,
+        section="oracle_regret",
+    )
+    sample_discriminativeness = _sample_discriminativeness_summary(runs)
+    per_group_action_outcomes = _per_group_action_outcomes(
+        runs,
+        architectures=architectures,
+        uncertainty_multiplier=float(config["uncertainty_multiplier"]),
+    )
+    composite_decision = _selection_decision(
+        composite_stats,
+        metric="selection_composite_score",
+        mode="max",
+        uncertainty_multiplier=float(config["uncertainty_multiplier"]),
+    )
     base_summary: dict[str, Any] = {
         "enabled": bool(config["enabled"]),
         "metric": metric,
         "mode": mode,
         "decision_boundary": "recommended_architecture or inconclusive based on seed variance",
+        "selection_composite_weights": composite_weights,
+        "composite_selection": composite_decision,
+        "decision_diagnostics": decision_diagnostics,
+        "action_sensitive_summary": action_sensitive_summary,
+        "oracle_regret_summary": oracle_regret_summary,
+        "sample_discriminativeness": sample_discriminativeness,
+        "per_group_action_outcomes": per_group_action_outcomes,
         "quality_gates": quality_gates,
         "architectures": architecture_details,
         "loss_distribution": stability_summary.get("loss_distribution", {}) if isinstance(stability_summary, dict) else {},
@@ -1002,8 +1335,579 @@ def _architecture_selection_summary(
         mode=mode,
         uncertainty_multiplier=float(config["uncertainty_multiplier"]),
     )
+    decision = _apply_decision_signal_guards(
+        decision,
+        composite_decision=composite_decision,
+        decision_diagnostics=decision_diagnostics,
+    )
     base_summary.update(decision)
+    base_summary["held_out_test_audit"] = _held_out_test_audit(
+        runs,
+        architectures=architectures,
+        metric=metric,
+        mode=mode,
+        uncertainty_multiplier=float(config["uncertainty_multiplier"]),
+        validation_decision=base_summary,
+        composite_weights=composite_weights,
+    )
     return base_summary
+
+
+def _selection_composite_score(metrics: dict[str, Any], weights: dict[str, float]) -> float:
+    score = 0.0
+    for metric, weight in weights.items():
+        score += float(weight) * _metric_value(metrics, metric)
+    return score if isfinite(score) else 0.0
+
+
+def _evaluation_policy_metrics(evaluation: Any, policy: str) -> dict[str, Any]:
+    if not isinstance(evaluation, dict):
+        return {}
+    if "aggregate" in evaluation and isinstance(evaluation["aggregate"], dict):
+        evaluation = evaluation["aggregate"]
+    metrics = evaluation.get(policy) if isinstance(evaluation, dict) else None
+    return metrics if isinstance(metrics, dict) else {}
+
+
+def _metric_value(metrics: dict[str, Any], metric: str) -> float:
+    metric = metric.removeprefix("torch_policy.")
+    current: Any = metrics
+    for part in metric.split("."):
+        if not isinstance(current, dict):
+            current = None
+            break
+        current = current.get(part)
+    value = current
+    if value is None and metric == "final_coverage_rate":
+        value = metrics.get("average_final_coverage_rate")
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return numeric if isfinite(numeric) else 0.0
+
+
+def _architecture_nested_metric_summary(
+    runs: list[dict[str, Any]],
+    *,
+    architectures: list[str],
+    section: str,
+) -> dict[str, dict[str, dict[str, float | int]]]:
+    values: dict[str, dict[str, list[float]]] = {architecture: {} for architecture in architectures}
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        architecture = str(run.get("architecture", "unknown"))
+        architecture_values = values.setdefault(architecture, {})
+        for _, nested in _iter_policy_nested_sections(run, section, evaluation_keys=("validation_evaluation",)):
+            for metric, value in nested.items():
+                _append_metric(architecture_values, str(metric), value)
+    return {
+        architecture: {
+            metric: _numeric_summary(tuple(metric_values))
+            for metric, metric_values in metrics.items()
+        }
+        for architecture, metrics in values.items()
+    }
+
+
+def _sample_discriminativeness_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    values: dict[str, list[float]] = {}
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        for _, nested in _iter_policy_nested_sections(
+            run,
+            "sample_discriminativeness",
+            evaluation_keys=("validation_evaluation", "test_evaluation"),
+        ):
+            for metric, value in nested.items():
+                _append_metric(values, str(metric), value)
+
+    metrics = {
+        metric: _numeric_summary(tuple(metric_values))
+        for metric, metric_values in values.items()
+    }
+    warnings: list[str] = []
+    low_spread_metrics = {
+        "candidate_coverage_spread": "low_candidate_coverage_spread",
+        "risk_spread": "low_risk_spread",
+        "path_cost_spread": "low_path_cost_spread",
+        "value_spread": "low_value_spread",
+    }
+    for metric, warning in low_spread_metrics.items():
+        stats = metrics.get(metric)
+        if not isinstance(stats, dict) or int(stats.get("count", 0)) == 0:
+            warnings.append(f"missing_{metric}")
+        elif float(stats.get("mean", 0.0)) <= 1.0e-12:
+            warnings.append(warning)
+    disagreement = metrics.get("oracle_vs_heuristic_action_disagreement_rate")
+    if isinstance(disagreement, dict) and int(disagreement.get("count", 0)) > 0:
+        if float(disagreement.get("mean", 0.0)) <= 1.0e-12:
+            warnings.append("low_oracle_vs_heuristic_action_disagreement_rate")
+    elif not metrics:
+        warnings.append("missing_sample_discriminativeness_metrics")
+
+    return {
+        "status": "warning" if warnings else "ok",
+        "metrics": metrics,
+        "warnings": warnings,
+    }
+
+
+def _per_group_action_outcomes(
+    runs: list[dict[str, Any]],
+    *,
+    architectures: list[str],
+    uncertainty_multiplier: float,
+) -> dict[str, Any]:
+    group_values: dict[str, dict[str, dict[str, list[float]]]] = {}
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        architecture = str(run.get("architecture", "unknown"))
+        for context, regret_metrics in _iter_policy_nested_sections(
+            run,
+            "oracle_regret",
+            evaluation_keys=("validation_evaluation",),
+        ):
+            group_name = str(context.get("group", "unknown"))
+            architecture_values = group_values.setdefault(group_name, {}).setdefault(architecture, {})
+            for metric, value in regret_metrics.items():
+                _append_metric(architecture_values, str(metric), value)
+        for context, action_metrics in _iter_policy_nested_sections(
+            run,
+            "action_sensitive_metrics",
+            evaluation_keys=("validation_evaluation",),
+        ):
+            group_name = str(context.get("group", "unknown"))
+            architecture_values = group_values.setdefault(group_name, {}).setdefault(architecture, {})
+            for metric, value in action_metrics.items():
+                _append_metric(architecture_values, str(metric), value)
+
+    summary: dict[str, Any] = {}
+    for group_name, architecture_values in group_values.items():
+        architecture_stats = {
+            architecture: {
+                metric: _numeric_summary(tuple(metric_values))
+                for metric, metric_values in metrics.items()
+            }
+            for architecture, metrics in architecture_values.items()
+        }
+        coverage_regret_stats = {
+            architecture: metrics.get("coverage_regret", _numeric_summary(()))
+            for architecture, metrics in architecture_stats.items()
+        }
+        decision = _selection_decision(
+            coverage_regret_stats,
+            metric="coverage_regret",
+            mode="min",
+            uncertainty_multiplier=uncertainty_multiplier,
+        )
+        summary[group_name] = {
+            **decision,
+            "reason": (
+                f"lower coverage_regret is better; {decision.get('reason', '')}"
+                if decision.get("reason")
+                else "lower coverage_regret is better"
+            ),
+            "architectures": {
+                architecture: architecture_stats.get(architecture, {})
+                for architecture in architectures
+            },
+        }
+    return summary
+
+
+def _iter_policy_nested_sections(
+    run: dict[str, Any],
+    section: str,
+    *,
+    evaluation_keys: tuple[str, ...],
+):
+    for evaluation_key in evaluation_keys:
+        evaluation = run.get(evaluation_key, {})
+        if not isinstance(evaluation, dict):
+            continue
+        yielded_per_scenario = False
+        per_scenario = evaluation.get("per_scenario", [])
+        if isinstance(per_scenario, list):
+            for scenario in per_scenario:
+                if not isinstance(scenario, dict):
+                    continue
+                metrics = scenario.get("metrics", {})
+                torch_policy = metrics.get("torch_policy", {}) if isinstance(metrics, dict) else {}
+                nested = torch_policy.get(section) if isinstance(torch_policy, dict) else None
+                if not isinstance(nested, dict):
+                    continue
+                path = str(scenario.get("path", ""))
+                yielded_per_scenario = True
+                yield {
+                    "evaluation": evaluation_key,
+                    "path": path,
+                    "group": str(scenario.get("group") or _group_name_from_path(path)),
+                }, nested
+        if yielded_per_scenario:
+            continue
+        torch_policy = _evaluation_policy_metrics(evaluation, "torch_policy")
+        nested = torch_policy.get(section) if isinstance(torch_policy, dict) else None
+        if isinstance(nested, dict):
+            yield {"evaluation": evaluation_key, "group": "aggregate", "path": ""}, nested
+
+
+def _decision_diagnostics_summary(
+    runs: list[dict[str, Any]],
+    *,
+    architectures: list[str],
+) -> dict[str, Any]:
+    action_records: dict[str, dict[tuple[str, str, int], dict[str, Any]]] = {
+        architecture: {} for architecture in architectures
+    }
+    baseline_counts: dict[str, dict[str, int]] = {
+        architecture: {
+            "sample_count": 0,
+            "utility_agreement_count": 0,
+            "coverage_heuristic_agreement_count": 0,
+        }
+        for architecture in architectures
+    }
+    mask_violation_count = 0
+
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        architecture = str(run.get("architecture", "unknown"))
+        if architecture not in action_records:
+            action_records[architecture] = {}
+            baseline_counts[architecture] = {
+                "sample_count": 0,
+                "utility_agreement_count": 0,
+                "coverage_heuristic_agreement_count": 0,
+            }
+        seed = str(run.get("seed", ""))
+        validation = run.get("validation_evaluation", {})
+        per_scenario = validation.get("per_scenario", []) if isinstance(validation, dict) else []
+        if not isinstance(per_scenario, list):
+            continue
+        for scenario in per_scenario:
+            if not isinstance(scenario, dict):
+                continue
+            path = str(scenario.get("path", ""))
+            group = str(scenario.get("group") or _group_name_from_path(path))
+            metrics = scenario.get("metrics", {})
+            torch_metrics = metrics.get("torch_policy", {}) if isinstance(metrics, dict) else {}
+            diagnostics = torch_metrics.get("action_diagnostics", []) if isinstance(torch_metrics, dict) else []
+            if not isinstance(diagnostics, list):
+                continue
+            for diagnostic in diagnostics:
+                if not isinstance(diagnostic, dict):
+                    continue
+                step_index = _int_value(diagnostic.get("step_index"))
+                key = (seed, path, step_index)
+                selected_cell = _cell_tuple(diagnostic.get("selected_cell"))
+                action_records[architecture][key] = {
+                    "selected_cell": selected_cell,
+                    "group": group,
+                }
+                counts = baseline_counts[architecture]
+                counts["sample_count"] += 1
+                if bool(diagnostic.get("agrees_with_utility", False)):
+                    counts["utility_agreement_count"] += 1
+                if bool(diagnostic.get("agrees_with_coverage_heuristic", False)):
+                    counts["coverage_heuristic_agreement_count"] += 1
+                try:
+                    max_masked_probability = float(diagnostic.get("max_masked_action_probability", 0.0))
+                except (TypeError, ValueError):
+                    max_masked_probability = 0.0
+                if max_masked_probability != 0.0 or not bool(diagnostic.get("selected_action_mask_valid", True)):
+                    mask_violation_count += 1
+
+    agreement_matrix = _architecture_agreement_matrix(action_records, architectures)
+    baseline_agreement = _baseline_agreement_summary(baseline_counts, architectures)
+    per_group_disagreement = _per_group_disagreement_summary(action_records, architectures)
+    all_identical = _all_architectures_identical(agreement_matrix, architectures)
+    warnings: list[str] = []
+    if all_identical:
+        warnings.append("all_architectures_identical")
+    matching_coverage_architectures = [
+        architecture
+        for architecture, summary in baseline_agreement.items()
+        if summary.get("sample_count", 0) > 0
+        and float(summary.get("coverage_heuristic_agreement_rate", 0.0)) == 1.0
+    ]
+    for architecture in matching_coverage_architectures:
+        warnings.append(f"trained_policy_matches_coverage_heuristic:{architecture}")
+    if len(matching_coverage_architectures) == len(architectures) and architectures:
+        warnings.append("all_trained_policies_match_coverage_heuristic")
+    if mask_violation_count:
+        warnings.append("masked_action_diagnostic_violation")
+
+    return {
+        "architecture_agreement_matrix": agreement_matrix,
+        "architecture_baseline_agreement": baseline_agreement,
+        "per_group_disagreement": per_group_disagreement,
+        "all_architectures_identical": all_identical,
+        "mask_violation_count": mask_violation_count,
+        "sample_count": sum(int(summary.get("sample_count", 0)) for summary in baseline_agreement.values()),
+        "warnings": warnings,
+    }
+
+
+def _architecture_agreement_matrix(
+    action_records: dict[str, dict[tuple[str, str, int], dict[str, Any]]],
+    architectures: list[str],
+) -> dict[str, dict[str, dict[str, float | int]]]:
+    matrix: dict[str, dict[str, dict[str, float | int]]] = {}
+    for left in architectures:
+        matrix[left] = {}
+        left_records = action_records.get(left, {})
+        for right in architectures:
+            right_records = action_records.get(right, {})
+            shared_keys = sorted(set(left_records).intersection(right_records))
+            compared = len(shared_keys)
+            agreement_count = (
+                compared
+                if left == right
+                else sum(
+                    1
+                    for key in shared_keys
+                    if left_records[key].get("selected_cell") == right_records[key].get("selected_cell")
+                )
+            )
+            matrix[left][right] = {
+                "compared": compared,
+                "agreement_count": agreement_count,
+                "agreement_rate": agreement_count / compared if compared else 0.0,
+            }
+    return matrix
+
+
+def _baseline_agreement_summary(
+    baseline_counts: dict[str, dict[str, int]],
+    architectures: list[str],
+) -> dict[str, dict[str, float | int | bool]]:
+    summary: dict[str, dict[str, float | int | bool]] = {}
+    for architecture in architectures:
+        counts = baseline_counts.get(architecture, {})
+        sample_count = int(counts.get("sample_count", 0))
+        utility_count = int(counts.get("utility_agreement_count", 0))
+        coverage_count = int(counts.get("coverage_heuristic_agreement_count", 0))
+        summary[architecture] = {
+            "sample_count": sample_count,
+            "utility_agreement_count": utility_count,
+            "utility_agreement_rate": utility_count / sample_count if sample_count else 0.0,
+            "coverage_heuristic_agreement_count": coverage_count,
+            "coverage_heuristic_agreement_rate": coverage_count / sample_count if sample_count else 0.0,
+            "matches_coverage_heuristic": bool(sample_count and coverage_count == sample_count),
+        }
+    return summary
+
+
+def _per_group_disagreement_summary(
+    action_records: dict[str, dict[tuple[str, str, int], dict[str, Any]]],
+    architectures: list[str],
+) -> dict[str, dict[str, float | int]]:
+    grouped_keys: dict[str, set[tuple[str, str, int]]] = {}
+    for records in action_records.values():
+        for key, record in records.items():
+            group = str(record.get("group", "unknown"))
+            grouped_keys.setdefault(group, set()).add(key)
+
+    summary: dict[str, dict[str, float | int]] = {}
+    for group, keys in grouped_keys.items():
+        compared = 0
+        disagreement_count = 0
+        for key in keys:
+            cells = [
+                action_records.get(architecture, {}).get(key, {}).get("selected_cell")
+                for architecture in architectures
+                if key in action_records.get(architecture, {})
+            ]
+            if len(cells) < 2:
+                continue
+            compared += 1
+            if len(set(cells)) > 1:
+                disagreement_count += 1
+        summary[group] = {
+            "compared": compared,
+            "disagreement_count": disagreement_count,
+            "disagreement_rate": disagreement_count / compared if compared else 0.0,
+        }
+    return summary
+
+
+def _all_architectures_identical(
+    agreement_matrix: dict[str, dict[str, dict[str, float | int]]],
+    architectures: list[str],
+) -> bool:
+    if len(architectures) < 2:
+        return False
+    for left in architectures:
+        for right in architectures:
+            if left == right:
+                continue
+            cell = agreement_matrix.get(left, {}).get(right, {})
+            if int(cell.get("compared", 0)) <= 0:
+                return False
+            if float(cell.get("agreement_rate", 0.0)) != 1.0:
+                return False
+    return True
+
+
+def _apply_decision_signal_guards(
+    decision: dict[str, Any],
+    *,
+    composite_decision: dict[str, Any],
+    decision_diagnostics: dict[str, Any],
+) -> dict[str, Any]:
+    guarded = dict(decision)
+    if decision_diagnostics.get("all_architectures_identical"):
+        guarded.update(
+            {
+                "status": "inconclusive",
+                "decision": "inconclusive",
+                "recommended_architecture": None,
+                "reason": "all architectures selected identical actions; selection signal is insufficient",
+            }
+        )
+    elif guarded.get("status") == "selected":
+        composite_status = composite_decision.get("status")
+        composite_architecture = composite_decision.get("recommended_architecture")
+        recommended = guarded.get("recommended_architecture")
+        if composite_status != "selected":
+            guarded.update(
+                {
+                    "status": "inconclusive",
+                    "decision": "inconclusive",
+                    "recommended_architecture": None,
+                    "reason": (
+                        f"primary metric selected {recommended}, but selection_composite_score is "
+                        f"{composite_status}: {composite_decision.get('reason', '')}"
+                    ),
+                }
+            )
+        elif composite_architecture != recommended:
+            guarded.update(
+                {
+                    "status": "inconclusive",
+                    "decision": "inconclusive",
+                    "recommended_architecture": None,
+                    "reason": (
+                        f"primary metric selected {recommended}, but selection_composite_score selected "
+                        f"{composite_architecture}"
+                    ),
+                }
+            )
+    warnings = decision_diagnostics.get("warnings", [])
+    if isinstance(warnings, list) and warnings:
+        guarded["decision_signal_warnings"] = list(warnings)
+    return guarded
+
+
+def _held_out_test_audit(
+    runs: list[dict[str, Any]],
+    *,
+    architectures: list[str],
+    metric: str,
+    mode: str,
+    uncertainty_multiplier: float,
+    validation_decision: dict[str, Any],
+    composite_weights: dict[str, float],
+) -> dict[str, Any]:
+    metric_values: dict[str, list[float]] = {architecture: [] for architecture in architectures}
+    composite_values: dict[str, list[float]] = {architecture: [] for architecture in architectures}
+    for run in runs:
+        if not isinstance(run, dict) or "test_evaluation" not in run:
+            continue
+        architecture = str(run.get("architecture", "unknown"))
+        metric_values.setdefault(architecture, [])
+        composite_values.setdefault(architecture, [])
+        test_evaluation = run.get("test_evaluation", {})
+        _append_metric(
+            {architecture: metric_values[architecture]},
+            architecture,
+            _evaluation_metric(test_evaluation, metric),
+        )
+        test_policy_metrics = _evaluation_policy_metrics(test_evaluation, "torch_policy")
+        _append_metric(
+            {architecture: composite_values[architecture]},
+            architecture,
+            _selection_composite_score(test_policy_metrics, composite_weights),
+        )
+    metric_stats = {
+        architecture: _numeric_summary(tuple(values))
+        for architecture, values in metric_values.items()
+    }
+    composite_stats = {
+        architecture: _numeric_summary(tuple(values))
+        for architecture, values in composite_values.items()
+    }
+    if not any(stats.get("count", 0) for stats in metric_stats.values()):
+        return {
+            "status": "not_available",
+            "used_for_selection": False,
+            "split": "test",
+            "reason": "no held-out test evaluation was recorded",
+            "evaluation_scope": EVALUATION_SCOPE,
+        }
+    test_decision = _selection_decision(
+        metric_stats,
+        metric=metric,
+        mode=mode,
+        uncertainty_multiplier=uncertainty_multiplier,
+    )
+    test_composite_decision = _selection_decision(
+        composite_stats,
+        metric="selection_composite_score",
+        mode="max",
+        uncertainty_multiplier=uncertainty_multiplier,
+    )
+    validation_architecture = validation_decision.get("recommended_architecture")
+    test_architecture = test_decision.get("recommended_architecture")
+    stable = bool(validation_architecture and validation_architecture == test_architecture)
+    return {
+        "status": "available",
+        "used_for_selection": False,
+        "split": "test",
+        "validation_decision": validation_decision.get("decision"),
+        "validation_recommended_architecture": validation_architecture,
+        "test_decision": test_decision,
+        "test_composite_selection": test_composite_decision,
+        "stable_with_validation": stable,
+        "architectures": {
+            architecture: {
+                "test_metric": metric_stats.get(architecture, _numeric_summary(())),
+                "test_composite_score": composite_stats.get(architecture, _numeric_summary(())),
+            }
+            for architecture in architectures
+        },
+        "reason": (
+            "validation decision matches held-out test decision"
+            if stable
+            else "validation decision is inconclusive or differs from held-out test audit"
+        ),
+        "evaluation_scope": EVALUATION_SCOPE,
+    }
+
+
+def _cell_tuple(value: Any) -> tuple[int, int] | None:
+    if not isinstance(value, list) or len(value) != 2:
+        return None
+    try:
+        return (int(value[0]), int(value[1]))
+    except (TypeError, ValueError):
+        return None
+
+
+def _group_name_from_path(path: str) -> str:
+    parts = Path(path).parts
+    for split in VALID_SPLITS:
+        if split not in parts:
+            continue
+        index = parts.index(split)
+        if index + 1 < len(parts):
+            return str(parts[index + 1])
+    return "unknown"
 
 
 def _training_runs(experiment: Any) -> list[dict[str, Any]]:

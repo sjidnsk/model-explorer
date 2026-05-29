@@ -706,6 +706,31 @@ class QuasiRealEvaluationMatrixTests(unittest.TestCase):
         self.assertIn("loss_distribution", selection)
         self.assertIn("baseline_delta_distribution", selection)
         self.assertIn("per_group_winners", selection)
+        self.assertIn("decision_diagnostics", selection)
+        self.assertIn("selection_composite_weights", selection)
+        self.assertIn("composite_selection", selection)
+        self.assertIn("held_out_test_audit", selection)
+        self.assertIn("action_sensitive_summary", selection)
+        self.assertIn("oracle_regret_summary", selection)
+        self.assertIn("sample_discriminativeness", selection)
+        self.assertIn("per_group_action_outcomes", selection)
+        decision_diagnostics = selection["decision_diagnostics"]
+        self.assertIn("architecture_agreement_matrix", decision_diagnostics)
+        self.assertIn("architecture_baseline_agreement", decision_diagnostics)
+        self.assertIn("per_group_disagreement", decision_diagnostics)
+        self.assertIn("warnings", decision_diagnostics)
+        self.assertEqual(
+            set(decision_diagnostics["architecture_agreement_matrix"]),
+            {"mlp_v1", "mlp_missing_v1", "candidate_attention_v1"},
+        )
+        self.assertFalse(selection["held_out_test_audit"]["used_for_selection"])
+        self.assertIn(selection["held_out_test_audit"]["status"], {"available", "not_available"})
+        training = summary["experiment"]["training"]
+        self.assertIn("validation evaluation", training["best_selection"]["reason"])
+        self.assertNotIn("test evaluation", training["best_selection"]["reason"])
+        for run in training["runs"]:
+            self.assertIn("validation_evaluation", run)
+            self.assertIn("test_evaluation", run)
         self.assertGreater(selection["mask_stress_coverage"]["unreachable_candidate_count"], 0)
         self.assertGreater(selection["mask_stress_coverage"]["padding_candidate_count"], 0)
         self.assertGreater(selection["mask_stress_coverage"]["missing_experimental_feature_candidate_count"], 0)
@@ -715,11 +740,36 @@ class QuasiRealEvaluationMatrixTests(unittest.TestCase):
             self.assertEqual(details["exception_count"], 0)
             self.assertIn("loss", details)
             self.assertIn("selection_metric", details)
+            self.assertIn("selection_composite_score", details)
+            self.assertIn("selection_composite_components", details)
+            self.assertIn(architecture, selection["action_sensitive_summary"])
+            self.assertIn(architecture, selection["oracle_regret_summary"])
             self.assertTrue(math.isfinite(details["loss"]["mean"]))
+            self.assertTrue(math.isfinite(details["selection_composite_score"]["mean"]))
+            self.assertTrue(
+                math.isfinite(
+                    selection["action_sensitive_summary"][architecture]["selected_expected_coverage_delta"]["mean"]
+                )
+            )
+            self.assertTrue(
+                math.isfinite(selection["oracle_regret_summary"][architecture]["coverage_regret"]["mean"])
+            )
         for group_name in ("smooth_high_confidence", "rim_or_steep_slope", "low_observation_count", "mixed_risk"):
             self.assertIn(group_name, selection["per_group_winners"])
+            self.assertIn(group_name, selection["per_group_action_outcomes"])
         for text in (
             "## Architecture Selection Gate",
+            "## Policy Decision Diagnostics",
+            "## Selection Composite Metrics",
+            "## Held-out Test Audit",
+            "## Action-Sensitive Metrics",
+            "## Oracle Regret Summary",
+            "## Sample Discriminativeness",
+            "## Per-ROI Action Outcomes",
+            "architecture_agreement_matrix",
+            "selection_composite_score",
+            "coverage_regret",
+            "candidate_coverage_spread",
             "recommended_architecture",
             "inconclusive",
             "selection_metric",
@@ -747,6 +797,88 @@ class QuasiRealEvaluationMatrixTests(unittest.TestCase):
         self.assertIsNone(decision["recommended_architecture"])
         self.assertEqual(decision["decision"], "inconclusive")
         self.assertIn("within seed variance", decision["reason"])
+
+    def test_sample_discriminativeness_warns_when_candidate_spread_is_low(self):
+        from model_explorer.data.evaluation_matrix import _sample_discriminativeness_summary
+
+        runs = [
+            {
+                "architecture": "mlp_v1",
+                "seed": 1,
+                "validation_evaluation": {
+                    "per_scenario": [
+                        {
+                            "path": "/tmp/scenarios/validation/group-a/shared.json",
+                            "group": "group-a",
+                            "metrics": {
+                                "torch_policy": {
+                                    "sample_discriminativeness": {
+                                        "candidate_coverage_spread": 0.0,
+                                        "risk_spread": 0.0,
+                                        "path_cost_spread": 0.0,
+                                        "value_spread": 0.0,
+                                        "oracle_vs_heuristic_action_disagreement_rate": 0.0,
+                                    }
+                                }
+                            },
+                        }
+                    ]
+                },
+            }
+        ]
+
+        summary = _sample_discriminativeness_summary(runs)
+
+        self.assertIn("low_candidate_coverage_spread", summary["warnings"])
+        self.assertIn("low_risk_spread", summary["warnings"])
+        self.assertEqual(summary["status"], "warning")
+
+    def test_decision_diagnostics_warn_when_policies_match_heuristic_and_actions_are_identical(self):
+        from model_explorer.data.evaluation_matrix import _decision_diagnostics_summary
+
+        runs = [
+            {
+                "architecture": architecture,
+                "seed": 7,
+                "validation_evaluation": {
+                    "per_scenario": [
+                        {
+                            "path": "/tmp/scenarios/validation/group-a/shared.json",
+                            "group": "group-a",
+                            "metrics": {
+                                "torch_policy": {
+                                    "action_diagnostics": [
+                                        {
+                                            "step_index": 0,
+                                            "selected_cell": [2, 2],
+                                            "selected_index": 1,
+                                            "selected_action_mask_valid": True,
+                                            "max_masked_action_probability": 0.0,
+                                            "agrees_with_utility": False,
+                                            "agrees_with_coverage_heuristic": True,
+                                        }
+                                    ]
+                                }
+                            },
+                        }
+                    ]
+                },
+            }
+            for architecture in ("mlp_v1", "mlp_missing_v1", "candidate_attention_v1")
+        ]
+
+        diagnostics = _decision_diagnostics_summary(
+            runs,
+            architectures=["mlp_v1", "mlp_missing_v1", "candidate_attention_v1"],
+        )
+
+        self.assertTrue(diagnostics["all_architectures_identical"])
+        self.assertIn("all_architectures_identical", diagnostics["warnings"])
+        self.assertIn("all_trained_policies_match_coverage_heuristic", diagnostics["warnings"])
+        self.assertEqual(
+            diagnostics["architecture_baseline_agreement"]["mlp_v1"]["coverage_heuristic_agreement_rate"],
+            1.0,
+        )
 
     def test_matrix_report_warns_when_dataset_has_no_mask_stress_samples(self):
         try:

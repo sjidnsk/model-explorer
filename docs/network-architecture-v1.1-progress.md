@@ -5,11 +5,11 @@
 | Field | Value |
 |---|---|
 | Phase | Network Architecture v1.3 network architecture experiments |
-| Current stage | v1 architecture selection gate |
+| Current stage | v1 action-sensitive training and evaluation calibration |
 | Current baseline | `mlp_v1` masked candidate policy |
 | Scope | Candidate-list policy over `ModelExplorerContract.top_goals` |
 | Out of scope | Full-map action space, external project imports, contract v1 breaking changes |
-| Last updated | 2026-05-28 |
+| Last updated | 2026-05-29 |
 
 ## Progress Table
 
@@ -99,6 +99,27 @@
 | AS-5 | Test evidence | Completed | New fixture tests cover tracked selection manifest, selection report fields, mask-stress coverage in JSON/Markdown, and the no-forced-winner rule; `python -m unittest discover -s tests -v` passed 132 tests | Run final verify, diff check, and forbidden import scan before completion |
 | AS-6 | Final verification gates | Completed | `$env:PYTHONPATH='src'; python -m model_explorer verify` passed 132 unittest cases, benchmark smoke, forbidden import scan over 44 files, and `git diff --check`; external `git diff --check` returned 0 with CRLF warnings only; external forbidden import `rg` returned no matches | Keep selection outputs under ignored `data/processed/`; do not claim a default architecture from an `inconclusive` selection result |
 
+## v1 Policy Decision Signal Enrichment Progress
+
+| ID | Task | Status | Evidence | Next Action |
+|---|---|---|---|---|
+| DS-0 | Action-level diagnostics | Completed | `evaluate_policy_baselines(..., torch_policy=...)` records per-step selected index/cell, selected probability, rank, entropy, valid action count, baseline agreement flags, selected mask validity, and max masked probability; regression test proves a policy preferring an unreachable action still records `max_masked_action_probability=0.0` and selects a valid candidate | Keep diagnostics read-only and outside training loss |
+| DS-1 | Architecture agreement report | Completed | Matrix summary/report now include `decision_diagnostics` with architecture agreement matrix, baseline agreement rates, per-group disagreement, warnings, and mask violation count; real selection run recorded 36 diagnostic samples, 0 mask violations, and non-identical architecture choices (`mlp_v1` vs `mlp_missing_v1` agreement 0.25; `mlp_v1` vs `candidate_attention_v1` agreement 0.8333333333333334) | Use disagreement as interpretability evidence, not as a winner by itself |
+| DS-2 | Composite selection metric | Completed | Selection config accepts `composite_weights`; JSON/Markdown report `selection_composite_score` and component stats for final coverage, coverage delta, value coverage, path cost, risk, and failures; real run stayed `inconclusive` because composite margin was within seed variance | Tune weights only with a documented manifest change |
+| DS-3 | Held-out test audit | Completed | Training runs now write per-run `test_evaluation` when an explicit test split exists; best checkpoint selection still cites validation evaluation; `held_out_test_audit.used_for_selection=false`; real selection run test audit was available and also inconclusive | Keep test split audit out of checkpoint/architecture selection |
+| DS-4 | Test evidence | Completed | New regression tests cover masked action diagnostics, decision diagnostics warning behavior, agreement/composite/report fields, and validation-only checkpoint selection; `python -m unittest discover -s tests -v` passed 134 tests | Keep tests focused on v1 decision signal behavior |
+| DS-5 | Final verification gates | Completed | `$env:PYTHONPATH='src'; python -m model_explorer verify` passed 134 unittest cases, benchmark smoke, forbidden import scan over 44 files, and `git diff --check`; external `git diff --check` returned 0 with CRLF warnings only; external forbidden import `rg` returned `no forbidden imports` | Keep generated selection outputs under ignored `data/processed/` |
+
+## v1 Action-Sensitive Training and Evaluation Calibration Progress
+
+| ID | Task | Status | Evidence | Next Action |
+|---|---|---|---|---|
+| AC-0 | Action-sensitive metrics | Completed | `evaluate_policy_baselines` now reports selected expected coverage delta, selected value coverage, selected risk, selected path cost, selected composite utility, and selected count for every strategy; missing experimental fields fall back to finite values | Keep `final_coverage_rate` as report context, not the only architecture signal |
+| AC-1 | Reachable-only oracle and regret | Completed | Per-scenario metrics now include coverage, low-risk, low-cost, and composite oracles plus coverage/risk/path/composite regret; regression test proves unreachable candidates are excluded from oracle actions | Keep oracle constrained to `ModelExplorerContract.top_goals` |
+| AC-2 | Sample discriminativeness diagnostics | Completed | Matrix summary adds candidate coverage/risk/path/value spread and oracle-vs-heuristic action disagreement rate; low-spread samples emit warning without failing training/evaluation | Separate mask-stress safety evidence from performance selection evidence |
+| AC-3 | Selection/report upgrade | Completed | Selection JSON and Markdown now include `Action-Sensitive Metrics`, `Oracle Regret Summary`, `Sample Discriminativeness`, and `Per-ROI Action Outcomes`; composite weights can read nested metrics such as `action_sensitive_metrics.selected_expected_coverage_delta` | Run full verification gates |
+| AC-4 | Final verification gates | Completed | Targeted tests passed, related test classes passed, `python -m unittest discover -s tests -v` passed 136 tests, `$env:PYTHONPATH='src'; python -m model_explorer verify` passed 136 unittest cases plus benchmark smoke / forbidden import scan / git diff check, external `git diff --check` returned 0 with CRLF warnings only, and explicit forbidden import `rg` returned `no forbidden imports` | Keep generated selection outputs under ignored `data/processed/` |
+
 ## Current Architecture Snapshot
 
 ```text
@@ -128,6 +149,7 @@ Current network-architecture properties:
 - The v1 stability matrix can compare `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1` over multiple seeds with mean/std summaries while preserving the `quasi_real` and `not real-world generalization benchmark` labels.
 - The v1 mask-stress matrix can produce deterministic unreachable candidates, padding coverage, missing experimental field fallback, and per-architecture finite training metrics while keeping augmentation explicitly labeled.
 - The v1 architecture selection gate combines multi-seed architecture comparison with explicit mask-stress coverage and reports either `recommended_architecture` or `inconclusive` instead of forcing a winner when margins are within seed variance.
+- The v1 policy decision signal report explains whether architectures chose the same actions, matched baselines, or disagreed by ROI group, and keeps validation selection separate from held-out test audit.
 
 ## Decision Log
 
@@ -252,6 +274,42 @@ git diff --check
 Result: returned 0; Windows line-ending warnings only
 rg forbidden import check
 Result: no forbidden import matches in src, tests, scripts, docs, or data
+
+v1 Policy Decision Signal Enrichment
+python -m unittest tests.test_model_explorer.BaselineEvaluationTests.test_policy_action_diagnostics_keep_masked_actions_at_zero_probability -v
+Result: initially failed for missing `action_diagnostics`, then passed after implementation
+python -m unittest tests.test_quasi_real_data_pipeline.QuasiRealEvaluationMatrixTests.test_decision_diagnostics_warn_when_policies_match_heuristic_and_actions_are_identical -v
+Result: initially failed for missing `_decision_diagnostics_summary`, then passed after implementation
+python -m unittest tests.test_quasi_real_data_pipeline.QuasiRealEvaluationMatrixTests.test_selection_report_summarizes_architecture_decision_and_quality_gates -v
+Result: initially failed for missing `decision_diagnostics`, then passed after implementation
+python -m unittest discover -s tests -v
+Result: passed 134 tests
+$env:PYTHONPATH='src'; python -m model_explorer quasi-real run data\manifests\lunar_south_pole_lro_lola_selection_matrix_v1.json
+Result: completed; 12 scenarios, 9 architecture/seed runs, 36 action diagnostic samples, 0 mask diagnostic violations, held-out test audit available and not used for selection, selection decision remains inconclusive
+$env:PYTHONPATH='src'; python -m model_explorer verify
+Result: passed; 134 unittest cases, benchmark_smoke, forbidden_import_check over 44 files, and git_diff_check returned 0
+git diff --check
+Result: returned 0; Windows line-ending warnings only
+rg forbidden import check
+Result: no forbidden import matches in src, tests, scripts, docs, or data
+
+v1 Action-Sensitive Training and Evaluation Calibration
+python -m unittest tests.test_model_explorer.BaselineEvaluationTests.test_action_sensitive_metrics_and_oracle_regret_ignore_unreachable_candidates -v
+Result: initially failed for missing `oracle_actions`, then passed after implementation
+python -m unittest tests.test_quasi_real_data_pipeline.QuasiRealEvaluationMatrixTests.test_sample_discriminativeness_warns_when_candidate_spread_is_low -v
+Result: initially failed for missing `_sample_discriminativeness_summary`, then passed after implementation
+python -m unittest tests.test_quasi_real_data_pipeline.QuasiRealEvaluationMatrixTests.test_selection_report_summarizes_architecture_decision_and_quality_gates -v
+Result: initially failed for missing action-sensitive / oracle-regret report fields, then passed after implementation
+python -m unittest discover -s tests -v
+Result: passed 136 tests
+$env:PYTHONPATH='src'; python -m model_explorer quasi-real run data\manifests\lunar_south_pole_lro_lola_selection_matrix_v1.json
+Result: completed; selection remained inconclusive; action-sensitive and oracle-regret summaries covered `mlp_v1`, `mlp_missing_v1`, and `candidate_attention_v1`; per-group action outcomes covered all 4 ROI groups; sample discriminativeness warned for low risk/path spread and low oracle-vs-heuristic action disagreement
+$env:PYTHONPATH='src'; python -m model_explorer verify
+Result: passed; 136 unittest cases, benchmark smoke, forbidden import scan over 44 files, and git_diff_check returned 0
+git diff --check
+Result: returned 0; Windows line-ending warnings only
+rg forbidden import check
+Result: no forbidden imports
 ```
 
 ## Risk Register
@@ -272,6 +330,8 @@ Result: no forbidden import matches in src, tests, scripts, docs, or data
 | Stability matrix lacks mask-stress samples | Current real stability run has no unreachable candidates, so mask-stress coverage is only fixture-tested | Emit non-fatal report warnings and keep separate mask-safety unit tests; add a dedicated mask-stress sample source before using stability results for stronger claims |
 | Mask-stress augmentation can distort quasi-real costs | Removing experimental fields intentionally exercises fallback paths and can make selected path/risk metrics less representative | Keep `mask_stress_augmented` explicit in provenance/report and use this gate only for mask/data-quality evidence |
 | Selection gate can be inconclusive | Current quasi-real selection run ties architectures on validation coverage, so a default model choice would be weaker than the measured variance | Report `inconclusive` and keep `mlp_v1` as compatibility default until broader data or a stronger metric separates architectures |
+| Action disagreement may not imply policy value | Current decision diagnostics can show different selected actions while coverage/composite metrics remain tied | Treat agreement/disagreement as explanatory signal and require metric separation before recommending a default architecture |
+| Current quasi-real mask-stress selection has low risk/path spread | Action-sensitive regret can still be small or tied when augmented samples remove risk/path fields or candidates are nearly equivalent | Report sample-discriminativeness warnings and avoid treating these rows as performance-selection evidence |
 
 ## Completion Criteria
 

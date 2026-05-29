@@ -1,5 +1,6 @@
 import json
 import importlib.util
+import math
 import os
 import subprocess
 import sys
@@ -1581,6 +1582,130 @@ class BaselineEvaluationTests(unittest.TestCase):
             self.assertIn("failure_count", metrics)
             self.assertIn("replan_count", metrics)
             self.assertIn("value_coverage", metrics)
+
+    def test_policy_action_diagnostics_keep_masked_actions_at_zero_probability(self):
+        from model_explorer.policy.evaluation import evaluate_policy_baselines
+
+        class InvalidPreferringPolicy:
+            def score(self, observation):
+                return (0.1, 100.0, 0.2)
+
+        scenario = [
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[
+                        {
+                            "cell": [0, 0],
+                            "utility": 0.9,
+                            "reachable": True,
+                            "path_cost": 2.0,
+                            "risk": 0.1,
+                            "expected_coverage_rate_delta": 0.01,
+                        },
+                        {
+                            "cell": [1, 1],
+                            "utility": 0.1,
+                            "reachable": False,
+                            "path_cost": 1.0,
+                            "risk": 0.0,
+                            "expected_coverage_rate_delta": 0.9,
+                        },
+                        {
+                            "cell": [2, 2],
+                            "utility": 0.2,
+                            "reachable": True,
+                            "path_cost": 3.0,
+                            "risk": 0.2,
+                            "expected_coverage_rate_delta": 0.5,
+                        },
+                    ],
+                    observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.05},
+                )
+            )
+        ]
+
+        report = evaluate_policy_baselines(scenario, torch_policy=InvalidPreferringPolicy())
+        diagnostic = report["torch_policy"]["action_diagnostics"][0]
+
+        self.assertEqual(diagnostic["selected_index"], 2)
+        self.assertEqual(diagnostic["selected_cell"], [2, 2])
+        self.assertTrue(diagnostic["selected_action_mask_valid"])
+        self.assertEqual(diagnostic["valid_action_count"], 2)
+        self.assertEqual(diagnostic["max_masked_action_probability"], 0.0)
+        self.assertGreater(diagnostic["selected_action_probability"], 0.0)
+        self.assertTrue(math.isfinite(diagnostic["entropy"]))
+        self.assertFalse(diagnostic["agrees_with_utility"])
+        self.assertTrue(diagnostic["agrees_with_coverage_heuristic"])
+
+    def test_action_sensitive_metrics_and_oracle_regret_ignore_unreachable_candidates(self):
+        from model_explorer.policy.evaluation import evaluate_policy_baselines
+
+        class ReachableLowCoveragePolicy:
+            def score(self, observation):
+                return (10.0, 100.0, 1.0)
+
+        scenario = [
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[
+                        {
+                            "cell": [0, 0],
+                            "utility": 0.8,
+                            "reachable": True,
+                            "expected_coverage_rate_delta": 0.1,
+                            "value": 0.3,
+                        },
+                        {
+                            "cell": [1, 1],
+                            "utility": 0.1,
+                            "reachable": False,
+                            "expected_coverage_rate_delta": 0.99,
+                            "risk": 0.0,
+                            "path_cost": 0.0,
+                            "value": 1.0,
+                        },
+                        {
+                            "cell": [2, 2],
+                            "utility": 0.6,
+                            "reachable": True,
+                            "expected_coverage_rate_delta": 0.5,
+                            "risk": 0.4,
+                            "path_cost": 4.0,
+                            "value": 0.7,
+                        },
+                    ],
+                    observation_update={"coverage_rate": 0.2, "coverage_rate_delta": 0.1},
+                )
+            )
+        ]
+
+        report = evaluate_policy_baselines(scenario, torch_policy=ReachableLowCoveragePolicy())
+        metrics = report["torch_policy"]
+
+        self.assertEqual(metrics["selected_cells"], [[0, 0]])
+        self.assertEqual(metrics["oracle_actions"]["coverage_oracle_cell"], [2, 2])
+        self.assertEqual(metrics["oracle_actions"]["composite_oracle_cell"], [2, 2])
+        self.assertNotEqual(metrics["oracle_actions"]["coverage_oracle_cell"], [1, 1])
+        self.assertAlmostEqual(
+            metrics["action_sensitive_metrics"]["selected_expected_coverage_delta"],
+            0.1,
+        )
+        self.assertGreater(metrics["oracle_regret"]["coverage_regret"], 0.0)
+        self.assertGreaterEqual(metrics["oracle_regret"]["composite_regret"], 0.0)
+        self.assertIn("candidate_coverage_spread", metrics["sample_discriminativeness"])
+        for section in (
+            "action_sensitive_metrics",
+            "oracle_metrics",
+            "oracle_regret",
+            "sample_discriminativeness",
+        ):
+            self.assertTrue(
+                all(
+                    math.isfinite(float(value))
+                    for value in metrics[section].values()
+                    if isinstance(value, (int, float))
+                )
+            )
 
     def test_baseline_evaluation_can_aggregate_multiple_scenarios(self):
         from model_explorer.policy.evaluation import evaluate_policy_baseline_scenarios

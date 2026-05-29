@@ -232,6 +232,17 @@ def run_experiment_manifest(path: str | Path) -> dict[str, Any]:
                 if manifest.explicit_splits and "validation" in manifest.splits
                 else None
             ),
+            test_scenarios=split_scenarios.get("test") if manifest.explicit_splits else None,
+            test_groups=(
+                manifest.splits["test"].scenario_groups
+                if manifest.explicit_splits and "test" in manifest.splits
+                else None
+            ),
+            test_paths=(
+                manifest.splits["test"].scenarios
+                if manifest.explicit_splits and "test" in manifest.splits
+                else None
+            ),
         )
         if _should_evaluate_trained_policy(manifest.train_config):
             from .training import load_policy_checkpoint
@@ -628,30 +639,34 @@ def _grouped_evaluation(
     torch_policy=None,
 ) -> dict[str, Any]:
     group_results: dict[str, Any] = {}
+    per_scenario: list[dict[str, Any]] = []
     cursor = 0
     for group in groups:
         group_scenarios = scenarios[cursor : cursor + len(group.scenarios)]
+        group_paths = scenario_paths[cursor : cursor + len(group.scenarios)]
         cursor += len(group.scenarios)
         group_results[group.name] = evaluate_policy_baseline_scenarios(
             group_scenarios,
             torch_policy=torch_policy,
             planning_adapter=planner,
         )
-
-    return {
-        "aggregate": aggregate,
-        "groups": group_results,
-        "per_scenario": [
+        per_scenario.extend(
             {
                 "path": str(path),
+                "group": group.name,
                 "metrics": evaluate_policy_baselines(
                     scenario,
                     torch_policy=torch_policy,
                     planning_adapter=planner,
                 ),
             }
-            for path, scenario in zip(scenario_paths, scenarios)
-        ],
+            for path, scenario in zip(group_paths, group_scenarios)
+        )
+
+    return {
+        "aggregate": aggregate,
+        "groups": group_results,
+        "per_scenario": per_scenario,
     }
 
 
@@ -684,6 +699,9 @@ def _run_training(
     validation_scenarios: tuple[Scenario, ...] | None = None,
     validation_groups: tuple[ExperimentScenarioGroup, ...] | None = None,
     validation_paths: tuple[Path, ...] | None = None,
+    test_scenarios: tuple[Scenario, ...] | None = None,
+    test_groups: tuple[ExperimentScenarioGroup, ...] | None = None,
+    test_paths: tuple[Path, ...] | None = None,
 ) -> dict[str, Any]:
     from .training import train_policy_on_episodes
 
@@ -791,6 +809,29 @@ def _run_training(
                 validation_output = checkpoint.parent / "validation-evaluation.json"
                 _write_json(validation_output, validation_evaluation)
                 result["validation_evaluation_output"] = str(validation_output)
+            if test_scenarios:
+                trained_policy = load_policy_checkpoint(checkpoint)
+                aggregate_test_evaluation = evaluate_policy_baseline_scenarios(
+                    test_scenarios,
+                    torch_policy=trained_policy,
+                    planning_adapter=planner,
+                )
+                test_evaluation = (
+                    _grouped_evaluation(
+                        test_groups,
+                        test_scenarios,
+                        test_paths or (),
+                        planner=planner,
+                        aggregate=aggregate_test_evaluation,
+                        torch_policy=trained_policy,
+                    )
+                    if test_groups and test_paths
+                    else aggregate_test_evaluation
+                )
+                result["test_evaluation"] = test_evaluation
+                test_output = checkpoint.parent / "test-evaluation.json"
+                _write_json(test_output, test_evaluation)
+                result["test_evaluation_output"] = str(test_output)
             training_summary_output = checkpoint.parent / "training-summary.json"
             _write_json(training_summary_output, result)
             result["training_summary_output"] = str(training_summary_output)
