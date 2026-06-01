@@ -622,17 +622,21 @@ def _region_graph_summary(value: Any) -> dict[str, Any] | None:
         return None
     quality = value.get("quality_metrics")
     quality = quality if isinstance(quality, dict) else {}
+    quality_summary = {
+        "requested_region_source": quality.get("requested_region_source"),
+        "graph_source": quality.get("graph_source", value.get("region_source")),
+        "fallback_ratio": quality.get("fallback_ratio"),
+        "connected_component_count": quality.get("connected_component_count"),
+        "fallback_reason": quality.get("fallback_reason") or value.get("failure_reason"),
+        "start_goal_connected": quality.get("start_goal_connected"),
+    }
     return {
         "status": value.get("status"),
         "region_source": value.get("region_source"),
         "vertex_count": value.get("vertex_count"),
         "edge_count": value.get("edge_count"),
-        "requested_region_source": quality.get("requested_region_source"),
-        "graph_source": quality.get("graph_source", value.get("region_source")),
-        "fallback_ratio": quality.get("fallback_ratio"),
-        "connected_component_count": quality.get("connected_component_count"),
-        "start_goal_connected": quality.get("start_goal_connected"),
-        "fallback_reason": quality.get("fallback_reason") or value.get("failure_reason"),
+        **quality_summary,
+        "quality_metrics": quality_summary,
         "fallback_used": value.get("fallback_used"),
     }
 

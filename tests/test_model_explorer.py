@@ -1388,6 +1388,11 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(iris_candidate["region_graph"]["requested_region_source"], "iris")
         self.assertEqual(iris_candidate["region_graph"]["fallback_ratio"], 0.0)
         self.assertEqual(iris_candidate["region_graph"]["connected_component_count"], 1)
+        self.assertEqual(iris_candidate["region_graph"]["quality_metrics"]["graph_source"], "iris")
+        self.assertEqual(
+            iris_candidate["region_graph"]["quality_metrics"]["requested_region_source"],
+            "iris",
+        )
 
     def test_path_planner_sidecar_validation_and_route_replan_signals(self):
         from model_explorer.policy.planning import (
@@ -1588,6 +1593,18 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertIn("## IRIS Diagnostics", report)
         self.assertIn("## Region Graph Diagnostics", report)
         self.assertIn("## Scenario Groups", report)
+        self.assertIn(
+            "| scenario | group | before | after | changed | before_path_cost | after_path_cost | delta | coverage_delta | reachable | failures | replans |",
+            report,
+        )
+        self.assertIn(
+            "| scenario | group | before | after | failures | replans | iris_status_counts | iris_fallback_reasons | iris_region_count |",
+            report,
+        )
+        self.assertIn(
+            "| scenario | group | before | after | failures | replans | graph_source_counts | fallback_reasons | disconnected |",
+            report,
+        )
         self.assertIn("| scenario | action | cell | reachable | path_cost | risk | utility | replan | failure |", report)
         json.dumps(summary)
 

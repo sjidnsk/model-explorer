@@ -244,13 +244,14 @@ def render_path_feedback_markdown(summary: dict[str, Any]) -> str:
         "",
         "## Baseline vs Feedback",
         "",
-        "| scenario | before | after | changed | before_path_cost | after_path_cost | delta | coverage_delta | reachable | failures |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| scenario | group | before | after | changed | before_path_cost | after_path_cost | delta | coverage_delta | reachable | failures | replans |",
+        "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for item in summary["scenarios"]:
         lines.append(
-            "| {scenario_id} | {before} | {after} | {changed} | {before_cost} | {after_cost} | {delta} | {coverage_delta} | {reachable} | {failures} |".format(
+            "| {scenario_id} | {group} | {before} | {after} | {changed} | {before_cost} | {after_cost} | {delta} | {coverage_delta} | {reachable} | {failures} | {replans} |".format(
                 scenario_id=item["scenario_id"],
+                group=item["scenario_group"],
                 before=item["selected_cell_before_path_feedback"],
                 after=item["selected_cell_after_path_feedback"],
                 changed=item["selection_changed_by_path_feedback"],
@@ -260,6 +261,7 @@ def render_path_feedback_markdown(summary: dict[str, Any]) -> str:
                 coverage_delta=item["coverage_rate_delta"],
                 reachable=item["path_feedback"]["reachable_count"],
                 failures=item["path_feedback"]["failure_count"],
+                replans=item["path_feedback"]["replan_count"],
             )
         )
     lines.extend(
@@ -291,16 +293,20 @@ def render_path_feedback_markdown(summary: dict[str, Any]) -> str:
             "",
             "## IRIS Diagnostics",
             "",
-            "| scenario | group | iris_status_counts | iris_fallback_reasons | iris_region_count |",
-            "|---|---|---|---|---:|",
+            "| scenario | group | before | after | failures | replans | iris_status_counts | iris_fallback_reasons | iris_region_count |",
+            "|---|---|---|---|---:|---:|---|---|---:|",
         ]
     )
     for item in summary["scenarios"]:
         iris = item["iris_diagnostics"]
         lines.append(
-            "| {scenario_id} | {group} | {statuses} | {reasons} | {count} |".format(
+            "| {scenario_id} | {group} | {before} | {after} | {failures} | {replans} | {statuses} | {reasons} | {count} |".format(
                 scenario_id=item["scenario_id"],
                 group=item["scenario_group"],
+                before=item["selected_cell_before_path_feedback"],
+                after=item["selected_cell_after_path_feedback"],
+                failures=item["path_feedback"]["failure_count"],
+                replans=item["path_feedback"]["replan_count"],
                 statuses=iris["status_counts"],
                 reasons=iris["fallback_reasons"],
                 count=iris["region_count_total"],
@@ -311,16 +317,20 @@ def render_path_feedback_markdown(summary: dict[str, Any]) -> str:
             "",
             "## Region Graph Diagnostics",
             "",
-            "| scenario | group | graph_source_counts | fallback_reasons | disconnected |",
-            "|---|---|---|---|---:|",
+            "| scenario | group | before | after | failures | replans | graph_source_counts | fallback_reasons | disconnected |",
+            "|---|---|---|---|---:|---:|---|---|---:|",
         ]
     )
     for item in summary["scenarios"]:
         graph = item["region_graph_diagnostics"]
         lines.append(
-            "| {scenario_id} | {group} | {sources} | {reasons} | {disconnected} |".format(
+            "| {scenario_id} | {group} | {before} | {after} | {failures} | {replans} | {sources} | {reasons} | {disconnected} |".format(
                 scenario_id=item["scenario_id"],
                 group=item["scenario_group"],
+                before=item["selected_cell_before_path_feedback"],
+                after=item["selected_cell_after_path_feedback"],
+                failures=item["path_feedback"]["failure_count"],
+                replans=item["path_feedback"]["replan_count"],
                 sources=graph["source_counts"],
                 reasons=graph["fallback_reasons"],
                 disconnected=graph["start_goal_disconnected_count"],
