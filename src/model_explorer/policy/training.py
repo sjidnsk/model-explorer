@@ -29,6 +29,7 @@ def train_policy_on_episode(
     discount_factor: float = 0.99,
     architecture: str | None = None,
     architecture_config: dict[str, Any] | None = None,
+    teacher_imitation_weight: float = 0.0,
 ) -> dict[str, Any]:
     return train_policy_on_episodes(
         (episode,),
@@ -41,6 +42,7 @@ def train_policy_on_episode(
         discount_factor=discount_factor,
         architecture=architecture,
         architecture_config=architecture_config,
+        teacher_imitation_weight=teacher_imitation_weight,
     )
 
 
@@ -56,6 +58,7 @@ def train_policy_on_episodes(
     discount_factor: float = 0.99,
     architecture: str | None = None,
     architecture_config: dict[str, Any] | None = None,
+    teacher_imitation_weight: float = 0.0,
 ) -> dict[str, Any]:
     torch = _load_torch()
     from .architectures import build_policy_network
@@ -63,6 +66,9 @@ def train_policy_on_episodes(
 
     episode_tuple = tuple(episodes)
     dataset_summary = validate_rollout_dataset(episode_tuple)
+    training_source = _training_source_summary(dataset_summary)
+    teacher_margin_summary = _teacher_margin_summary(dataset_summary)
+    teacher_imitation_weight = max(0.0, float(teacher_imitation_weight))
     trainable_transitions = _trainable_transitions(episode_tuple)
     if not trainable_transitions:
         raise ValueError("episodes must contain at least one trainable transition")
@@ -83,16 +89,36 @@ def train_policy_on_episodes(
     )
 
     losses = None
+    total_loss = None
     epoch_losses: list[dict[str, Any]] = []
     for epoch_index in range(epochs):
         optimizer.zero_grad()
-        losses = compute_masked_ppo_loss(network, **batch)
-        losses.total_loss.backward()
+        losses = compute_masked_ppo_loss(network, **_ppo_batch(batch))
+        teacher_loss = (
+            _teacher_imitation_loss(network, batch)
+            if teacher_imitation_weight > 0.0
+            else losses.total_loss.detach().new_tensor(0.0)
+        )
+        total_loss = losses.total_loss + teacher_imitation_weight * teacher_loss
+        total_loss.backward()
         optimizer.step()
-        epoch_losses.append(_loss_record(losses, epoch=epoch_index + 1))
+        epoch_losses.append(
+            _loss_record(
+                losses,
+                epoch=epoch_index + 1,
+                total_loss=total_loss,
+                teacher_loss=teacher_loss,
+                teacher_imitation_weight=teacher_imitation_weight,
+            )
+        )
 
-    if losses is None:
+    if losses is None or total_loss is None:
         raise ValueError("epochs must be at least 1")
+    teacher_imitation = _teacher_imitation_metrics(
+        network,
+        batch,
+        weight=teacher_imitation_weight,
+    )
 
     if checkpoint_path is not None:
         _save_policy_checkpoint(
@@ -109,6 +135,9 @@ def train_policy_on_episodes(
             learning_rate=learning_rate,
             return_mode=return_mode,
             discount_factor=discount_factor,
+            training_source=training_source,
+            teacher_imitation=teacher_imitation,
+            teacher_margin_summary=teacher_margin_summary,
         )
 
     result = {
@@ -121,8 +150,9 @@ def train_policy_on_episodes(
             candidate_missing_indicator_names=first_observation.candidate_missing_indicator_names,
             dataset_summary=dataset_summary,
         ),
-        "loss": float(losses.total_loss.detach()),
-        "total_loss": float(losses.total_loss.detach()),
+        "loss": float(total_loss.detach()),
+        "total_loss": float(total_loss.detach()),
+        "ppo_total_loss": float(losses.total_loss.detach()),
         "policy_loss": float(losses.policy_loss.detach()),
         "value_loss": float(losses.value_loss.detach()),
         "entropy": float(losses.entropy.detach()),
@@ -135,6 +165,9 @@ def train_policy_on_episodes(
         "return_mode": str(return_mode),
         "discount_factor": float(discount_factor),
         "dataset_summary": dataset_summary,
+        "training_source": training_source,
+        "teacher_margin_summary": teacher_margin_summary,
+        "teacher_imitation": teacher_imitation,
     }
     result["warnings"] = _training_quality_warnings(result)
     return result
@@ -223,14 +256,27 @@ def _trainable_transitions(episodes: tuple[RolloutEpisode, ...]) -> tuple[Rollou
     return transitions
 
 
-def _loss_record(losses, *, epoch: int) -> dict[str, Any]:
+def _loss_record(
+    losses,
+    *,
+    epoch: int,
+    total_loss=None,
+    teacher_loss=None,
+    teacher_imitation_weight: float = 0.0,
+) -> dict[str, Any]:
+    total = losses.total_loss if total_loss is None else total_loss
+    teacher = losses.total_loss.detach().new_tensor(0.0) if teacher_loss is None else teacher_loss
     return {
         "epoch": int(epoch),
-        "loss": float(losses.total_loss.detach()),
-        "total_loss": float(losses.total_loss.detach()),
+        "loss": float(total.detach()),
+        "total_loss": float(total.detach()),
+        "ppo_total_loss": float(losses.total_loss.detach()),
         "policy_loss": float(losses.policy_loss.detach()),
         "value_loss": float(losses.value_loss.detach()),
         "entropy": float(losses.entropy.detach()),
+        "teacher_imitation_loss": float(teacher.detach()),
+        "teacher_imitation_weight": float(teacher_imitation_weight),
+        "teacher_imitation_weighted_loss": float((teacher * teacher_imitation_weight).detach()),
     }
 
 
@@ -280,6 +326,84 @@ def _architecture_diagnostics(
     }
 
 
+def _training_source_summary(dataset_summary: dict[str, Any]) -> dict[str, Any]:
+    selection_counts = dataset_summary.get("selection_strategy_counts", {})
+    if not isinstance(selection_counts, dict):
+        selection_counts = {}
+    requested_counts = dataset_summary.get("requested_selection_strategy_counts", {})
+    if not isinstance(requested_counts, dict):
+        requested_counts = {}
+    fractions = dataset_summary.get("selection_strategy_fractions", {})
+    if not isinstance(fractions, dict):
+        fractions = {}
+    primary = dataset_summary.get("primary_selection_strategy")
+    transition_count = sum(_safe_int(value) for value in selection_counts.values())
+    return {
+        "primary_selection_strategy": None if primary is None else str(primary),
+        "selection_strategy_counts": {
+            str(key): _safe_int(value) for key, value in sorted(selection_counts.items())
+        },
+        "selection_strategy_fractions": {
+            str(key): _safe_float(value) for key, value in sorted(fractions.items())
+        },
+        "requested_selection_strategy_counts": {
+            str(key): _safe_int(value) for key, value in sorted(requested_counts.items())
+        },
+        "teacher_transition_count": transition_count,
+    }
+
+
+def _teacher_margin_summary(dataset_summary: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "feedback_aware_transition_count",
+        "feedback_aware_transition_fraction",
+        "teacher_margin_sample_count",
+        "teacher_score_margin",
+        "teacher_low_margin_threshold",
+        "teacher_high_margin_threshold",
+        "teacher_low_margin_sample_count",
+        "teacher_medium_margin_sample_count",
+        "teacher_high_margin_sample_count",
+        "teacher_low_margin_sample_rate",
+        "missing_teacher_signal_count",
+        "missing_teacher_signal_rate",
+        "low_margin_only_dataset_rate",
+        "teacher_margin_bucket_counts",
+    )
+    return {key: dataset_summary[key] for key in keys if key in dataset_summary}
+
+
+def _ppo_batch(batch: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: batch[key]
+        for key in (
+            "candidate_features",
+            "global_features",
+            "action_mask",
+            "actions",
+            "old_log_probs",
+            "returns",
+            "advantages",
+            "candidate_missing_indicators",
+        )
+    }
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _safe_float(value: Any) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return numeric if isfinite(numeric) else 0.0
+
+
 def _validate_transition_shapes(transitions: tuple[RolloutTransition, ...]) -> None:
     first = transitions[0].observation
     candidate_feature_count = len(first.candidate_feature_names)
@@ -301,6 +425,7 @@ def _transitions_to_batch(
     torch = _load_torch()
     observations = tuple(transition.observation for transition in transitions)
     action_count = max(len(observation.action_mask) for observation in observations)
+    teacher_labels = tuple(_teacher_action_label(transition, action_count) for transition in transitions)
     return_advantage_batch = compute_returns_and_advantages(
         rewards=(transition.reward for transition in transitions),
         dones=(transition.done for transition in transitions),
@@ -329,6 +454,14 @@ def _transitions_to_batch(
             [transition.action_index for transition in transitions],
             dtype=torch.long,
         ),
+        "teacher_actions": torch.tensor(
+            [0 if label is None else label for label in teacher_labels],
+            dtype=torch.long,
+        ),
+        "teacher_action_valid_mask": torch.tensor(
+            [label is not None for label in teacher_labels],
+            dtype=torch.bool,
+        ),
         "old_log_probs": torch.tensor(
             [0.0 if transition.log_prob is None else transition.log_prob for transition in transitions],
             dtype=torch.float32,
@@ -342,6 +475,24 @@ def _transitions_to_batch(
             dtype=torch.float32,
         ),
     }
+
+
+def _teacher_action_label(transition: RolloutTransition, action_count: int) -> int | None:
+    raw_index = transition.info.extra.get("teacher_action_index")
+    if raw_index is None:
+        raw_index = transition.action_index
+    if isinstance(raw_index, bool):
+        return None
+    try:
+        index = int(raw_index)
+    except (TypeError, ValueError):
+        return None
+    if index < 0 or index >= action_count:
+        return None
+    mask = transition.observation.action_mask
+    if index >= len(mask) or not bool(mask[index]):
+        return None
+    return index
 
 
 def _padded_candidate_features(observation, action_count: int) -> tuple[tuple[float, ...], ...]:
@@ -370,6 +521,63 @@ def _padded_missing_indicators(observation, action_count: int) -> tuple[tuple[fl
     return rows + tuple(zero_row for _ in range(action_count - len(rows)))
 
 
+def _teacher_imitation_loss(network, batch: dict[str, Any]):
+    torch = _load_torch()
+    from torch.nn import functional as F
+
+    valid_mask = batch["teacher_action_valid_mask"].to(dtype=torch.bool)
+    if not bool(valid_mask.any()):
+        return batch["candidate_features"].new_tensor(0.0)
+    output = network(
+        candidate_features=batch["candidate_features"],
+        global_features=batch["global_features"],
+        action_mask=batch["action_mask"],
+        candidate_missing_indicators=batch.get("candidate_missing_indicators"),
+    )
+    valid_mask = valid_mask.to(device=output.masked_logits.device)
+    teacher_actions = batch["teacher_actions"].to(device=output.masked_logits.device, dtype=torch.long)
+    return F.cross_entropy(output.masked_logits[valid_mask], teacher_actions[valid_mask])
+
+
+def _teacher_imitation_metrics(network, batch: dict[str, Any], *, weight: float) -> dict[str, Any]:
+    torch = _load_torch()
+    valid_mask = batch["teacher_action_valid_mask"].to(dtype=torch.bool)
+    valid_count = int(valid_mask.sum().item())
+    ignored_count = int(valid_mask.numel() - valid_count)
+    enabled = float(weight) > 0.0
+    metrics = {
+        "enabled": enabled,
+        "weight": float(weight),
+        "valid_teacher_label_count": valid_count,
+        "ignored_teacher_label_count": ignored_count,
+        "teacher_imitation_loss": 0.0,
+        "teacher_action_accuracy": 0.0,
+    }
+    if valid_count == 0 or not enabled:
+        return metrics
+
+    from torch.nn import functional as F
+
+    network.eval()
+    with torch.no_grad():
+        output = network(
+            candidate_features=batch["candidate_features"],
+            global_features=batch["global_features"],
+            action_mask=batch["action_mask"],
+            candidate_missing_indicators=batch.get("candidate_missing_indicators"),
+        )
+        valid_mask = valid_mask.to(device=output.masked_logits.device)
+        teacher_actions = batch["teacher_actions"].to(device=output.masked_logits.device, dtype=torch.long)
+        logits = output.masked_logits[valid_mask]
+        labels = teacher_actions[valid_mask]
+        loss = F.cross_entropy(logits, labels)
+        predictions = torch.argmax(logits, dim=-1)
+        accuracy = (predictions == labels).to(dtype=torch.float32).mean()
+    metrics["teacher_imitation_loss"] = float(loss.detach().cpu())
+    metrics["teacher_action_accuracy"] = float(accuracy.detach().cpu())
+    return metrics
+
+
 def _save_policy_checkpoint(
     path: str | Path,
     *,
@@ -385,6 +593,9 @@ def _save_policy_checkpoint(
     learning_rate: float,
     return_mode: str,
     discount_factor: float,
+    training_source: dict[str, Any],
+    teacher_imitation: dict[str, Any],
+    teacher_margin_summary: dict[str, Any],
 ) -> None:
     torch = _load_torch()
     torch.save(
@@ -412,6 +623,9 @@ def _save_policy_checkpoint(
                 "learning_rate": float(learning_rate),
                 "return_mode": str(return_mode),
                 "discount_factor": float(discount_factor),
+                "training_source": dict(training_source),
+                "teacher_imitation": dict(teacher_imitation),
+                "teacher_margin_summary": dict(teacher_margin_summary),
             },
         },
         Path(path),

@@ -715,6 +715,27 @@ class BenchmarkDocumentationTests(unittest.TestCase):
         ):
             self.assertIn(text, manifest_doc)
 
+    def test_manifest_docs_define_feedback_aware_distillation_matrix_controls(self):
+        manifest_doc = (ROOT / "docs" / "experiment-manifest.md").read_text(encoding="utf-8")
+        progress_doc = (ROOT / "docs" / "network-architecture-v1.1-progress.md").read_text(encoding="utf-8")
+
+        for text in (
+            "`train.source_selection_strategies`",
+            "`train.teacher_imitation_weights`",
+            "`train.teacher_quality_gates`",
+            "`distillation_matrix`",
+            "`min_feedback_aware_sample_count`",
+            "`max_missing_teacher_signal_rate`",
+        ):
+            self.assertIn(text, manifest_doc)
+        for text in (
+            "Feedback-Aware Distillation Evaluation Matrix",
+            "teacher-quality gates",
+            "quasi_real",
+            "not real-world generalization benchmark",
+        ):
+            self.assertIn(text, progress_doc)
+
     def test_benchmark_and_manifest_docs_define_current_synthetic_scope(self):
         benchmark_doc = (ROOT / "docs" / "benchmark-readiness.md").read_text(encoding="utf-8")
         manifest_doc = (ROOT / "docs" / "experiment-manifest.md").read_text(encoding="utf-8")

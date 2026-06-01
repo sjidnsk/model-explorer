@@ -8,6 +8,7 @@ from ..decision.selector import select_goal
 from ..io.scenario import Scenario
 from .execution import ExecutionFeasibilityAdapter, ExecutionFeasibilityRequest
 from .features import extract_policy_observation
+from .feedback_selection import select_goal_with_path_feedback
 from .planning import ContractCostPlanner, PathPlanRequest, PathPlanResult, PathPlanningAdapter
 from .provider import ContractProvider, ProviderStepRequest, SequenceContractProvider
 from .reward import compute_step_reward
@@ -21,6 +22,7 @@ def collect_rollout_episode(
     max_candidates: int | None = None,
     planning_adapter: PathPlanningAdapter | None = None,
     reward_config: dict[str, Any] | None = None,
+    selection_strategy: str = "auto",
 ) -> RolloutEpisode:
     if isinstance(scenario_or_snapshots, Scenario):
         snapshots = scenario_or_snapshots.snapshots
@@ -39,6 +41,7 @@ def collect_rollout_episode(
         planning_adapter=planning_adapter,
         reward_config=reward_config,
         rollout_metadata=rollout_metadata,
+        selection_strategy=selection_strategy,
     )
 
 
@@ -52,6 +55,7 @@ def collect_dynamic_rollout_episode(
     execution_adapter: ExecutionFeasibilityAdapter | None = None,
     reward_config: dict[str, Any] | None = None,
     rollout_metadata: dict[str, Any] | None = None,
+    selection_strategy: str = "auto",
 ) -> RolloutEpisode:
     transitions: list[RolloutTransition] = []
     total_path_cost = 0.0
@@ -69,6 +73,7 @@ def collect_dynamic_rollout_episode(
     current_cell = (0, 0)
     default_planner = ContractCostPlanner()
     reward_kwargs = _reward_kwargs(reward_config)
+    requested_selection_strategy = _normalize_selection_strategy(selection_strategy)
 
     while current_contract is not None and (step_limit is None or step_index < step_limit):
         remaining_steps = _remaining_steps(step_limit, step_index)
@@ -78,24 +83,52 @@ def collect_dynamic_rollout_episode(
             remaining_steps=remaining_steps,
             max_candidates=max_candidates,
         )
-        decision = select_goal(current_contract, policy=policy)
+        decision, effective_selection_strategy, feedback_selection = _select_rollout_goal(
+            current_contract,
+            policy=policy,
+            planning_adapter=planning_adapter,
+            current_cell=current_cell,
+            step_index=step_index,
+            max_candidates=max_candidates,
+            selection_strategy=requested_selection_strategy,
+        )
         selected_goal = decision.selected_goal
         failure_reason = None if selected_goal is not None else "no_reachable_goal"
         action_index = -1 if selected_goal is None else _selected_action_index(current_contract, selected_goal.cell)
         extra_info: dict[str, Any] = _rollout_metadata_info(rollout_metadata)
+        extra_info.update(
+            {
+                "requested_selection_strategy": requested_selection_strategy,
+                "selection_strategy": effective_selection_strategy,
+                "teacher_action_index": None if action_index < 0 else action_index,
+                "teacher_selected_cell": None
+                if selected_goal is None
+                else [selected_goal.cell[0], selected_goal.cell[1]],
+            }
+        )
+        if feedback_selection is not None:
+            extra_info.update(_feedback_teacher_info(feedback_selection))
 
         planning_result: PathPlanResult | None = None
         planner = planning_adapter if planning_adapter is not None else default_planner
         if selected_goal is not None:
-            planning_result = planner.plan(
-                PathPlanRequest(
-                    contract=current_contract,
-                    step_index=step_index,
-                    action_index=action_index,
-                    selected_goal=selected_goal,
-                    current_cell=current_cell,
+            if (
+                feedback_selection is not None
+                and feedback_selection.selected_evaluation is not None
+                and feedback_selection.selected_evaluation.action_index == action_index
+            ):
+                planning_result = feedback_selection.selected_evaluation.result
+                extra_info["selection_score"] = feedback_selection.scores_by_action_index.get(action_index)
+            else:
+                planning_result = planner.plan(
+                    PathPlanRequest(
+                        contract=current_contract,
+                        step_index=step_index,
+                        action_index=action_index,
+                        selected_goal=selected_goal,
+                        current_cell=current_cell,
+                    )
                 )
-            )
             extra_info["planning_feasible"] = bool(planning_result.feasible)
             extra_info["planning_metadata"] = dict(planning_result.metadata)
             extra_info["path_length"] = float(planning_result.path_length)
@@ -230,6 +263,91 @@ def _selected_action_index(contract: ModelExplorerContract, selected_cell: tuple
         if goal.cell == selected_cell:
             return index
     raise ValueError(f"selected cell {selected_cell!r} is not present in top_goals")
+
+
+_SELECTION_STRATEGIES = {"auto", "utility", "coverage_heuristic", "feedback_aware"}
+
+
+def _normalize_selection_strategy(value: str | None) -> str:
+    strategy = "auto" if value is None else str(value).strip().lower()
+    if strategy not in _SELECTION_STRATEGIES:
+        allowed = ", ".join(sorted(_SELECTION_STRATEGIES))
+        raise ValueError(f"selection_strategy must be one of: {allowed}")
+    return strategy
+
+
+def _select_rollout_goal(
+    contract: ModelExplorerContract,
+    *,
+    policy,
+    planning_adapter: PathPlanningAdapter | None,
+    current_cell: tuple[int, int],
+    step_index: int,
+    max_candidates: int | None,
+    selection_strategy: str,
+):
+    if policy is not None:
+        return select_goal(contract, policy=policy), "external_policy", None
+    if selection_strategy == "utility":
+        return _select_utility_goal(contract), "utility", None
+    if selection_strategy == "coverage_heuristic":
+        return select_goal(contract), "coverage_heuristic", None
+    if selection_strategy == "feedback_aware":
+        if planning_adapter is not None:
+            feedback_selection = select_goal_with_path_feedback(
+                contract,
+                planner=planning_adapter,
+                current_cell=current_cell,
+                step_index=step_index,
+                top_k=max_candidates,
+            )
+            return feedback_selection.decision, "feedback_aware", feedback_selection
+        return select_goal(contract), "coverage_heuristic", None
+
+    if planning_adapter is not None:
+        feedback_selection = select_goal_with_path_feedback(
+            contract,
+            planner=planning_adapter,
+            current_cell=current_cell,
+            step_index=step_index,
+            top_k=max_candidates,
+        )
+        return feedback_selection.decision, "feedback_aware", feedback_selection
+    return select_goal(contract), "coverage_heuristic", None
+
+
+def _select_utility_goal(contract: ModelExplorerContract) -> ExplorerDecision:
+    ranked_goals = tuple(
+        sorted(
+            (goal for goal in contract.top_goals if goal.reachable),
+            key=lambda goal: (-goal.utility, goal.cell[0], goal.cell[1]),
+        )
+    )
+    if not ranked_goals:
+        return ExplorerDecision(status="no_reachable_goal", selected_goal=None, ranked_goals=())
+    return ExplorerDecision(status="selected", selected_goal=ranked_goals[0], ranked_goals=ranked_goals)
+
+
+def _feedback_teacher_info(feedback_selection) -> dict[str, Any]:
+    info: dict[str, Any] = {}
+    if feedback_selection.selected_action_index is not None:
+        info["teacher_action_index"] = int(feedback_selection.selected_action_index)
+    if feedback_selection.decision.selected_goal is not None:
+        cell = feedback_selection.decision.selected_goal.cell
+        info["teacher_selected_cell"] = [int(cell[0]), int(cell[1])]
+    if feedback_selection.selected_score is not None:
+        info["teacher_score"] = float(feedback_selection.selected_score)
+        info["selection_score"] = float(feedback_selection.selected_score)
+    if feedback_selection.runner_up_action_index is not None:
+        info["teacher_runner_up_action_index"] = int(feedback_selection.runner_up_action_index)
+    if feedback_selection.runner_up_score is not None:
+        info["teacher_runner_up_score"] = float(feedback_selection.runner_up_score)
+    if feedback_selection.score_margin is not None:
+        info["teacher_score_margin"] = float(feedback_selection.score_margin)
+    info["teacher_ranked_action_indices"] = [
+        int(index) for index in feedback_selection.ranked_action_indices
+    ]
+    return info
 
 
 def _coverage_rate(observation_update: dict, *, fallback: float) -> float:

@@ -25,6 +25,10 @@ class DatasetValidationGates:
     min_mask_stress_sample_count: int | None = None
     min_roi_group_count: int | None = None
     min_reward_std: float | None = None
+    min_feedback_aware_sample_count: int | None = None
+    min_teacher_high_margin_sample_count: int | None = None
+    max_missing_teacher_signal_rate: float | None = None
+    max_low_margin_only_dataset_rate: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -44,6 +48,10 @@ class DatasetValidationGates:
                 "min_mask_stress_sample_count": self.min_mask_stress_sample_count,
                 "min_roi_group_count": self.min_roi_group_count,
                 "min_reward_std": self.min_reward_std,
+                "min_feedback_aware_sample_count": self.min_feedback_aware_sample_count,
+                "min_teacher_high_margin_sample_count": self.min_teacher_high_margin_sample_count,
+                "max_missing_teacher_signal_rate": self.max_missing_teacher_signal_rate,
+                "max_low_margin_only_dataset_rate": self.max_low_margin_only_dataset_rate,
             }.items()
             if value is not None and value is not False
         }
@@ -63,6 +71,8 @@ def summarize_rollout_dataset(episodes: Iterable[RolloutEpisode]) -> dict[str, A
     failure_transition_count = sum(1 for transition in transitions if transition.info.failure_reason is not None)
     risks = tuple(float(transition.info.risk) for transition in transitions if isfinite(float(transition.info.risk)))
     provenance_summary = _provenance_summary(transitions)
+    selection_source_summary = _selection_source_summary(transitions)
+    teacher_margin_summary = _teacher_margin_summary(transitions)
 
     summary = {
         "episode_count": len(episode_tuple),
@@ -102,6 +112,8 @@ def summarize_rollout_dataset(episodes: Iterable[RolloutEpisode]) -> dict[str, A
         "errors": [],
     }
     summary.update(provenance_summary)
+    summary.update(selection_source_summary)
+    summary.update(teacher_margin_summary)
     warnings: list[str] = summary["warnings"]
     errors: list[str] = summary["errors"]
     if not transitions:
@@ -138,6 +150,25 @@ def validate_rollout_dataset(
         messages.extend(str(violation["message"]) for violation in gate_violations)
         raise ValueError("; ".join(messages))
     return summary
+
+
+def summarize_teacher_quality_gates(
+    dataset_summary: dict[str, Any],
+    gates: dict[str, Any] | DatasetValidationGates | None = None,
+) -> dict[str, Any]:
+    if gates is None:
+        return {"status": "not_configured", "configured": {}, "violations": []}
+    gate_config = _coerce_validation_gates(gates)
+    violations = _teacher_quality_gate_violations(dataset_summary, gate_config)
+    return {
+        "status": "failed" if violations else "passed",
+        "configured": {
+            key: value
+            for key, value in gate_config.to_dict().items()
+            if key in _TEACHER_QUALITY_GATE_NAMES
+        },
+        "violations": violations,
+    }
 
 
 def _is_trainable_transition(transition: RolloutTransition) -> bool:
@@ -300,6 +331,112 @@ def _provenance_summary(transitions: tuple[RolloutTransition, ...]) -> dict[str,
     return summary
 
 
+def _selection_source_summary(transitions: tuple[RolloutTransition, ...]) -> dict[str, Any]:
+    strategies = tuple(_extra_string(transition, "selection_strategy") or "unknown" for transition in transitions)
+    requested = tuple(
+        _extra_string(transition, "requested_selection_strategy") or "unknown"
+        for transition in transitions
+    )
+    strategy_counts = _counts(strategies)
+    total = sum(strategy_counts.values())
+    return {
+        "selection_strategy_counts": strategy_counts,
+        "selection_strategy_fractions": {
+            strategy: count / total if total else 0.0
+            for strategy, count in strategy_counts.items()
+        },
+        "requested_selection_strategy_counts": _counts(requested),
+        "primary_selection_strategy": _primary_count_key(strategy_counts),
+    }
+
+
+_TEACHER_LOW_MARGIN_THRESHOLD = 0.05
+_TEACHER_HIGH_MARGIN_THRESHOLD = 0.20
+
+
+def _teacher_margin_summary(transitions: tuple[RolloutTransition, ...]) -> dict[str, Any]:
+    margins = tuple(
+        value
+        for transition in transitions
+        for value in [_extra_float(transition, "teacher_score_margin")]
+        if value is not None
+    )
+    bucket_counts = {"high": 0, "low": 0, "medium": 0, "missing": len(transitions) - len(margins)}
+    for margin in margins:
+        bucket_counts[_teacher_margin_bucket(margin)] += 1
+    low_count = bucket_counts["low"]
+    high_count = bucket_counts["high"]
+    medium_count = bucket_counts["medium"]
+    feedback_aware_count = sum(
+        1 for transition in transitions if _extra_string(transition, "selection_strategy") == "feedback_aware"
+    )
+    missing_teacher_signal_count = bucket_counts["missing"]
+    teacher_margin_sample_count = len(margins)
+    low_margin_only_dataset_rate = (
+        1.0
+        if teacher_margin_sample_count > 0 and low_count == teacher_margin_sample_count and high_count == 0 and medium_count == 0
+        else 0.0
+    )
+    return {
+        "feedback_aware_transition_count": feedback_aware_count,
+        "feedback_aware_transition_fraction": feedback_aware_count / len(transitions) if transitions else 0.0,
+        "teacher_margin_sample_count": teacher_margin_sample_count,
+        "teacher_score_margin": _numeric_summary(margins),
+        "teacher_low_margin_threshold": _TEACHER_LOW_MARGIN_THRESHOLD,
+        "teacher_high_margin_threshold": _TEACHER_HIGH_MARGIN_THRESHOLD,
+        "teacher_low_margin_sample_count": low_count,
+        "teacher_medium_margin_sample_count": medium_count,
+        "teacher_high_margin_sample_count": high_count,
+        "teacher_low_margin_sample_rate": low_count / teacher_margin_sample_count if teacher_margin_sample_count else 0.0,
+        "missing_teacher_signal_count": missing_teacher_signal_count,
+        "missing_teacher_signal_rate": missing_teacher_signal_count / len(transitions) if transitions else 0.0,
+        "low_margin_only_dataset_rate": low_margin_only_dataset_rate,
+        "teacher_margin_bucket_counts": bucket_counts,
+    }
+
+
+def _teacher_margin_bucket(margin: float | None) -> str:
+    if margin is None:
+        return "missing"
+    if margin <= _TEACHER_LOW_MARGIN_THRESHOLD:
+        return "low"
+    if margin <= _TEACHER_HIGH_MARGIN_THRESHOLD:
+        return "medium"
+    return "high"
+
+
+def _extra_string(transition: RolloutTransition, key: str) -> str | None:
+    value = transition.info.extra.get(key)
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _extra_float(transition: RolloutTransition, key: str) -> float | None:
+    value = transition.info.extra.get(key)
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if isfinite(numeric) else None
+
+
+def _counts(values: tuple[str, ...]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _primary_count_key(counts: dict[str, int]) -> str | None:
+    if not counts:
+        return None
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
 def _transition_provenance(transition: RolloutTransition) -> dict[str, Any]:
     extra = transition.info.extra
     provenance = extra.get("provenance")
@@ -425,6 +562,10 @@ def _coerce_validation_gates(value: dict[str, Any] | DatasetValidationGates | No
         min_mask_stress_sample_count=_optional_int(value, "min_mask_stress_sample_count"),
         min_roi_group_count=_optional_int(value, "min_roi_group_count"),
         min_reward_std=_optional_float(value, "min_reward_std"),
+        min_feedback_aware_sample_count=_optional_int(value, "min_feedback_aware_sample_count"),
+        min_teacher_high_margin_sample_count=_optional_int(value, "min_teacher_high_margin_sample_count"),
+        max_missing_teacher_signal_rate=_optional_float(value, "max_missing_teacher_signal_rate"),
+        max_low_margin_only_dataset_rate=_optional_float(value, "max_low_margin_only_dataset_rate"),
     )
 
 
@@ -494,6 +635,7 @@ def _validation_gate_violations(
     )
     _append_min_violation(violations, "min_roi_group_count", summary["roi_count"], gates.min_roi_group_count)
     _append_min_violation(violations, "min_reward_std", summary["reward"]["std"], gates.min_reward_std)
+    violations.extend(_teacher_quality_gate_violations(summary, gates))
     if gates.require_finite_reward and summary["non_finite_reward_count"] > 0:
         violations.append(
             {
@@ -506,6 +648,46 @@ def _validation_gate_violations(
                 ),
             }
         )
+    return violations
+
+
+_TEACHER_QUALITY_GATE_NAMES = {
+    "min_feedback_aware_sample_count",
+    "min_teacher_high_margin_sample_count",
+    "max_missing_teacher_signal_rate",
+    "max_low_margin_only_dataset_rate",
+}
+
+
+def _teacher_quality_gate_violations(
+    summary: dict[str, Any],
+    gates: DatasetValidationGates,
+) -> list[dict[str, Any]]:
+    violations: list[dict[str, Any]] = []
+    _append_min_violation(
+        violations,
+        "min_feedback_aware_sample_count",
+        int(summary.get("feedback_aware_transition_count", 0)),
+        gates.min_feedback_aware_sample_count,
+    )
+    _append_min_violation(
+        violations,
+        "min_teacher_high_margin_sample_count",
+        int(summary.get("teacher_high_margin_sample_count", 0)),
+        gates.min_teacher_high_margin_sample_count,
+    )
+    _append_max_violation(
+        violations,
+        "max_missing_teacher_signal_rate",
+        float(summary.get("missing_teacher_signal_rate", 0.0)),
+        gates.max_missing_teacher_signal_rate,
+    )
+    _append_max_violation(
+        violations,
+        "max_low_margin_only_dataset_rate",
+        float(summary.get("low_margin_only_dataset_rate", 0.0)),
+        gates.max_low_margin_only_dataset_rate,
+    )
     return violations
 
 

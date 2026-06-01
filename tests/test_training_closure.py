@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -207,6 +208,75 @@ class RolloutDatasetSummaryTests(unittest.TestCase):
             "max_unreachable_candidate_rate.*min_reward_std",
         ):
             validate_rollout_dataset([episode], gates=gates)
+
+    def test_teacher_quality_gates_measure_feedback_aware_source_and_margin_health(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.dataset import summarize_rollout_dataset, validate_rollout_dataset
+        from model_explorer.policy.rollout import RolloutEpisode
+
+        base_episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[
+                            {"cell": [1, 1], "utility": 0.5, "reachable": True},
+                            {"cell": [2, 1], "utility": 0.4, "reachable": True},
+                        ],
+                        observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.1},
+                    )
+                )
+            ],
+            max_candidates=2,
+        )
+        base_transition = base_episode.transitions[0]
+        transitions = (
+            replace(
+                base_transition,
+                info=replace(
+                    base_transition.info,
+                    extra={
+                        **base_transition.info.extra,
+                        "selection_strategy": "feedback_aware",
+                        "requested_selection_strategy": "feedback_aware",
+                        "teacher_score_margin": 0.03,
+                    },
+                ),
+            ),
+            replace(
+                base_transition,
+                info=replace(
+                    base_transition.info,
+                    extra={
+                        **base_transition.info.extra,
+                        "selection_strategy": "coverage_heuristic",
+                        "requested_selection_strategy": "coverage_heuristic",
+                    },
+                ),
+            ),
+        )
+        episode = RolloutEpisode(transitions=transitions, metrics=base_episode.metrics)
+
+        summary = summarize_rollout_dataset([episode])
+
+        self.assertEqual(summary["feedback_aware_transition_count"], 1)
+        self.assertEqual(summary["teacher_high_margin_sample_count"], 0)
+        self.assertEqual(summary["missing_teacher_signal_count"], 1)
+        self.assertEqual(summary["missing_teacher_signal_rate"], 0.5)
+        self.assertEqual(summary["low_margin_only_dataset_rate"], 1.0)
+        with self.assertRaisesRegex(
+            ValueError,
+            "min_feedback_aware_sample_count.*min_teacher_high_margin_sample_count"
+            ".*max_missing_teacher_signal_rate.*max_low_margin_only_dataset_rate",
+        ):
+            validate_rollout_dataset(
+                [episode],
+                gates={
+                    "min_feedback_aware_sample_count": 2,
+                    "min_teacher_high_margin_sample_count": 1,
+                    "max_missing_teacher_signal_rate": 0.0,
+                    "max_low_margin_only_dataset_rate": 0.0,
+                },
+            )
 
 
 class ReturnAdvantageTests(unittest.TestCase):
@@ -491,6 +561,200 @@ class TrainingClosureTests(unittest.TestCase):
         self.assertIsNotNone(old_scorer)
         self.assertEqual(old_scorer.network.architecture_name, "mlp_v1")
         self.assertEqual(old_scorer.network.architecture_config["hidden_dim"], 16)
+
+    def test_training_summary_and_checkpoint_metadata_record_feedback_aware_teacher_source(self):
+        import torch
+
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.planning import PathPlanResult
+        from model_explorer.policy.training import train_policy_on_episodes
+
+        class FixedPlanner:
+            def plan(self, request):
+                if request.action_index == 0:
+                    return PathPlanResult(
+                        feasible=False,
+                        failure_reason="path_blocked",
+                        replan_required=True,
+                    )
+                return PathPlanResult(feasible=True, path_cost=2.0, path_length=2.0, risk=0.1)
+
+        episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[
+                            {
+                                "cell": [1, 1],
+                                "utility": 0.9,
+                                "reachable": True,
+                                "expected_coverage_rate_delta": 0.9,
+                            },
+                            {
+                                "cell": [2, 1],
+                                "utility": 0.2,
+                                "reachable": True,
+                                "expected_coverage_rate_delta": 0.2,
+                            },
+                        ],
+                        observation_update={"coverage_rate_delta": 0.1},
+                    )
+                )
+            ],
+            max_candidates=2,
+            planning_adapter=FixedPlanner(),
+            selection_strategy="feedback_aware",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "feedback-aware-policy.pt"
+            result = train_policy_on_episodes(
+                [episode],
+                checkpoint_path=checkpoint_path,
+                seed=29,
+                hidden_size=16,
+                epochs=1,
+            )
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+        self.assertEqual(result["dataset_summary"]["selection_strategy_counts"], {"feedback_aware": 1})
+        self.assertEqual(result["training_source"]["primary_selection_strategy"], "feedback_aware")
+        self.assertEqual(result["training_source"]["selection_strategy_counts"], {"feedback_aware": 1})
+        self.assertEqual(
+            checkpoint["metadata"]["training_source"]["primary_selection_strategy"],
+            "feedback_aware",
+        )
+        self.assertEqual(
+            checkpoint["metadata"]["training_source"]["selection_strategy_counts"],
+            {"feedback_aware": 1},
+        )
+
+    def test_teacher_imitation_loss_defaults_to_disabled_without_changing_ppo_loss(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.training import train_policy_on_episodes
+
+        episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[
+                            {"cell": [1, 1], "utility": 0.5, "reachable": True},
+                            {"cell": [2, 1], "utility": 0.4, "reachable": True},
+                        ],
+                        observation_update={"coverage_rate_delta": 0.1},
+                    )
+                )
+            ],
+            max_candidates=2,
+        )
+
+        result = train_policy_on_episodes(
+            [episode],
+            seed=31,
+            hidden_size=16,
+            epochs=1,
+        )
+        loss_record = result["epoch_losses"][0]
+
+        self.assertFalse(result["teacher_imitation"]["enabled"])
+        self.assertEqual(result["teacher_imitation"]["weight"], 0.0)
+        self.assertEqual(result["teacher_imitation"]["valid_teacher_label_count"], 1)
+        self.assertEqual(loss_record["teacher_imitation_loss"], 0.0)
+        self.assertEqual(loss_record["teacher_imitation_weighted_loss"], 0.0)
+        self.assertAlmostEqual(loss_record["total_loss"], loss_record["ppo_total_loss"])
+        self.assertAlmostEqual(result["total_loss"], result["ppo_total_loss"])
+
+    def test_teacher_imitation_loss_records_metrics_and_ignores_masked_teacher_labels(self):
+        import torch
+
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.planning import PathPlanResult
+        from model_explorer.policy.rollout import RolloutEpisode
+        from model_explorer.policy.training import train_policy_on_episodes
+
+        class FixedPlanner:
+            def plan(self, request):
+                if request.action_index == 0:
+                    return PathPlanResult(
+                        feasible=False,
+                        failure_reason="path_blocked",
+                        replan_required=True,
+                    )
+                return PathPlanResult(feasible=True, path_cost=2.0, path_length=2.0, risk=0.1)
+
+        feedback_episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[
+                            {"cell": [1, 1], "utility": 0.9, "reachable": True, "expected_coverage_rate_delta": 0.9},
+                            {"cell": [2, 1], "utility": 0.2, "reachable": True, "expected_coverage_rate_delta": 0.2},
+                        ],
+                        observation_update={"coverage_rate_delta": 0.1},
+                    )
+                )
+            ],
+            max_candidates=2,
+            planning_adapter=FixedPlanner(),
+            selection_strategy="feedback_aware",
+        )
+        masked_label_episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[
+                            {"cell": [1, 1], "utility": 0.5, "reachable": True},
+                            {"cell": [2, 1], "utility": 9.0, "reachable": False},
+                        ],
+                        observation_update={"coverage_rate_delta": 0.1},
+                    )
+                )
+            ],
+            max_candidates=2,
+        )
+        masked_transition = masked_label_episode.transitions[0]
+        masked_label_episode = RolloutEpisode(
+            transitions=(
+                replace(
+                    masked_transition,
+                    info=replace(
+                        masked_transition.info,
+                        extra={
+                            **masked_transition.info.extra,
+                            "selection_strategy": "feedback_aware",
+                            "requested_selection_strategy": "feedback_aware",
+                            "teacher_action_index": 1,
+                            "teacher_score_margin": 0.4,
+                        },
+                    ),
+                ),
+            ),
+            metrics=masked_label_episode.metrics,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "teacher-policy.pt"
+            result = train_policy_on_episodes(
+                [feedback_episode, masked_label_episode],
+                checkpoint_path=checkpoint_path,
+                seed=37,
+                hidden_size=16,
+                epochs=1,
+                teacher_imitation_weight=0.25,
+            )
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+        self.assertTrue(result["teacher_imitation"]["enabled"])
+        self.assertEqual(result["teacher_imitation"]["weight"], 0.25)
+        self.assertEqual(result["teacher_imitation"]["valid_teacher_label_count"], 1)
+        self.assertEqual(result["teacher_imitation"]["ignored_teacher_label_count"], 1)
+        self.assertGreater(result["teacher_imitation"]["teacher_imitation_loss"], 0.0)
+        self.assertGreater(result["epoch_losses"][0]["teacher_imitation_weighted_loss"], 0.0)
+        self.assertIn("teacher_margin_summary", result)
+        self.assertEqual(result["teacher_margin_summary"]["teacher_margin_sample_count"], 2)
+        self.assertEqual(checkpoint["metadata"]["teacher_imitation"]["enabled"], True)
+        self.assertEqual(checkpoint["metadata"]["teacher_imitation"]["valid_teacher_label_count"], 1)
+        self.assertEqual(checkpoint["metadata"]["teacher_margin_summary"]["teacher_margin_sample_count"], 2)
 
     def test_mlp_missing_architecture_trains_saves_and_loads_from_checkpoint(self):
         import torch
@@ -967,13 +1231,205 @@ class TrainingClosureTests(unittest.TestCase):
         self.assertEqual([record["epoch"] for record in loss_records], [1, 2])
         self.assertIn("loss", loss_records[0])
         self.assertIn("validation_evaluation", training_summary)
+        self.assertEqual(
+            training_summary["dataset_summary"]["selection_strategy_counts"],
+            {"feedback_aware": 1},
+        )
+        self.assertEqual(training_summary["training_source"]["primary_selection_strategy"], "feedback_aware")
         self.assertIn("baseline_deltas", summary)
         self.assertIn("torch_policy", summary["baseline_deltas"])
         self.assertIn("utility", summary["baseline_deltas"]["torch_policy"])
+        self.assertIn("feedback_aware", summary["baseline_deltas"]["torch_policy"])
         self.assertIn("multi_seed_loss_summary", summary["training"])
         self.assertIn("warnings", summary["training"]["runs"][0])
         self.assertIn("## Baseline Comparison", report)
+        self.assertIn("| feedback_aware |", report)
         self.assertIn("## Training Quality", report)
+
+    def test_experiment_compares_coverage_and_feedback_aware_training_sources(self):
+        from model_explorer.policy.experiment import run_experiment_manifest
+
+        train_payload = minimal_contract(
+            goals=[
+                {"cell": [1, 1], "utility": 0.6, "reachable": True, "expected_coverage_rate_delta": 0.2},
+                {"cell": [2, 1], "utility": 0.5, "reachable": True, "expected_coverage_rate_delta": 0.6},
+            ],
+            observation_update={"coverage_rate": 0.2, "coverage_rate_delta": 0.2},
+        )
+        validation_payload = minimal_contract(
+            goals=[
+                {"cell": [1, 2], "utility": 0.6, "reachable": True, "expected_coverage_rate_delta": 0.2},
+                {"cell": [2, 2], "utility": 0.5, "reachable": True, "expected_coverage_rate_delta": 0.6},
+            ],
+            observation_update={"coverage_rate": 0.3, "coverage_rate_delta": 0.1},
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            train_path = Path(tmpdir) / "train.json"
+            validation_path = Path(tmpdir) / "validation.json"
+            train_path.write_text(json.dumps(train_payload), encoding="utf-8")
+            validation_path.write_text(json.dumps(validation_payload), encoding="utf-8")
+            output_root = Path(tmpdir) / "out"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "name": "source-comparison",
+                        "run_id": "run-001",
+                        "splits": {
+                            "train": [str(train_path)],
+                            "validation": [str(validation_path)],
+                        },
+                        "planner": {"backend": "contract_cost"},
+                        "max_candidates": 2,
+                        "outputs": {"root": str(output_root)},
+                        "train": {
+                            "seed": 53,
+                            "hidden_size": 16,
+                            "epochs": 1,
+                            "teacher_imitation_weight": 0.1,
+                            "source_selection_strategies": ["coverage_heuristic", "feedback_aware"],
+                            "evaluate_trained_policy": True,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_experiment_manifest(manifest_path)
+            run_dir = output_root / "source-comparison" / "run-001"
+            training_summary_paths = sorted(run_dir.glob("source-*/seed-53/training-summary.json"))
+            report = (run_dir / "report.md").read_text(encoding="utf-8")
+
+        training = summary["training"]
+        self.assertEqual(training["source_selection_strategies"], ["coverage_heuristic", "feedback_aware"])
+        self.assertEqual(training["run_count"], 2)
+        self.assertEqual(len(training_summary_paths), 2)
+        self.assertEqual(set(training["source_comparison"]), {"coverage_heuristic", "feedback_aware"})
+        for source_name, source_summary in training["source_comparison"].items():
+            self.assertEqual(source_summary["training_source"]["primary_selection_strategy"], source_name)
+            self.assertIn("feedback_aware", source_summary["baseline_deltas"])
+            self.assertIn("feedback_aware_action_agreement_rate", source_summary["teacher_agreement"])
+            self.assertIn("feedback_aware_margin_bucket_agreement", source_summary["teacher_agreement"])
+        self.assertIn("torch_policy", summary["baseline_deltas"])
+        self.assertIn("feedback_aware", summary["baseline_deltas"]["torch_policy"])
+        self.assertIn("## Training Source Comparison", report)
+        self.assertIn("| coverage_heuristic |", report)
+        self.assertIn("| feedback_aware |", report)
+
+    def test_experiment_runs_source_by_teacher_weight_distillation_matrix(self):
+        from model_explorer.policy.experiment import run_experiment_manifest
+
+        train_payload = {
+            "metadata": {
+                "dataset_id": "fixture_lola",
+                "data_class": "quasi_real",
+                "region": "lunar_south_pole",
+                "mask_stress_augmented": True,
+                "mask_stress_label": "mask_stress_augmented",
+            },
+            "snapshots": [
+                minimal_contract(
+                    goals=[
+                        {"cell": [1, 1], "utility": 0.6, "reachable": True, "expected_coverage_rate_delta": 0.2},
+                        {"cell": [2, 1], "utility": 0.5, "reachable": True, "expected_coverage_rate_delta": 0.6},
+                    ],
+                    observation_update={"coverage_rate": 0.2, "coverage_rate_delta": 0.2},
+                )
+            ],
+        }
+        validation_payload = {
+            "metadata": dict(train_payload["metadata"]),
+            "snapshots": [
+                minimal_contract(
+                    goals=[
+                        {"cell": [1, 2], "utility": 0.6, "reachable": True, "expected_coverage_rate_delta": 0.2},
+                        {"cell": [2, 2], "utility": 0.5, "reachable": True, "expected_coverage_rate_delta": 0.6},
+                    ],
+                    observation_update={"coverage_rate": 0.3, "coverage_rate_delta": 0.1},
+                )
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            train_path = Path(tmpdir) / "train.json"
+            validation_path = Path(tmpdir) / "validation.json"
+            train_path.write_text(json.dumps(train_payload), encoding="utf-8")
+            validation_path.write_text(json.dumps(validation_payload), encoding="utf-8")
+            output_root = Path(tmpdir) / "out"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "name": "distillation-matrix",
+                        "run_id": "run-001",
+                        "splits": {
+                            "train": [str(train_path)],
+                            "validation": [str(validation_path)],
+                        },
+                        "planner": {"backend": "contract_cost"},
+                        "max_candidates": 2,
+                        "outputs": {"root": str(output_root)},
+                        "train": {
+                            "seed": 53,
+                            "hidden_size": 16,
+                            "epochs": 1,
+                            "teacher_imitation_weights": [0.0, 0.1],
+                            "source_selection_strategies": ["coverage_heuristic", "feedback_aware"],
+                            "teacher_quality_gates": {
+                                "min_feedback_aware_sample_count": 1,
+                                "min_teacher_high_margin_sample_count": 0,
+                                "max_missing_teacher_signal_rate": 0.0,
+                                "max_low_margin_only_dataset_rate": 1.0,
+                            },
+                            "evaluate_trained_policy": True,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_experiment_manifest(manifest_path)
+            run_dir = output_root / "distillation-matrix" / "run-001"
+            training_summary_paths = sorted(run_dir.glob("source-*/teacher-weight-*/seed-53/training-summary.json"))
+            report = (run_dir / "report.md").read_text(encoding="utf-8")
+
+        training = summary["training"]
+        self.assertEqual(training["source_selection_strategies"], ["coverage_heuristic", "feedback_aware"])
+        self.assertEqual(training["teacher_imitation_weights"], [0.0, 0.1])
+        self.assertEqual(training["run_count"], 4)
+        self.assertEqual(len(training_summary_paths), 4)
+        self.assertEqual(
+            {
+                (record["source_selection_strategy"], record["teacher_imitation_weight"])
+                for record in training["distillation_matrix"]
+            },
+            {
+                ("coverage_heuristic", 0.0),
+                ("coverage_heuristic", 0.1),
+                ("feedback_aware", 0.0),
+                ("feedback_aware", 0.1),
+            },
+        )
+        feedback_entries = [
+            record for record in training["distillation_matrix"]
+            if record["source_selection_strategy"] == "feedback_aware"
+        ]
+        coverage_entries = [
+            record for record in training["distillation_matrix"]
+            if record["source_selection_strategy"] == "coverage_heuristic"
+        ]
+        self.assertTrue(all(record["teacher_quality_gates"]["status"] == "passed" for record in feedback_entries))
+        self.assertTrue(all(record["teacher_quality_gates"]["status"] == "failed" for record in coverage_entries))
+        for record in training["distillation_matrix"]:
+            self.assertIn("feedback_aware_margin_bucket_agreement", record["teacher_agreement"])
+            self.assertIn("feedback_aware", record["baseline_deltas"])
+            self.assertEqual(record["data_class"], "quasi_real")
+            self.assertTrue(record["mask_stress_augmented"])
+        self.assertIn("teacher_imitation_weight", training["best_selection"]["reason"])
+        self.assertIn("## Distillation Matrix", report)
+        self.assertIn("| feedback_aware | 0.1 |", report)
+        self.assertIn("not a real-world generalization benchmark", report)
 
 
 if __name__ == "__main__":

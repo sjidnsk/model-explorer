@@ -8,6 +8,7 @@ from ..core.interfaces import GoalCandidate, ModelExplorerContract
 from ..decision.selector import select_goal
 from ..io.scenario import Scenario
 from .features import extract_policy_observation
+from .feedback_selection import select_goal_with_path_feedback
 from .planning import PathPlanRequest, PathPlanningAdapter
 from .reward import compute_step_reward
 
@@ -34,17 +35,34 @@ def evaluate_policy_baselines(
         "utility": utility_metrics,
         "coverage_heuristic": coverage_metrics,
     }
+    feedback_metrics = None
+    if planning_adapter is not None:
+        feedback_metrics = _evaluate_strategy(
+            snapshots,
+            _select_no_goal,
+            planning_adapter=planning_adapter,
+            selection_result_factory=lambda contract, current_cell, step_index: _feedback_aware_selection_result(
+                contract,
+                planning_adapter=planning_adapter,
+                current_cell=current_cell,
+                step_index=step_index,
+            ),
+        )
+        report["feedback_aware"] = feedback_metrics
     if torch_policy is not None:
         torch_metrics = _evaluate_strategy(
             snapshots,
             lambda contract: select_goal(contract, policy=torch_policy).selected_goal,
             planning_adapter=planning_adapter,
         )
+        if feedback_metrics is not None:
+            torch_metrics.update(_policy_agreement_metrics(torch_metrics, feedback_metrics, "feedback_aware"))
         torch_metrics["action_diagnostics"] = _policy_action_diagnostics(
             snapshots,
             torch_policy,
             utility_metrics=utility_metrics,
             coverage_metrics=coverage_metrics,
+            feedback_metrics=feedback_metrics,
         )
         report["torch_policy"] = torch_metrics
     return report
@@ -90,6 +108,25 @@ def evaluate_policy_baseline_scenarios(
             "replan_count": sum(int(report["replan_count"]) for report in strategy_reports),
             "value_coverage": sum(float(report["value_coverage"]) for report in strategy_reports),
         }
+        for field in (
+            "feedback_aware_action_agreement_rate",
+            "feedback_aware_selected_cell_agreement_rate",
+            "feedback_aware_top2_action_agreement_rate",
+            "feedback_aware_topk_action_agreement_rate",
+            "feedback_aware_teacher_rank_mean",
+            "feedback_aware_comparison_count",
+            "feedback_aware_action_agreement_count",
+            "feedback_aware_selected_cell_agreement_count",
+            "feedback_aware_top2_action_agreement_count",
+            "feedback_aware_topk_action_agreement_count",
+            "feedback_aware_teacher_rank_count",
+        ):
+            value = _aggregate_optional_field(strategy_reports, field)
+            if value is not None:
+                aggregate[strategy_name][field] = value
+        margin_bucket_agreement = _aggregate_margin_bucket_agreement(strategy_reports)
+        if margin_bucket_agreement:
+            aggregate[strategy_name]["feedback_aware_margin_bucket_agreement"] = margin_bucket_agreement
         aggregate[strategy_name]["action_sensitive_metrics"] = _aggregate_nested_numeric(
             strategy_reports,
             "action_sensitive_metrics",
@@ -119,6 +156,25 @@ def evaluate_policy_baseline_scenarios(
     return aggregate
 
 
+def _aggregate_optional_field(reports: tuple[dict[str, Any], ...], field: str) -> float | None:
+    values = []
+    for report in reports:
+        value = report.get(field)
+        if isinstance(value, bool):
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if isfinite(numeric):
+            values.append(numeric)
+    if not values:
+        return None
+    if field.endswith("_rate") or field.endswith("_mean"):
+        return sum(values) / len(values)
+    return sum(values)
+
+
 def _aggregate_nested_numeric(
     reports: tuple[dict[str, Any], ...],
     section: str,
@@ -146,13 +202,57 @@ def _aggregate_nested_numeric(
     return aggregate
 
 
+def _aggregate_margin_bucket_agreement(reports: tuple[dict[str, Any], ...]) -> dict[str, Any]:
+    aggregate: dict[str, dict[str, int]] = {}
+    for report in reports:
+        bucket_report = report.get("feedback_aware_margin_bucket_agreement", {})
+        if not isinstance(bucket_report, dict):
+            continue
+        for bucket_name, metrics in bucket_report.items():
+            if not isinstance(metrics, dict):
+                continue
+            bucket = aggregate.setdefault(
+                str(bucket_name),
+                {
+                    "comparison_count": 0,
+                    "action_agreement_count": 0,
+                    "selected_cell_agreement_count": 0,
+                    "top2_action_agreement_count": 0,
+                    "topk_action_agreement_count": 0,
+                },
+            )
+            for key in tuple(bucket):
+                bucket[key] += _safe_int(metrics.get(key))
+    result: dict[str, Any] = {}
+    for bucket_name, counts in aggregate.items():
+        comparison_count = counts["comparison_count"]
+        result[bucket_name] = {
+            **counts,
+            "action_agreement_rate": _finite_float(
+                counts["action_agreement_count"] / comparison_count if comparison_count else 0.0
+            ),
+            "selected_cell_agreement_rate": _finite_float(
+                counts["selected_cell_agreement_count"] / comparison_count if comparison_count else 0.0
+            ),
+            "top2_action_agreement_rate": _finite_float(
+                counts["top2_action_agreement_count"] / comparison_count if comparison_count else 0.0
+            ),
+            "topk_action_agreement_rate": _finite_float(
+                counts["topk_action_agreement_count"] / comparison_count if comparison_count else 0.0
+            ),
+        }
+    return result
+
+
 def _evaluate_strategy(
     snapshots: tuple[ModelExplorerContract, ...],
     selector,
     *,
     planning_adapter: PathPlanningAdapter | None,
+    selection_result_factory=None,
 ) -> dict[str, Any]:
     selected_cells: list[list[int] | None] = []
+    selected_action_indices: list[int | None] = []
     cumulative_coverage_rate_delta = 0.0
     total_path_cost = 0.0
     total_risk = 0.0
@@ -187,6 +287,7 @@ def _evaluate_strategy(
         "cost_oracle_cells": [],
         "composite_oracle_cells": [],
     }
+    teacher_diagnostics: list[dict[str, Any]] = []
     previous_goal: GoalCandidate | None = None
     current_cell = (0, 0)
 
@@ -210,17 +311,25 @@ def _evaluate_strategy(
             for key in oracle_action_cells:
                 oracle_action_cells[key].append(None)
 
-        selected_goal = selector(contract)
+        planning_result = None
+        teacher_info: dict[str, Any] = {}
+        if selection_result_factory is None:
+            selected_goal = selector(contract)
+        else:
+            selection_result = selection_result_factory(contract, current_cell, step_index)
+            selected_goal, planning_result, teacher_info = _coerce_selection_result(selection_result)
+        teacher_diagnostics.append(teacher_info)
         if selected_goal is None:
             failure_count += 1
             replan_count += 1
             selected_cells.append(None)
+            selected_action_indices.append(None)
             previous_goal = None
             continue
 
-        planning_result = None
         action_index = _selected_action_index(contract, selected_goal)
-        if planning_adapter is not None:
+        selected_action_indices.append(None if action_index < 0 else action_index)
+        if planning_adapter is not None and planning_result is None:
             planning_result = planning_adapter.plan(
                 PathPlanRequest(
                     contract=contract,
@@ -271,8 +380,9 @@ def _evaluate_strategy(
             current_cell = selected_goal.cell
         previous_goal = selected_goal
 
-    return {
+    metrics = {
         "selected_cells": selected_cells,
+        "selected_action_indices": selected_action_indices,
         "final_coverage_rate": final_coverage_rate,
         "cumulative_coverage_rate_delta": cumulative_coverage_rate_delta,
         "total_path_cost": total_path_cost,
@@ -336,6 +446,9 @@ def _evaluate_strategy(
             **oracle_action_cells,
         },
     }
+    if any(teacher_diagnostics):
+        metrics.update(_teacher_diagnostics_summary(teacher_diagnostics))
+    return metrics
 
 
 def _oracle_info(contract: ModelExplorerContract) -> dict[str, Any] | None:
@@ -455,16 +568,182 @@ def _select_utility_goal(contract: ModelExplorerContract) -> GoalCandidate | Non
     return sorted(reachable_goals, key=lambda goal: (-goal.utility, goal.cell[0], goal.cell[1]))[0]
 
 
+def _select_no_goal(contract: ModelExplorerContract) -> GoalCandidate | None:
+    return None
+
+
+def _coerce_selection_result(result) -> tuple[GoalCandidate | None, Any, dict[str, Any]]:
+    if not isinstance(result, tuple):
+        return result, None, {}
+    if len(result) == 3:
+        selected_goal, planning_result, teacher_info = result
+        return selected_goal, planning_result, dict(teacher_info) if isinstance(teacher_info, dict) else {}
+    if len(result) == 2:
+        selected_goal, planning_result = result
+        return selected_goal, planning_result, {}
+    if len(result) == 1:
+        return result[0], None, {}
+    return None, None, {}
+
+
+def _feedback_aware_selection_result(
+    contract: ModelExplorerContract,
+    *,
+    planning_adapter: PathPlanningAdapter,
+    current_cell: tuple[int, int],
+    step_index: int,
+):
+    selection = select_goal_with_path_feedback(
+        contract,
+        planner=planning_adapter,
+        current_cell=current_cell,
+        step_index=step_index,
+        top_k=len(contract.top_goals),
+    )
+    return (
+        selection.decision.selected_goal,
+        None if selection.selected_evaluation is None else selection.selected_evaluation.result,
+        _feedback_teacher_diagnostics(selection),
+    )
+
+
+def _feedback_teacher_diagnostics(selection) -> dict[str, Any]:
+    info: dict[str, Any] = {
+        "teacher_ranked_action_indices": [int(index) for index in selection.ranked_action_indices],
+    }
+    if selection.selected_action_index is not None:
+        info["teacher_action_index"] = int(selection.selected_action_index)
+    if selection.decision.selected_goal is not None:
+        cell = selection.decision.selected_goal.cell
+        info["teacher_selected_cell"] = [int(cell[0]), int(cell[1])]
+    if selection.runner_up_action_index is not None:
+        info["teacher_runner_up_action_index"] = int(selection.runner_up_action_index)
+    if selection.selected_score is not None:
+        info["teacher_score"] = float(selection.selected_score)
+    if selection.runner_up_score is not None:
+        info["teacher_runner_up_score"] = float(selection.runner_up_score)
+    if selection.score_margin is not None:
+        info["teacher_score_margin"] = float(selection.score_margin)
+        info["teacher_margin_bucket"] = _teacher_margin_bucket(selection.score_margin)
+    return info
+
+
+def _teacher_diagnostics_summary(teacher_diagnostics: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "teacher_diagnostics": teacher_diagnostics,
+        "teacher_ranked_action_indices": [
+            _int_list(info.get("teacher_ranked_action_indices")) for info in teacher_diagnostics
+        ],
+        "teacher_score_margins": [
+            _optional_float(info.get("teacher_score_margin")) for info in teacher_diagnostics
+        ],
+        "teacher_scores": [
+            _optional_float(info.get("teacher_score")) for info in teacher_diagnostics
+        ],
+        "teacher_runner_up_scores": [
+            _optional_float(info.get("teacher_runner_up_score")) for info in teacher_diagnostics
+        ],
+        "teacher_margin_bucket_counts": _teacher_margin_bucket_counts(
+            _optional_float(info.get("teacher_score_margin")) for info in teacher_diagnostics
+        ),
+    }
+
+
+def _policy_agreement_metrics(
+    policy_metrics: dict[str, Any],
+    baseline_metrics: dict[str, Any],
+    baseline_name: str,
+) -> dict[str, Any]:
+    policy_indices = policy_metrics.get("selected_action_indices", [])
+    baseline_indices = baseline_metrics.get("selected_action_indices", [])
+    policy_cells = policy_metrics.get("selected_cells", [])
+    baseline_cells = baseline_metrics.get("selected_cells", [])
+    baseline_rankings = baseline_metrics.get("teacher_ranked_action_indices", [])
+    baseline_margins = baseline_metrics.get("teacher_score_margins", [])
+    sample_count = max(
+        len(policy_indices) if isinstance(policy_indices, list) else 0,
+        len(baseline_indices) if isinstance(baseline_indices, list) else 0,
+        len(policy_cells) if isinstance(policy_cells, list) else 0,
+        len(baseline_cells) if isinstance(baseline_cells, list) else 0,
+        len(baseline_rankings) if isinstance(baseline_rankings, list) else 0,
+    )
+    comparison_count = 0
+    action_agreement_count = 0
+    cell_agreement_count = 0
+    top2_action_agreement_count = 0
+    topk_action_agreement_count = 0
+    teacher_ranks: list[int] = []
+    margin_bucket_agreement = _empty_margin_bucket_agreement()
+    for index in range(sample_count):
+        baseline_index = _index_at(baseline_indices, index)
+        baseline_cell = _cell_at(baseline_cells, index)
+        if baseline_index is None and baseline_cell is None:
+            continue
+        policy_index = _index_at(policy_indices, index)
+        policy_cell = _cell_at(policy_cells, index)
+        ranking = _indices_at(baseline_rankings, index)
+        teacher_rank = _teacher_rank(ranking, policy_index)
+        if teacher_rank is not None:
+            teacher_ranks.append(teacher_rank)
+        margin = _float_at(baseline_margins, index)
+        bucket_name = _teacher_margin_bucket(margin)
+        bucket = margin_bucket_agreement[bucket_name]
+        comparison_count += 1
+        bucket["comparison_count"] += 1
+        if policy_index == baseline_index:
+            action_agreement_count += 1
+            bucket["action_agreement_count"] += 1
+        if policy_cell == baseline_cell:
+            cell_agreement_count += 1
+            bucket["selected_cell_agreement_count"] += 1
+        if policy_index is not None and policy_index in ranking[:2]:
+            top2_action_agreement_count += 1
+            bucket["top2_action_agreement_count"] += 1
+        if policy_index is not None and policy_index in ranking:
+            topk_action_agreement_count += 1
+            bucket["topk_action_agreement_count"] += 1
+    margin_bucket_agreement = _finalize_margin_bucket_agreement(margin_bucket_agreement)
+    return {
+        f"{baseline_name}_comparison_count": comparison_count,
+        f"{baseline_name}_action_agreement_count": action_agreement_count,
+        f"{baseline_name}_selected_cell_agreement_count": cell_agreement_count,
+        f"{baseline_name}_top2_action_agreement_count": top2_action_agreement_count,
+        f"{baseline_name}_topk_action_agreement_count": topk_action_agreement_count,
+        f"{baseline_name}_teacher_rank_count": len(teacher_ranks),
+        f"{baseline_name}_action_agreement_rate": _finite_float(
+            action_agreement_count / comparison_count if comparison_count else 0.0
+        ),
+        f"{baseline_name}_selected_cell_agreement_rate": _finite_float(
+            cell_agreement_count / comparison_count if comparison_count else 0.0
+        ),
+        f"{baseline_name}_top2_action_agreement_rate": _finite_float(
+            top2_action_agreement_count / comparison_count if comparison_count else 0.0
+        ),
+        f"{baseline_name}_topk_action_agreement_rate": _finite_float(
+            topk_action_agreement_count / comparison_count if comparison_count else 0.0
+        ),
+        f"{baseline_name}_teacher_rank_mean": _finite_float(
+            sum(teacher_ranks) / len(teacher_ranks) if teacher_ranks else 0.0
+        ),
+        f"{baseline_name}_margin_bucket_agreement": margin_bucket_agreement,
+    }
+
+
 def _policy_action_diagnostics(
     snapshots: tuple[ModelExplorerContract, ...],
     policy,
     *,
     utility_metrics: dict[str, Any],
     coverage_metrics: dict[str, Any],
+    feedback_metrics: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     diagnostics: list[dict[str, Any]] = []
     utility_cells = utility_metrics.get("selected_cells", [])
     coverage_cells = coverage_metrics.get("selected_cells", [])
+    feedback_cells = [] if feedback_metrics is None else feedback_metrics.get("selected_cells", [])
+    feedback_indices = [] if feedback_metrics is None else feedback_metrics.get("selected_action_indices", [])
+    feedback_rankings = [] if feedback_metrics is None else feedback_metrics.get("teacher_ranked_action_indices", [])
+    feedback_margins = [] if feedback_metrics is None else feedback_metrics.get("teacher_score_margins", [])
     for step_index, contract in enumerate(snapshots):
         observation = extract_policy_observation(contract)
         selected_goal = select_goal(contract, policy=policy).selected_goal
@@ -477,28 +756,53 @@ def _policy_action_diagnostics(
             if selected_index >= 0 and selected_index < len(probabilities)
             else 0.0
         )
-        diagnostics.append(
-            {
-                "step_index": step_index,
-                "selected_index": None if selected_index < 0 else selected_index,
-                "selected_cell": selected_cell,
-                "selected_action_probability": selected_probability,
-                "action_rank": _action_rank(contract, scores, selected_index, observation.action_mask),
-                "entropy": _entropy(probabilities),
-                "valid_action_count": sum(1 for is_valid in observation.action_mask if is_valid),
-                "agrees_with_utility": selected_cell == _cell_at(utility_cells, step_index),
-                "agrees_with_coverage_heuristic": selected_cell == _cell_at(coverage_cells, step_index),
-                "selected_action_mask_valid": (
-                    selected_index >= 0
-                    and selected_index < len(observation.action_mask)
-                    and bool(observation.action_mask[selected_index])
-                ),
-                "max_masked_action_probability": _max_masked_probability(
-                    probabilities,
-                    observation.action_mask,
-                ),
-            }
-        )
+        record = {
+            "step_index": step_index,
+            "selected_index": None if selected_index < 0 else selected_index,
+            "selected_cell": selected_cell,
+            "selected_action_probability": selected_probability,
+            "action_rank": _action_rank(contract, scores, selected_index, observation.action_mask),
+            "entropy": _entropy(probabilities),
+            "valid_action_count": sum(1 for is_valid in observation.action_mask if is_valid),
+            "agrees_with_utility": selected_cell == _cell_at(utility_cells, step_index),
+            "agrees_with_coverage_heuristic": selected_cell == _cell_at(coverage_cells, step_index),
+            "selected_action_mask_valid": (
+                selected_index >= 0
+                and selected_index < len(observation.action_mask)
+                and bool(observation.action_mask[selected_index])
+            ),
+            "max_masked_action_probability": _max_masked_probability(
+                probabilities,
+                observation.action_mask,
+            ),
+        }
+        if feedback_metrics is not None:
+            feedback_index = _index_at(feedback_indices, step_index)
+            feedback_cell = _cell_at(feedback_cells, step_index)
+            feedback_ranking = _indices_at(feedback_rankings, step_index)
+            feedback_teacher_rank = _teacher_rank(
+                feedback_ranking,
+                None if selected_index < 0 else selected_index,
+            )
+            record.update(
+                {
+                    "feedback_aware_action_index": feedback_index,
+                    "feedback_aware_selected_cell": feedback_cell,
+                    "feedback_aware_teacher_rank": feedback_teacher_rank,
+                    "feedback_aware_teacher_score_margin": _float_at(feedback_margins, step_index),
+                    "agrees_with_feedback_aware": selected_cell == feedback_cell,
+                    "action_agrees_with_feedback_aware": (
+                        (None if selected_index < 0 else selected_index) == feedback_index
+                    ),
+                    "agrees_with_feedback_aware_top2": (
+                        selected_index >= 0 and selected_index in feedback_ranking[:2]
+                    ),
+                    "agrees_with_feedback_aware_topk": (
+                        selected_index >= 0 and selected_index in feedback_ranking
+                    ),
+                }
+            )
+        diagnostics.append(record)
     return diagnostics
 
 
@@ -580,6 +884,72 @@ def _max_masked_probability(probabilities: tuple[float, ...], action_mask: tuple
     return max(masked) if masked else 0.0
 
 
+_TEACHER_LOW_MARGIN_THRESHOLD = 0.05
+_TEACHER_HIGH_MARGIN_THRESHOLD = 0.20
+_TEACHER_MARGIN_BUCKETS = ("high", "low", "medium", "missing")
+
+
+def _teacher_margin_bucket(margin: float | None) -> str:
+    if margin is None:
+        return "missing"
+    if margin <= _TEACHER_LOW_MARGIN_THRESHOLD:
+        return "low"
+    if margin <= _TEACHER_HIGH_MARGIN_THRESHOLD:
+        return "medium"
+    return "high"
+
+
+def _teacher_margin_bucket_counts(margins: Iterable[float | None]) -> dict[str, int]:
+    counts = {bucket: 0 for bucket in _TEACHER_MARGIN_BUCKETS}
+    for margin in margins:
+        counts[_teacher_margin_bucket(margin)] += 1
+    return counts
+
+
+def _empty_margin_bucket_agreement() -> dict[str, dict[str, int]]:
+    return {
+        bucket: {
+            "comparison_count": 0,
+            "action_agreement_count": 0,
+            "selected_cell_agreement_count": 0,
+            "top2_action_agreement_count": 0,
+            "topk_action_agreement_count": 0,
+        }
+        for bucket in _TEACHER_MARGIN_BUCKETS
+    }
+
+
+def _finalize_margin_bucket_agreement(bucket_counts: dict[str, dict[str, int]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for bucket_name, counts in bucket_counts.items():
+        comparison_count = counts["comparison_count"]
+        result[bucket_name] = {
+            **counts,
+            "action_agreement_rate": _finite_float(
+                counts["action_agreement_count"] / comparison_count if comparison_count else 0.0
+            ),
+            "selected_cell_agreement_rate": _finite_float(
+                counts["selected_cell_agreement_count"] / comparison_count if comparison_count else 0.0
+            ),
+            "top2_action_agreement_rate": _finite_float(
+                counts["top2_action_agreement_count"] / comparison_count if comparison_count else 0.0
+            ),
+            "topk_action_agreement_rate": _finite_float(
+                counts["topk_action_agreement_count"] / comparison_count if comparison_count else 0.0
+            ),
+        }
+    return result
+
+
+def _teacher_rank(ranking: list[int], action_index: int | None) -> int | None:
+    if action_index is None:
+        return None
+    for rank, ranked_index in enumerate(ranking, start=1):
+        if ranked_index == action_index:
+            return rank
+    return None
+
+
 def _cell_at(cells: Any, index: int) -> list[int] | None:
     if not isinstance(cells, list) or index >= len(cells):
         return None
@@ -587,6 +957,55 @@ def _cell_at(cells: Any, index: int) -> list[int] | None:
     if not isinstance(cell, list) or len(cell) != 2:
         return None
     return [int(cell[0]), int(cell[1])]
+
+
+def _index_at(indices: Any, index: int) -> int | None:
+    if not isinstance(indices, list) or index >= len(indices):
+        return None
+    value = indices[index]
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _indices_at(values: Any, index: int) -> list[int]:
+    if not isinstance(values, list) or index >= len(values):
+        return []
+    raw = values[index]
+    return _int_list(raw)
+
+
+def _int_list(value: Any) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    result: list[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            continue
+        try:
+            result.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def _float_at(values: Any, index: int) -> float | None:
+    if not isinstance(values, list) or index >= len(values):
+        return None
+    return _optional_float(values[index])
+
+
+def _optional_float(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if isfinite(numeric) else None
 
 
 def _selected_action_index(contract: ModelExplorerContract, selected_goal: GoalCandidate) -> int:
@@ -644,3 +1063,12 @@ def _finite_float(value: Any) -> float:
     except (TypeError, ValueError):
         return 0.0
     return numeric if isfinite(numeric) else 0.0
+
+
+def _safe_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0

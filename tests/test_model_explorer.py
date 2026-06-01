@@ -1087,6 +1087,75 @@ class RolloutCollectorTests(unittest.TestCase):
         self.assertEqual(episode.metrics.failure_count, 1)
         self.assertEqual(episode.metrics.replan_count, 1)
 
+    def test_rollout_selection_strategy_modes_record_effective_training_source(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.planning import PathPlanResult
+
+        class FixedPlanner:
+            def plan(self, request):
+                if request.action_index == 1:
+                    return PathPlanResult(
+                        feasible=False,
+                        path_cost=0.0,
+                        path_length=0.0,
+                        risk=0.0,
+                        failure_reason="path_blocked",
+                        replan_required=True,
+                    )
+                return PathPlanResult(feasible=True, path_cost=1.0, path_length=1.0, risk=0.1)
+
+        scenario = [
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[
+                        {
+                            "cell": [1, 1],
+                            "utility": 0.9,
+                            "reachable": True,
+                            "expected_coverage_rate_delta": 0.1,
+                        },
+                        {
+                            "cell": [2, 1],
+                            "utility": 0.4,
+                            "reachable": True,
+                            "expected_coverage_rate_delta": 0.9,
+                        },
+                        {
+                            "cell": [3, 1],
+                            "utility": 9.0,
+                            "reachable": False,
+                            "expected_coverage_rate_delta": 2.0,
+                        },
+                    ],
+                    observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.1},
+                )
+            )
+        ]
+
+        cases = (
+            ("auto", None, 1, "coverage_heuristic"),
+            ("coverage_heuristic", FixedPlanner(), 1, "coverage_heuristic"),
+            ("utility", FixedPlanner(), 0, "utility"),
+            ("feedback_aware", FixedPlanner(), 0, "feedback_aware"),
+            ("auto", FixedPlanner(), 0, "feedback_aware"),
+        )
+        for requested_strategy, planner, expected_action, expected_source in cases:
+            with self.subTest(selection_strategy=requested_strategy, planner=planner is not None):
+                episode = collect_rollout_episode(
+                    scenario,
+                    max_candidates=3,
+                    planning_adapter=planner,
+                    selection_strategy=requested_strategy,
+                )
+                transition = episode.transitions[0]
+
+                self.assertEqual(transition.action_index, expected_action)
+                self.assertEqual(transition.info.extra["requested_selection_strategy"], requested_strategy)
+                self.assertEqual(transition.info.extra["selection_strategy"], expected_source)
+                self.assertEqual(transition.info.extra["teacher_action_index"], expected_action)
+                if expected_source == "feedback_aware":
+                    self.assertIn("selection_score", transition.info.extra)
+
     def test_fake_execution_adapter_failure_is_recorded_as_failure_and_replan(self):
         from model_explorer.policy.collector import collect_dynamic_rollout_episode
         from model_explorer.policy.execution import FakeExecutionFeasibilityAdapter
@@ -1132,6 +1201,215 @@ class RolloutCollectorTests(unittest.TestCase):
 
 
 class PathPlanningAdapterTests(unittest.TestCase):
+    def test_feedback_aware_selection_prefers_feasible_alternative_over_blocked_high_coverage_goal(self):
+        from model_explorer.policy.feedback_selection import select_goal_with_path_feedback
+        from model_explorer.policy.planning import PathPlanResult
+
+        class FixedPlanner:
+            def __init__(self):
+                self.action_indices = []
+
+            def plan(self, request):
+                self.action_indices.append(request.action_index)
+                if request.action_index == 0:
+                    return PathPlanResult(
+                        feasible=False,
+                        path_cost=0.0,
+                        path_length=0.0,
+                        risk=0.0,
+                        failure_reason="goal_blocked",
+                        replan_required=True,
+                    )
+                return PathPlanResult(feasible=True, path_cost=5.0, path_length=5.0, risk=0.2)
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {
+                        "cell": [1, 1],
+                        "utility": 0.9,
+                        "reachable": True,
+                        "expected_coverage_rate_delta": 0.9,
+                        "value": 0.8,
+                    },
+                    {
+                        "cell": [2, 1],
+                        "utility": 0.2,
+                        "reachable": True,
+                        "expected_coverage_rate_delta": 0.2,
+                        "value": 0.1,
+                    },
+                ]
+            )
+        )
+        planner = FixedPlanner()
+
+        selection = select_goal_with_path_feedback(
+            contract,
+            planner=planner,
+            current_cell=(0, 0),
+            top_k=2,
+        )
+
+        self.assertEqual(selection.decision.selected_goal.cell, (2, 1))
+        self.assertEqual(selection.decision.status, "selected")
+        self.assertEqual(planner.action_indices, [0, 1])
+        self.assertLess(selection.scores_by_action_index[0], selection.scores_by_action_index[1])
+
+    def test_feedback_aware_selection_records_top_two_teacher_scores_and_margin(self):
+        from model_explorer.policy.feedback_selection import select_goal_with_path_feedback
+        from model_explorer.policy.planning import PathPlanResult
+
+        class FixedPlanner:
+            def __init__(self):
+                self.action_indices = []
+
+            def plan(self, request):
+                self.action_indices.append(request.action_index)
+                return PathPlanResult(feasible=True, path_cost=1.0, path_length=1.0, risk=0.1)
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {
+                        "cell": [1, 1],
+                        "utility": 0.8,
+                        "reachable": True,
+                        "expected_coverage_rate_delta": 0.9,
+                    },
+                    {
+                        "cell": [2, 1],
+                        "utility": 0.7,
+                        "reachable": True,
+                        "expected_coverage_rate_delta": 0.4,
+                    },
+                    {
+                        "cell": [3, 1],
+                        "utility": 99.0,
+                        "reachable": False,
+                        "expected_coverage_rate_delta": 1.0,
+                    },
+                ]
+            )
+        )
+
+        selection = select_goal_with_path_feedback(
+            contract,
+            planner=FixedPlanner(),
+            current_cell=(0, 0),
+            top_k=3,
+        )
+
+        self.assertEqual(selection.selected_action_index, 0)
+        self.assertEqual(selection.runner_up_action_index, 1)
+        self.assertEqual(selection.ranked_action_indices, (0, 1))
+        self.assertNotIn(2, selection.ranked_action_indices)
+        self.assertAlmostEqual(selection.selected_score, selection.scores_by_action_index[0])
+        self.assertAlmostEqual(selection.runner_up_score, selection.scores_by_action_index[1])
+        self.assertAlmostEqual(
+            selection.score_margin,
+            selection.scores_by_action_index[0] - selection.scores_by_action_index[1],
+        )
+        self.assertGreater(selection.score_margin, 0.0)
+
+    def test_feedback_aware_selection_penalizes_path_cost_risk_and_replan(self):
+        from model_explorer.policy.feedback_selection import select_goal_with_path_feedback
+        from model_explorer.policy.planning import PathPlanResult
+
+        class FixedPlanner:
+            def plan(self, request):
+                results = {
+                    0: PathPlanResult(
+                        feasible=True,
+                        path_cost=1.0,
+                        path_length=1.0,
+                        risk=0.05,
+                        replan_required=True,
+                    ),
+                    1: PathPlanResult(feasible=True, path_cost=4.0, path_length=4.0, risk=0.2),
+                    2: PathPlanResult(feasible=True, path_cost=80.0, path_length=80.0, risk=0.9),
+                }
+                return results[request.action_index]
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {
+                        "cell": [1, 1],
+                        "utility": 0.9,
+                        "reachable": True,
+                        "expected_coverage_rate_delta": 0.6,
+                    },
+                    {
+                        "cell": [2, 1],
+                        "utility": 0.4,
+                        "reachable": True,
+                        "expected_coverage_rate_delta": 0.55,
+                    },
+                    {
+                        "cell": [3, 1],
+                        "utility": 0.8,
+                        "reachable": True,
+                        "expected_coverage_rate_delta": 0.55,
+                    },
+                ]
+            )
+        )
+
+        selection = select_goal_with_path_feedback(
+            contract,
+            planner=FixedPlanner(),
+            current_cell=(0, 0),
+            top_k=3,
+        )
+
+        self.assertEqual(selection.decision.selected_goal.cell, (2, 1))
+        self.assertLess(selection.scores_by_action_index[0], selection.scores_by_action_index[1])
+        self.assertLess(selection.scores_by_action_index[2], selection.scores_by_action_index[1])
+
+    def test_feedback_aware_selection_never_evaluates_or_selects_contract_unreachable_candidates(self):
+        from model_explorer.policy.feedback_selection import select_goal_with_path_feedback
+        from model_explorer.policy.planning import PathPlanResult
+
+        class RecordingPlanner:
+            def __init__(self):
+                self.action_indices = []
+
+            def plan(self, request):
+                self.action_indices.append(request.action_index)
+                return PathPlanResult(feasible=True, path_cost=1.0, path_length=1.0, risk=0.0)
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {
+                        "cell": [1, 1],
+                        "utility": 99.0,
+                        "reachable": False,
+                        "expected_coverage_rate_delta": 1.0,
+                    },
+                    {
+                        "cell": [2, 1],
+                        "utility": 0.1,
+                        "reachable": True,
+                        "expected_coverage_rate_delta": 0.1,
+                    },
+                ]
+            )
+        )
+        planner = RecordingPlanner()
+
+        selection = select_goal_with_path_feedback(
+            contract,
+            planner=planner,
+            current_cell=(0, 0),
+            top_k=2,
+        )
+
+        self.assertEqual(selection.decision.selected_goal.cell, (2, 1))
+        self.assertEqual(planner.action_indices, [1])
+        self.assertNotIn(0, selection.scores_by_action_index)
+
     def test_path_feedback_summary_contract_lists_required_acceptance_metrics(self):
         from model_explorer.policy.path_feedback import (
             PATH_FEEDBACK_SUMMARY_ACCEPTANCE_METRICS,
@@ -2283,6 +2561,357 @@ class BaselineEvaluationTests(unittest.TestCase):
         self.assertEqual(report["utility"]["average_risk"], 0.4)
         self.assertEqual(report["utility"]["failure_count"], 1)
         self.assertEqual(report["utility"]["replan_count"], 1)
+
+    def test_baseline_evaluation_includes_feedback_aware_strategy_when_planner_is_available(self):
+        from model_explorer.policy.evaluation import evaluate_policy_baselines
+        from model_explorer.policy.planning import PathPlanResult
+
+        class FixedPlanner:
+            def plan(self, request):
+                if request.action_index == 0:
+                    return PathPlanResult(
+                        feasible=False,
+                        path_cost=0.0,
+                        path_length=0.0,
+                        risk=0.0,
+                        failure_reason="goal_blocked",
+                        replan_required=True,
+                    )
+                return PathPlanResult(feasible=True, path_cost=3.0, path_length=3.0, risk=0.1)
+
+        scenario = [
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[
+                        {
+                            "cell": [1, 1],
+                            "utility": 0.9,
+                            "reachable": True,
+                            "expected_coverage_rate_delta": 0.9,
+                        },
+                        {
+                            "cell": [2, 1],
+                            "utility": 0.2,
+                            "reachable": True,
+                            "expected_coverage_rate_delta": 0.2,
+                        },
+                    ],
+                    observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.05},
+                )
+            )
+        ]
+
+        report = evaluate_policy_baselines(scenario, planning_adapter=FixedPlanner())
+
+        self.assertIn("feedback_aware", report)
+        self.assertEqual(report["coverage_heuristic"]["selected_cells"], [[1, 1]])
+        self.assertEqual(report["feedback_aware"]["selected_cells"], [[2, 1]])
+        self.assertEqual(report["feedback_aware"]["failure_count"], 0)
+
+    def test_torch_policy_reports_feedback_aware_agreement_and_baseline_delta(self):
+        from model_explorer.policy.evaluation import evaluate_policy_baselines
+        from model_explorer.policy.experiment import _baseline_deltas
+        from model_explorer.policy.planning import PathPlanResult
+
+        class FixedPlanner:
+            def plan(self, request):
+                if request.action_index == 0:
+                    return PathPlanResult(
+                        feasible=False,
+                        path_cost=0.0,
+                        path_length=0.0,
+                        risk=0.0,
+                        failure_reason="goal_blocked",
+                        replan_required=True,
+                    )
+                return PathPlanResult(feasible=True, path_cost=3.0, path_length=3.0, risk=0.1)
+
+        class FirstActionPolicy:
+            def score(self, observation):
+                return [10.0, 0.0]
+
+        scenario = [
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[
+                        {
+                            "cell": [1, 1],
+                            "utility": 0.9,
+                            "reachable": True,
+                            "expected_coverage_rate_delta": 0.9,
+                        },
+                        {
+                            "cell": [2, 1],
+                            "utility": 0.2,
+                            "reachable": True,
+                            "expected_coverage_rate_delta": 0.2,
+                        },
+                    ],
+                    observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.05},
+                )
+            )
+        ]
+
+        report = evaluate_policy_baselines(
+            scenario,
+            torch_policy=FirstActionPolicy(),
+            planning_adapter=FixedPlanner(),
+        )
+
+        torch_metrics = report["torch_policy"]
+        self.assertEqual(report["feedback_aware"]["selected_action_indices"], [1])
+        self.assertEqual(torch_metrics["selected_action_indices"], [0])
+        self.assertEqual(torch_metrics["feedback_aware_action_agreement_rate"], 0.0)
+        self.assertEqual(torch_metrics["feedback_aware_selected_cell_agreement_rate"], 0.0)
+        self.assertFalse(torch_metrics["action_diagnostics"][0]["agrees_with_feedback_aware"])
+        self.assertIn("feedback_aware", _baseline_deltas(report)["torch_policy"])
+
+    def test_torch_policy_reports_teacher_rank_topk_and_margin_bucket_agreement(self):
+        from model_explorer.policy.evaluation import evaluate_policy_baselines
+        from model_explorer.policy.planning import PathPlanResult
+
+        class FixedPlanner:
+            def plan(self, request):
+                if request.action_index == 0:
+                    return PathPlanResult(
+                        feasible=False,
+                        path_cost=0.0,
+                        path_length=0.0,
+                        risk=0.0,
+                        failure_reason="goal_blocked",
+                        replan_required=True,
+                    )
+                return PathPlanResult(feasible=True, path_cost=2.0, path_length=2.0, risk=0.1)
+
+        class RunnerUpPolicy:
+            def score(self, observation):
+                return [10.0, 0.0]
+
+        scenario = [
+            load_contract_from_dict(
+                minimal_contract(
+                    goals=[
+                        {"cell": [1, 1], "utility": 0.9, "reachable": True, "expected_coverage_rate_delta": 0.9},
+                        {"cell": [2, 1], "utility": 0.2, "reachable": True, "expected_coverage_rate_delta": 0.2},
+                    ],
+                    observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.05},
+                )
+            )
+        ]
+
+        report = evaluate_policy_baselines(
+            scenario,
+            torch_policy=RunnerUpPolicy(),
+            planning_adapter=FixedPlanner(),
+        )
+
+        feedback_metrics = report["feedback_aware"]
+        torch_metrics = report["torch_policy"]
+        diagnostic = torch_metrics["action_diagnostics"][0]
+        bucket = torch_metrics["feedback_aware_margin_bucket_agreement"]["high"]
+
+        self.assertEqual(feedback_metrics["teacher_ranked_action_indices"], [[1, 0]])
+        self.assertEqual(torch_metrics["feedback_aware_action_agreement_rate"], 0.0)
+        self.assertEqual(torch_metrics["feedback_aware_top2_action_agreement_rate"], 1.0)
+        self.assertEqual(torch_metrics["feedback_aware_topk_action_agreement_rate"], 1.0)
+        self.assertEqual(torch_metrics["feedback_aware_teacher_rank_mean"], 2.0)
+        self.assertEqual(diagnostic["feedback_aware_teacher_rank"], 2)
+        self.assertTrue(diagnostic["agrees_with_feedback_aware_top2"])
+        self.assertGreater(diagnostic["feedback_aware_teacher_score_margin"], 0.0)
+        self.assertEqual(bucket["comparison_count"], 1)
+        self.assertEqual(bucket["action_agreement_count"], 0)
+        self.assertEqual(bucket["top2_action_agreement_count"], 1)
+
+    def test_rollout_with_planning_adapter_uses_feedback_aware_selection(self):
+        from model_explorer.policy.collector import collect_dynamic_rollout_episode
+        from model_explorer.policy.planning import PathPlanResult
+        from model_explorer.policy.provider import SequenceContractProvider
+
+        class FixedPlanner:
+            def plan(self, request):
+                if request.action_index == 0:
+                    return PathPlanResult(
+                        feasible=False,
+                        path_cost=0.0,
+                        path_length=0.0,
+                        risk=0.0,
+                        failure_reason="goal_blocked",
+                        replan_required=True,
+                    )
+                return PathPlanResult(feasible=True, path_cost=3.0, path_length=3.0, risk=0.1)
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {
+                        "cell": [1, 1],
+                        "utility": 0.9,
+                        "reachable": True,
+                        "expected_coverage_rate_delta": 0.9,
+                    },
+                    {
+                        "cell": [2, 1],
+                        "utility": 0.2,
+                        "reachable": True,
+                        "expected_coverage_rate_delta": 0.2,
+                    },
+                ],
+                observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.2},
+            )
+        )
+
+        episode = collect_dynamic_rollout_episode(
+            SequenceContractProvider([contract]),
+            planning_adapter=FixedPlanner(),
+            max_steps=1,
+            max_candidates=2,
+        )
+
+        transition = episode.transitions[0]
+        self.assertEqual(transition.action_index, 1)
+        self.assertEqual(transition.info.selected_cell, (2, 1))
+        self.assertEqual(transition.info.extra["selection_strategy"], "feedback_aware")
+        self.assertIsNone(transition.info.failure_reason)
+        self.assertEqual(transition.info.path_cost, 3.0)
+        self.assertEqual(episode.metrics.failure_count, 0)
+
+    def test_feedback_aware_rollout_records_teacher_runner_up_score_margin(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.planning import PathPlanResult
+
+        class FixedPlanner:
+            def plan(self, request):
+                if request.action_index == 0:
+                    return PathPlanResult(
+                        feasible=False,
+                        failure_reason="path_blocked",
+                        replan_required=True,
+                    )
+                return PathPlanResult(feasible=True, path_cost=2.0, path_length=2.0, risk=0.1)
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [1, 1], "utility": 0.9, "reachable": True, "expected_coverage_rate_delta": 0.9},
+                    {"cell": [2, 1], "utility": 0.2, "reachable": True, "expected_coverage_rate_delta": 0.2},
+                ],
+                observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.2},
+            )
+        )
+
+        episode = collect_rollout_episode(
+            [contract],
+            planning_adapter=FixedPlanner(),
+            selection_strategy="feedback_aware",
+            max_candidates=2,
+        )
+        extra = episode.transitions[0].info.extra
+
+        self.assertEqual(extra["teacher_action_index"], 1)
+        self.assertEqual(extra["teacher_runner_up_action_index"], 0)
+        self.assertEqual(extra["teacher_ranked_action_indices"], [1, 0])
+        self.assertAlmostEqual(extra["teacher_score"], extra["selection_score"])
+        self.assertLess(extra["teacher_runner_up_score"], extra["teacher_score"])
+        self.assertAlmostEqual(
+            extra["teacher_score_margin"],
+            extra["teacher_score"] - extra["teacher_runner_up_score"],
+        )
+        self.assertGreater(extra["teacher_score_margin"], 0.0)
+
+    def test_feedback_aware_rollout_dataset_summary_counts_selection_strategy(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.dataset import summarize_rollout_dataset
+        from model_explorer.policy.planning import PathPlanResult
+
+        class FixedPlanner:
+            def plan(self, request):
+                if request.action_index == 0:
+                    return PathPlanResult(
+                        feasible=False,
+                        failure_reason="path_blocked",
+                        replan_required=True,
+                    )
+                return PathPlanResult(feasible=True, path_cost=3.0, path_length=3.0, risk=0.1)
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {
+                        "cell": [1, 1],
+                        "utility": 0.9,
+                        "reachable": True,
+                        "expected_coverage_rate_delta": 0.9,
+                    },
+                    {
+                        "cell": [2, 1],
+                        "utility": 0.2,
+                        "reachable": True,
+                        "expected_coverage_rate_delta": 0.2,
+                    },
+                ],
+                observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.2},
+            )
+        )
+
+        episode = collect_rollout_episode(
+            [contract],
+            planning_adapter=FixedPlanner(),
+            selection_strategy="feedback_aware",
+            max_candidates=2,
+        )
+        summary = summarize_rollout_dataset([episode])
+
+        self.assertEqual(summary["selection_strategy_counts"], {"feedback_aware": 1})
+        self.assertEqual(summary["selection_strategy_fractions"]["feedback_aware"], 1.0)
+        self.assertEqual(summary["primary_selection_strategy"], "feedback_aware")
+
+    def test_dataset_summary_records_teacher_margin_distribution_and_buckets(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.dataset import summarize_rollout_dataset
+        from model_explorer.policy.rollout import RolloutEpisode
+
+        base_episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[
+                            {"cell": [1, 1], "utility": 0.5, "reachable": True},
+                            {"cell": [2, 1], "utility": 0.4, "reachable": True},
+                        ],
+                        observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.1},
+                    )
+                )
+            ],
+            max_candidates=2,
+        )
+        base_transition = base_episode.transitions[0]
+        margins = (0.03, 0.5)
+        transitions = tuple(
+            replace(
+                base_transition,
+                info=replace(
+                    base_transition.info,
+                    extra={
+                        **base_transition.info.extra,
+                        "selection_strategy": "feedback_aware",
+                        "requested_selection_strategy": "feedback_aware",
+                        "teacher_score_margin": margin,
+                    },
+                ),
+            )
+            for margin in margins
+        )
+        episode = RolloutEpisode(transitions=transitions, metrics=base_episode.metrics)
+
+        summary = summarize_rollout_dataset([episode])
+
+        self.assertEqual(summary["teacher_margin_sample_count"], 2)
+        self.assertEqual(summary["teacher_low_margin_sample_count"], 1)
+        self.assertEqual(summary["teacher_margin_bucket_counts"], {"high": 1, "low": 1, "medium": 0, "missing": 0})
+        self.assertAlmostEqual(summary["teacher_score_margin"]["min"], 0.03)
+        self.assertAlmostEqual(summary["teacher_score_margin"]["max"], 0.5)
+        self.assertAlmostEqual(summary["teacher_score_margin"]["mean"], 0.265)
+        self.assertAlmostEqual(summary["teacher_score_margin"]["std"], 0.235)
 
 
 class ExperimentManifestTests(unittest.TestCase):

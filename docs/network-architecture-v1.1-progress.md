@@ -120,6 +120,14 @@
 | AC-3 | Selection/report upgrade | Completed | Selection JSON and Markdown now include `Action-Sensitive Metrics`, `Oracle Regret Summary`, `Sample Discriminativeness`, and `Per-ROI Action Outcomes`; composite weights can read nested metrics such as `action_sensitive_metrics.selected_expected_coverage_delta` | Run full verification gates |
 | AC-4 | Final verification gates | Completed | Targeted tests passed, related test classes passed, `python -m unittest discover -s tests -v` passed 136 tests, `$env:PYTHONPATH='src'; python -m model_explorer verify` passed 136 unittest cases plus benchmark smoke / forbidden import scan / git diff check, external `git diff --check` returned 0 with CRLF warnings only, and explicit forbidden import `rg` returned `no forbidden imports` | Keep generated selection outputs under ignored `data/processed/` |
 
+## Feedback-Aware Distillation Evaluation Matrix Progress
+
+| ID | Task | Status | Evidence | Next Action |
+|---|---|---|---|---|
+| FA-0 | Feedback-aware training source closure | Completed | Rollout, dataset, training, evaluation, and experiment summaries record `feedback_aware` selection source, teacher action/cell, score margin, top-k agreement, margin bucket agreement, and feedback-aware baseline deltas without changing `model-explorer-contract/v1` or the candidate-list action space | Keep `teacher_imitation_weight` defaulted to 0.0 |
+| FA-1 | Source x teacher-weight matrix | In progress | Experiment manifests can use `train.source_selection_strategies`, `train.teacher_imitation_weights`, and `train.teacher_quality_gates`; JSON summary records per-run `distillation_matrix` entries with teacher agreement, teacher-quality gates, margin bucket agreement, and baseline deltas | Use this as distillation evidence only |
+| FA-2 | Quasi-real/mask-stress labels | In progress | Distillation matrix summaries preserve `quasi_real` and `mask_stress_augmented` dataset labels and reports continue to state `not real-world generalization benchmark` | Do not treat quasi-real or mask-stress results as real-world generalization proof |
+
 ## Current Architecture Snapshot
 
 ```text
