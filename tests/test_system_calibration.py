@@ -40,6 +40,49 @@ def _run(
     }
 
 
+def _episode_with_scenario_id(scenario_id: str):
+    from model_explorer.policy.features import PolicyObservation
+    from model_explorer.policy.rollout import EpisodeMetrics, RolloutEpisode, RolloutInfo, RolloutTransition
+
+    observation = PolicyObservation(
+        candidate_feature_names=("utility",),
+        candidate_features=((1.0,),),
+        global_feature_names=("coverage_rate",),
+        global_features=(0.0,),
+        action_mask=(True,),
+        candidate_cells=((1, 1),),
+        candidate_missing_feature_names=((),),
+        candidate_missing_indicator_names=(),
+        candidate_missing_indicators=((),),
+    )
+    transition = RolloutTransition(
+        observation=observation,
+        action_index=0,
+        log_prob=None,
+        value=None,
+        reward=1.0,
+        next_observation=None,
+        done=True,
+        info=RolloutInfo(
+            selected_cell=(1, 1),
+            coverage_rate_delta=0.1,
+            path_cost=1.0,
+            risk=0.0,
+            final_coverage_rate=0.1,
+            extra={
+                "scenario_id": scenario_id,
+                "provenance": {
+                    "scenario_id": scenario_id,
+                    "data_class": "quasi_real",
+                    "mask_stress_augmented": True,
+                    "mask_stress_label": "mask_stress_augmented",
+                },
+            },
+        ),
+    )
+    return RolloutEpisode(transitions=(transition,), metrics=EpisodeMetrics(final_coverage_rate=0.1))
+
+
 def _path_feedback_summary(
     *,
     open_grid_fallback_used: bool = False,
@@ -50,18 +93,39 @@ def _path_feedback_summary(
     iris_fallback_count: int = 0,
     region_graph_fallback_count: int = 0,
     region_graph_disconnected_count: int = 0,
+    scenario_set: str = "all",
+    diagnostic_profile: str = "all",
+    acceptance_gate: str = "semi-real-closed-loop",
 ) -> dict:
     stress_failure = max(1, failure_count)
     stress_replan = max(1, replan_count)
     return {
         "schema_version": "path-feedback-summary/v1",
         "scenario_count": 3,
+        "scenario_set": scenario_set,
+        "diagnostic_profile": diagnostic_profile,
+        "acceptance_gate": acceptance_gate,
         "top_k": 3,
+        "planner_extra_args": ["--simulate-tracking", "--optimize-trajectory", "--drake-iris-regions"],
         "candidate_count": candidate_count,
         "reachable_count": reachable_count,
         "path_planning_failure_count": failure_count,
         "replan_count": replan_count,
         "open_grid_fallback_used": open_grid_fallback_used,
+        "acceptance_metadata": {
+            "scenario_set": scenario_set,
+            "diagnostic_profile": diagnostic_profile,
+            "acceptance_gate": acceptance_gate,
+            "top_k": 3,
+            "planner_extra_args": ["--simulate-tracking", "--optimize-trajectory", "--drake-iris-regions"],
+            "open_grid_fallback_used": open_grid_fallback_used,
+            "open_grid_fallback_used_gate": {
+                "status": "failed" if open_grid_fallback_used else "passed",
+                "expected": False,
+                "actual": open_grid_fallback_used,
+                "reason_codes": ["open_grid_fallback_used"] if open_grid_fallback_used else ["open_grid_fallback_not_used"],
+            },
+        },
         "iris_fallback_count": iris_fallback_count,
         "region_graph_fallback_count": region_graph_fallback_count,
         "region_graph_disconnected_count": region_graph_disconnected_count,
@@ -109,6 +173,54 @@ def _path_feedback_summary(
                 },
             }
         },
+        "scenarios": [
+            {
+                "scenario_id": "stress-a",
+                "scenario_group": "stress",
+                "selection_changed_by_path_feedback": True,
+                "open_grid_fallback_used": open_grid_fallback_used,
+                "path_feedback": {
+                    "candidate_count": 3,
+                    "reachable_count": 1,
+                    "failure_count": failure_count,
+                    "replan_count": replan_count,
+                    "candidates": [
+                        {
+                            "action_index": 0,
+                            "cell": [1, 1],
+                            "reachable": failure_count == 0,
+                            "replan_required": replan_count > 0,
+                            "failure_reason": "path_blocked" if failure_count else None,
+                            "diagnostic_interpretation": {
+                                "diagnostic_flags": [
+                                    *("path_planning_failure" for _ in range(1 if failure_count else 0)),
+                                    *("replan_required" for _ in range(1 if replan_count else 0)),
+                                    *("iris_fallback" for _ in range(1 if iris_fallback_count else 0)),
+                                    *("region_graph_fallback" for _ in range(1 if region_graph_fallback_count else 0)),
+                                    *("region_graph_disconnected" for _ in range(1 if region_graph_disconnected_count else 0)),
+                                    *("open_grid_fallback" for _ in range(1 if open_grid_fallback_used else 0)),
+                                ],
+                                "open_grid_fallback_used": open_grid_fallback_used,
+                            },
+                        }
+                    ],
+                },
+                "diagnostic_interpretation": {
+                    "target_replacement_reason": "before_candidate_path_planning_failed"
+                    if failure_count
+                    else "unchanged",
+                    "failure_sources": [
+                        *("path_planning_failure" for _ in range(1 if failure_count else 0)),
+                        *("replan_required" for _ in range(1 if replan_count else 0)),
+                        *("iris_fallback" for _ in range(1 if iris_fallback_count else 0)),
+                        *("region_graph_fallback" for _ in range(1 if region_graph_fallback_count else 0)),
+                        *("region_graph_disconnected" for _ in range(1 if region_graph_disconnected_count else 0)),
+                        *("open_grid_fallback" for _ in range(1 if open_grid_fallback_used else 0)),
+                    ],
+                    "open_grid_fallback_used": open_grid_fallback_used,
+                },
+            }
+        ],
     }
 
 
@@ -184,6 +296,144 @@ class SystemCalibrationSummaryTests(unittest.TestCase):
         self.assertEqual(gate["status"], "failed")
         self.assertEqual(gate["reason_codes"], ["open_grid_fallback_used"])
         self.assertTrue(all(isinstance(reason, str) for reason in gate["reason_codes"]))
+
+    def test_acceptance_metadata_missing_or_mismatch_is_machine_readable(self) -> None:
+        from model_explorer.policy.system_calibration import evaluate_path_feedback_gate
+
+        expected_gate = {
+            "scenario_set": "all",
+            "diagnostic_profile": "all",
+            "top_k": 3,
+            "require_open_grid_fallback_used": False,
+        }
+        missing_metadata = _path_feedback_summary()
+        del missing_metadata["acceptance_metadata"]
+
+        missing_gate = evaluate_path_feedback_gate(
+            missing_metadata,
+            {
+                "require_open_grid_fallback_used_false": True,
+                "acceptance_gate": expected_gate,
+            },
+        )
+        self.assertEqual(missing_gate["status"], "failed")
+        self.assertIn("acceptance_metadata_missing", missing_gate["reason_codes"])
+        self.assertIn("acceptance_metadata_missing", missing_gate["warning_reason_codes"])
+        self.assertTrue(all(isinstance(reason, str) for reason in missing_gate["reason_codes"]))
+
+        mismatch_gate = evaluate_path_feedback_gate(
+            _path_feedback_summary(scenario_set="stress"),
+            {
+                "require_open_grid_fallback_used_false": True,
+                "acceptance_gate": expected_gate,
+            },
+        )
+        self.assertEqual(mismatch_gate["status"], "failed")
+        self.assertIn("acceptance_metadata_mismatch", mismatch_gate["reason_codes"])
+        self.assertEqual(
+            mismatch_gate["acceptance_metadata"]["mismatches"][0]["field"],
+            "scenario_set",
+        )
+
+    def test_sample_quality_summary_maps_path_feedback_diagnostics_without_performance_claims(self) -> None:
+        from model_explorer.policy.system_calibration import build_sample_quality_summary
+
+        summary = build_sample_quality_summary(
+            [_path_feedback_summary(
+                open_grid_fallback_used=True,
+                failure_count=1,
+                replan_count=1,
+                iris_fallback_count=1,
+                region_graph_fallback_count=1,
+                region_graph_disconnected_count=1,
+            )],
+            {
+                "enabled": True,
+                "exclude_reason_codes": ["open_grid_fallback"],
+                "downweight_reason_codes": [
+                    "path_planning_failure",
+                    "replan_required",
+                    "iris_fallback",
+                    "region_graph_fallback",
+                    "region_graph_disconnected",
+                ],
+            },
+        )
+
+        self.assertEqual(summary["quality_signal_use"], "calibration_only")
+        self.assertTrue(summary["not_real_world_performance_claim"])
+        record = summary["records"][0]
+        for reason in (
+            "path_planning_failure",
+            "replan_required",
+            "iris_fallback",
+            "region_graph_fallback",
+            "region_graph_disconnected",
+            "open_grid_fallback",
+        ):
+            self.assertIn(reason, record["reason_codes"])
+        self.assertEqual(record["decision"], "exclude")
+        self.assertTrue(all(isinstance(reason, str) for reason in record["reason_codes"]))
+
+    def test_training_sample_quality_is_explicit_and_preserves_legacy_default(self) -> None:
+        from model_explorer.policy.experiment import _run_training
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+
+            def training_result(episodes, *args, **kwargs):
+                episode_count = len(tuple(episodes))
+                return _run(
+                    f"raw-{kwargs['seed']}.pt",
+                    float(episode_count),
+                    seed=kwargs["seed"],
+                ) | {"sample_count": episode_count, "dataset_summary": {"data_class": "quasi_real", "mask_stress_augmented": True}}
+
+            base_episode = _episode_with_scenario_id("stress-a")
+            clean_episode = _episode_with_scenario_id("clean-a")
+            feedback_path = root / "path-feedback.json"
+            feedback_path.write_text(
+                json.dumps(_path_feedback_summary(open_grid_fallback_used=True, failure_count=1, replan_count=1)),
+                encoding="utf-8",
+            )
+
+            with patch("model_explorer.policy.training.train_policy_on_episodes", side_effect=training_result):
+                legacy = _run_training(
+                    (base_episode, clean_episode),
+                    {
+                        "seed": 1,
+                        "checkpoint": str(root / "legacy.pt"),
+                        "evaluate_trained_policy": False,
+                    },
+                    base_dir=root,
+                )
+
+            with patch("model_explorer.policy.training.train_policy_on_episodes", side_effect=training_result):
+                gated = _run_training(
+                    (base_episode, clean_episode),
+                    {
+                        "seed": 1,
+                        "checkpoint": str(root / "gated.pt"),
+                        "evaluate_trained_policy": False,
+                        "system_calibration": {
+                            "path_feedback_summaries": [{"path": str(feedback_path)}],
+                            "sample_quality": {
+                                "enabled": True,
+                                "match_key": "scenario_id",
+                                "exclude_reason_codes": ["open_grid_fallback"],
+                                "downweight_reason_codes": ["path_planning_failure", "replan_required"],
+                            },
+                        },
+                    },
+                    base_dir=root,
+                )
+
+        self.assertNotIn("sample_quality_summary", legacy)
+        self.assertEqual(legacy["sample_count"], 2)
+        self.assertIn("sample_quality_summary", gated)
+        self.assertEqual(gated["sample_count"], 1)
+        self.assertEqual(gated["sample_quality_summary"]["excluded_sample_count"], 1)
+        self.assertIn("open_grid_fallback", gated["sample_quality_summary"]["records"][0]["reason_codes"])
 
     def test_system_summary_preserves_stress_mixed_stress_diagnostics_and_joint_gate_rates(self) -> None:
         from model_explorer.policy.system_calibration import build_system_calibration_summary

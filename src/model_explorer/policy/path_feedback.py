@@ -34,7 +34,11 @@ PATH_FEEDBACK_SUMMARY_ACCEPTANCE_METRICS = (
 PATH_FEEDBACK_SUMMARY_REQUIRED_KEYS = (
     "schema_version",
     "scenario_count",
+    "scenario_set",
+    "diagnostic_profile",
+    "acceptance_gate",
     "top_k",
+    "planner_extra_args",
     "candidate_count",
     "reachable_count",
     "path_planning_failure_count",
@@ -60,6 +64,8 @@ PATH_FEEDBACK_SUMMARY_REQUIRED_KEYS = (
     "region_graph_fallback_count",
     "region_graph_fallback_reasons",
     "region_graph_start_goal_disconnected_count",
+    "open_grid_fallback_used_gate",
+    "acceptance_metadata",
     "scenario_group_summary",
     "scenarios",
 )
@@ -81,6 +87,10 @@ class PathFeedbackManifest:
     scenarios: tuple[PathFeedbackScenario, ...]
     planner_config: dict[str, Any]
     top_k: int
+    scenario_set: str | None = None
+    diagnostic_profile: str | None = None
+    acceptance_gate: str | None = None
+    planner_extra_args: tuple[str, ...] = ()
     summary_output: Path | None = None
     report_output: Path | None = None
 
@@ -98,11 +108,21 @@ def load_path_feedback_manifest(path: str | Path) -> PathFeedbackManifest:
         raise ValueError("scenarios must be a non-empty list")
     scenarios = tuple(_scenario_from_payload(item, base_dir=manifest_path.parent) for item in raw_scenarios)
     outputs = payload.get("outputs") if isinstance(payload.get("outputs"), dict) else {}
+    planner_config = _resolve_planner_config(payload.get("planner", {}), base_dir=manifest_path.parent)
+    validation_parameters = payload.get("validation_parameters")
+    validation_parameters = validation_parameters if isinstance(validation_parameters, dict) else {}
+    planner_extra_args = payload.get("planner_extra_args", planner_config.get("extra_args", ()))
     return PathFeedbackManifest(
         schema_version=schema_version,
         scenarios=scenarios,
-        planner_config=_resolve_planner_config(payload.get("planner", {}), base_dir=manifest_path.parent),
+        planner_config=planner_config,
         top_k=int(payload.get("top_k", 3)),
+        scenario_set=_optional_str(payload.get("scenario_set", validation_parameters.get("scenario_set"))),
+        diagnostic_profile=_optional_str(
+            payload.get("diagnostic_profile", validation_parameters.get("diagnostic_profile"))
+        ),
+        acceptance_gate=_optional_str(payload.get("acceptance_gate", validation_parameters.get("acceptance_gate"))),
+        planner_extra_args=_string_tuple(planner_extra_args),
         summary_output=_optional_path(outputs.get("summary"), base_dir=manifest_path.parent),
         report_output=_optional_path(outputs.get("report"), base_dir=manifest_path.parent),
     )
@@ -114,7 +134,11 @@ def dry_run_path_feedback_manifest(path: str | Path) -> dict[str, Any]:
         "status": "dry_run",
         "schema_version": manifest.schema_version,
         "scenario_count": len(manifest.scenarios),
+        "scenario_set": manifest.scenario_set,
+        "diagnostic_profile": manifest.diagnostic_profile,
+        "acceptance_gate": manifest.acceptance_gate,
         "top_k": manifest.top_k,
+        "planner_extra_args": list(manifest.planner_extra_args),
         "planner": str(manifest.planner_config.get("backend", "path_planner_route")),
         "scenarios": [
             {
@@ -201,7 +225,11 @@ def compact_path_feedback_summary(
         "status": "completed",
         "schema_version": summary.get("schema_version"),
         "scenario_count": summary.get("scenario_count"),
+        "scenario_set": summary.get("scenario_set"),
+        "diagnostic_profile": summary.get("diagnostic_profile"),
+        "acceptance_gate": summary.get("acceptance_gate"),
         "top_k": summary.get("top_k"),
+        "planner_extra_args": summary.get("planner_extra_args", []),
         "candidate_count": summary.get("candidate_count"),
         "reachable_count": summary.get("reachable_count"),
         "path_planning_failure_count": summary.get("path_planning_failure_count"),
@@ -215,6 +243,8 @@ def compact_path_feedback_summary(
         "trajectory_optimization_fallback_count": summary.get("trajectory_optimization_fallback_count"),
         "region_graph_disconnected_count": summary.get("region_graph_disconnected_count"),
         "open_grid_fallback_used": summary.get("open_grid_fallback_used"),
+        "open_grid_fallback_used_gate": summary.get("open_grid_fallback_used_gate", {}),
+        "acceptance_metadata": summary.get("acceptance_metadata", {}),
         "failure_reasons": summary.get("failure_reasons", []),
         "iris_requested_count": summary.get("iris_requested_count"),
         "iris_report_count": summary.get("iris_report_count"),
@@ -250,10 +280,19 @@ def run_path_feedback(manifest: PathFeedbackManifest) -> dict[str, Any]:
     )
     diagnostic_summary = _diagnostic_aggregate(scenario_summaries)
     diagnostic_interpretation = _diagnostic_interpretation_summary(scenario_summaries)
+    open_grid_fallback_used = any(bool(item["open_grid_fallback_used"]) for item in scenario_summaries)
+    acceptance_metadata = _acceptance_metadata(
+        manifest,
+        open_grid_fallback_used=open_grid_fallback_used,
+    )
     return {
         "schema_version": PATH_FEEDBACK_SUMMARY_SCHEMA_VERSION,
         "scenario_count": len(scenario_summaries),
+        "scenario_set": manifest.scenario_set,
+        "diagnostic_profile": manifest.diagnostic_profile,
+        "acceptance_gate": manifest.acceptance_gate,
         "top_k": manifest.top_k,
+        "planner_extra_args": list(manifest.planner_extra_args),
         "candidate_count": sum(int(item["path_feedback"]["candidate_count"]) for item in scenario_summaries),
         "reachable_count": sum(int(item["path_feedback"]["reachable_count"]) for item in scenario_summaries),
         "path_planning_failure_count": sum(int(item["path_feedback"]["failure_count"]) for item in scenario_summaries),
@@ -284,7 +323,9 @@ def run_path_feedback(manifest: PathFeedbackManifest) -> dict[str, Any]:
         "region_graph_disconnected_count": sum(
             int(item["region_graph_disconnected_count"]) for item in scenario_summaries
         ),
-        "open_grid_fallback_used": any(bool(item["open_grid_fallback_used"]) for item in scenario_summaries),
+        "open_grid_fallback_used": open_grid_fallback_used,
+        "open_grid_fallback_used_gate": acceptance_metadata["open_grid_fallback_used_gate"],
+        "acceptance_metadata": acceptance_metadata,
         "failure_reasons": [
             reason
             for item in scenario_summaries
@@ -892,6 +933,47 @@ def _int_value(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _string_tuple(value: Any) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,)
+    if not isinstance(value, list | tuple):
+        raise ValueError("planner_extra_args must be a list")
+    return tuple(str(item) for item in value)
+
+
+def _acceptance_metadata(
+    manifest: PathFeedbackManifest,
+    *,
+    open_grid_fallback_used: bool,
+) -> dict[str, Any]:
+    gate_status = "failed" if open_grid_fallback_used else "passed"
+    reason_codes = ["open_grid_fallback_used"] if open_grid_fallback_used else ["open_grid_fallback_not_used"]
+    return {
+        "schema_version": "path-feedback-acceptance-metadata/v1",
+        "scenario_set": manifest.scenario_set,
+        "diagnostic_profile": manifest.diagnostic_profile,
+        "acceptance_gate": manifest.acceptance_gate,
+        "top_k": int(manifest.top_k),
+        "planner_extra_args": list(manifest.planner_extra_args),
+        "open_grid_fallback_used": bool(open_grid_fallback_used),
+        "open_grid_fallback_used_gate": {
+            "status": gate_status,
+            "expected": False,
+            "actual": bool(open_grid_fallback_used),
+            "reason_codes": reason_codes,
+        },
+    }
 
 
 def _scenario_from_payload(payload: Any, *, base_dir: Path) -> PathFeedbackScenario:

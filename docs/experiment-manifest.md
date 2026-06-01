@@ -42,7 +42,9 @@ It is intentionally file based so the runner does not import external projects.
   weight the auxiliary teacher imitation loss; PPO remains the main path.
 - `train.system_calibration`: optional system-level calibration config that
   reads one or more `path-feedback-summary/v1` JSON files through file paths,
-  evaluates a `path_feedback_gate`, and writes `system_calibration_summary`.
+  evaluates `acceptance_metadata` and a `path_feedback_gate`, can explicitly
+  enable `system_calibration.sample_quality`, and writes
+  `system_calibration_summary`.
   Without this config, best-run selection keeps the existing teacher-gate /
   best-metric behavior.
 
@@ -108,11 +110,15 @@ baseline sections. The current benchmark hardening fields add:
   includes the profile dimension when profiles are configured.
 - Semi-Real Closed-Loop Calibration v1 adds optional
   `train.system_calibration` over v5 `calibration_recommendation` plus external
-  path feedback summary JSON. The `path_feedback_gate` treats
-  `open_grid_fallback_used`, path failures, replans, IRIS fallback, and
-  region-graph disconnect/fallback as calibration/exclusion signals only. A
-  default system-gated recommendation must pass both `teacher_quality_gates` and
-  `path_feedback_gate`; excluded runs keep machine-readable `reason_codes`.
+  path feedback summary JSON. The `acceptance_metadata` check records whether
+  the summary came from `--scenario-set all --diagnostic-profile all --top-k 3`.
+  The `path_feedback_gate` treats `open_grid_fallback_used`, path failures,
+  replans, IRIS fallback, and region-graph disconnect/fallback as
+  calibration/exclusion signals only. A default system-gated recommendation
+  must pass both `teacher_quality_gates` and `path_feedback_gate`; excluded runs
+  keep machine-readable `reason_codes`. `system_calibration.sample_quality`
+  is explicit and default-off; when enabled it writes `sample_quality_summary`
+  with sample filtering/downweighting `reason_codes` for calibration use only.
 - `feedback_aware_confidence_calibration` records teacher action probability,
   teacher-label NLL, margin-bucket confidence-vs-agreement, and low-margin
   overconfidence warnings for trained policy evaluation.
@@ -124,4 +130,5 @@ The JSON summary exposes matching machine-readable keys:
 also exposes `system_calibration_summary` with `data_class`, `benchmark_scope`,
 `source_selection_strategy`, `teacher_imitation_weight`,
 `teacher_margin_curriculum_profile`, `seed`, teacher gate, path-feedback gate,
-stress/mixed-stress diagnostics, and selection/exclusion reason codes.
+stress/mixed-stress diagnostics, optional `sample_quality_summary`, and
+selection/exclusion reason codes.

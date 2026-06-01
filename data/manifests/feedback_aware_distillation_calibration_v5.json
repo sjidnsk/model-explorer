@@ -114,6 +114,23 @@
     "path_feedback_gate": {
       "require_open_grid_fallback_used_false": true
     },
+    "sample_quality": {
+      "enabled": true,
+      "match_key": "scenario_id",
+      "quality_signal_scope": "calibration_only",
+      "benchmark_scope": "not real-world generalization benchmark",
+      "exclude_reason_codes": [
+        "open_grid_fallback"
+      ],
+      "downweight_reason_codes": [
+        "path_planning_failure",
+        "replan_required",
+        "region_graph_disconnected",
+        "iris_fallback",
+        "region_graph_fallback"
+      ],
+      "downweight_factor": 0.5
+    },
     "non_goals": [
       "no new network architecture",
       "no full-map action-space expansion",

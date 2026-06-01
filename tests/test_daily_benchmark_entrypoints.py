@@ -740,9 +740,11 @@ class BenchmarkDocumentationTests(unittest.TestCase):
         manifest_doc = (ROOT / "docs" / "experiment-manifest.md").read_text(encoding="utf-8")
         progress_doc = (ROOT / "docs" / "network-architecture-v1.1-progress.md").read_text(encoding="utf-8")
         manifest_path = ROOT / "data" / "manifests" / "feedback_aware_distillation_calibration_v5.json"
+        fixture_path = ROOT / "tests" / "fixtures" / "synthetic_experiment" / "semi-real-system-calibration-v1.json"
 
         self.assertTrue(manifest_path.exists())
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
         train = manifest["train"]
 
         for text in (
@@ -753,6 +755,9 @@ class BenchmarkDocumentationTests(unittest.TestCase):
             "`train.system_calibration`",
             "`system_calibration_summary`",
             "`path_feedback_gate`",
+            "`system_calibration.sample_quality`",
+            "`sample_quality_summary`",
+            "`acceptance_metadata`",
             "`open_grid_fallback_used`",
         ):
             self.assertIn(text, manifest_doc)
@@ -764,6 +769,15 @@ class BenchmarkDocumentationTests(unittest.TestCase):
         self.assertEqual(manifest["metadata"]["benchmark_scope"], "not real-world generalization benchmark")
         self.assertEqual(manifest["system_calibration"]["summary_schema_version"], "system-calibration-summary/v1")
         self.assertEqual(manifest["system_calibration"]["quality_signal_scope"], "calibration_only")
+        self.assertEqual(manifest["system_calibration"]["sample_quality"]["enabled"], True)
+        self.assertEqual(manifest["system_calibration"]["sample_quality"]["quality_signal_scope"], "calibration_only")
+        self.assertIn("open_grid_fallback", manifest["system_calibration"]["sample_quality"]["exclude_reason_codes"])
+        self.assertEqual(manifest["system_calibration"]["sample_quality"]["benchmark_scope"], "not real-world generalization benchmark")
+        fixture_calibration = fixture["train"]["system_calibration"]
+        self.assertEqual(fixture_calibration["summary_schema_version"], "system-calibration-summary/v1")
+        self.assertEqual(fixture_calibration["path_feedback_summaries"][0]["summary"]["acceptance_metadata"]["scenario_set"], "all")
+        self.assertEqual(fixture_calibration["sample_quality"]["enabled"], True)
+        self.assertIn("path_planning_failure", fixture_calibration["sample_quality"]["downweight_reason_codes"])
 
     def test_benchmark_and_manifest_docs_define_current_synthetic_scope(self):
         benchmark_doc = (ROOT / "docs" / "benchmark-readiness.md").read_text(encoding="utf-8")

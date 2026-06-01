@@ -1881,6 +1881,9 @@ class PathPlanningAdapterTests(unittest.TestCase):
                     {
                         "schema_version": "path-feedback-manifest/v1",
                         "top_k": 2,
+                        "scenario_set": "all",
+                        "diagnostic_profile": "all",
+                        "acceptance_gate": "semi-real-closed-loop",
                         "planner": {"backend": "path_planner_route"},
                         "scenarios": manifest_scenarios,
                         "outputs": {"summary": str(summary_path), "report": str(report_path)},
@@ -1896,6 +1899,19 @@ class PathPlanningAdapterTests(unittest.TestCase):
 
         self.assertEqual(summary["schema_version"], "path-feedback-summary/v1")
         self.assertEqual(summary["scenario_count"], 3)
+        self.assertEqual(summary["scenario_set"], "all")
+        self.assertEqual(summary["diagnostic_profile"], "all")
+        self.assertEqual(summary["acceptance_gate"], "semi-real-closed-loop")
+        self.assertEqual(summary["planner_extra_args"], [])
+        self.assertEqual(summary["acceptance_metadata"]["scenario_set"], "all")
+        self.assertEqual(summary["acceptance_metadata"]["diagnostic_profile"], "all")
+        self.assertEqual(summary["acceptance_metadata"]["top_k"], 2)
+        self.assertEqual(summary["acceptance_metadata"]["planner_extra_args"], [])
+        self.assertFalse(summary["acceptance_metadata"]["open_grid_fallback_used"])
+        self.assertEqual(
+            summary["acceptance_metadata"]["open_grid_fallback_used_gate"]["status"],
+            "passed",
+        )
         self.assertGreaterEqual(summary["candidate_count"], 6)
         self.assertFalse(summary["open_grid_fallback_used"])
         self.assertIn("total_path_cost", summary)

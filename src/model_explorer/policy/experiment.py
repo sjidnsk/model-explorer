@@ -18,7 +18,9 @@ from .rollout import RolloutEpisode
 from .rollout_io import write_rollout_episodes_jsonl
 from .system_calibration import (
     annotate_runs_with_path_feedback_gates,
+    build_sample_quality_summary,
     build_system_calibration_summary,
+    filter_episodes_by_sample_quality,
     load_path_feedback_summary_entries,
     select_system_best_run,
 )
@@ -468,6 +470,33 @@ def _system_calibration_config(config: dict[str, Any]) -> dict[str, Any] | None:
     return dict(value)
 
 
+def _system_path_feedback_gate_enabled(config: dict[str, Any]) -> bool:
+    return "path_feedback_gate" in config or "acceptance_gate" in config
+
+
+def _system_path_feedback_gate_config(config: dict[str, Any]) -> dict[str, Any]:
+    gate = config.get("path_feedback_gate", {})
+    if gate is None:
+        gate = {}
+    if not isinstance(gate, dict):
+        raise ValueError("system_calibration.path_feedback_gate must be an object")
+    result = dict(gate)
+    if "acceptance_gate" in config:
+        result["acceptance_gate"] = config["acceptance_gate"]
+    return result
+
+
+def _system_sample_quality_config(config: dict[str, Any]) -> dict[str, Any] | None:
+    value = config.get("sample_quality")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("system_calibration.sample_quality must be an object")
+    if not bool(value.get("enabled", True)):
+        return None
+    return dict(value)
+
+
 def _reward_ablations(value: Any) -> tuple[dict[str, Any], ...]:
     if value is None:
         return ()
@@ -789,6 +818,28 @@ def _run_training(
     multi_teacher_weight = len(teacher_weights) > 1
     multi_curriculum_profile = len(curriculum_profiles) > 1
     profile_matrix_configured = "teacher_margin_curriculum_profiles" in config
+    system_calibration_config = _system_calibration_config(config)
+    system_path_gate_enabled = (
+        False
+        if system_calibration_config is None
+        else _system_path_feedback_gate_enabled(system_calibration_config)
+    )
+    path_feedback_summary_entries: list[dict[str, Any]] = []
+    sample_quality_config = None
+    sample_quality_summary = None
+    if system_calibration_config is not None:
+        path_feedback_summary_entries = load_path_feedback_summary_entries(
+            system_calibration_config,
+            base_dir=base_dir,
+        )
+        sample_quality_config = _system_sample_quality_config(system_calibration_config)
+        if sample_quality_config is not None:
+            if not path_feedback_summary_entries:
+                raise ValueError("system_calibration.sample_quality requires path feedback summaries")
+            sample_quality_summary = build_sample_quality_summary(
+                path_feedback_summary_entries,
+                sample_quality_config,
+            )
     runs: list[dict[str, Any]] = []
 
     for source_strategy in source_strategies:
@@ -800,6 +851,13 @@ def _run_training(
             max_candidates=max_candidates,
             reward_config=reward_config,
         )
+        source_sample_quality_summary = None
+        if sample_quality_summary is not None:
+            source_episodes, source_sample_quality_summary = filter_episodes_by_sample_quality(
+                source_episodes,
+                sample_quality_summary,
+                sample_quality_config,
+            )
         for teacher_weight in teacher_weights:
             for curriculum_profile in curriculum_profiles:
                 profile_name = str(curriculum_profile["name"])
@@ -877,6 +935,8 @@ def _run_training(
                         if profile_matrix_configured:
                             result["teacher_margin_curriculum_profile"] = profile_name
                         result["teacher_margin_weighting"] = dict(teacher_margin_weighting or {})
+                        if source_sample_quality_summary is not None:
+                            result["sample_quality_summary"] = dict(source_sample_quality_summary)
                         result["teacher_quality_gates"] = summarize_teacher_quality_gates(
                             result.get("dataset_summary", {}),
                             config.get("teacher_quality_gates"),
@@ -939,19 +999,13 @@ def _run_training(
 
     best_policy = str(config.get("best_policy", "torch_policy"))
     best_metric = str(config.get("best_metric", "final_coverage_rate"))
-    system_calibration_config = _system_calibration_config(config)
-    path_feedback_summary_entries: list[dict[str, Any]] = []
     system_selection: dict[str, Any] | None = None
-    if system_calibration_config is not None:
-        path_feedback_summary_entries = load_path_feedback_summary_entries(
-            system_calibration_config,
-            base_dir=base_dir,
-        )
+    if system_calibration_config is not None and system_path_gate_enabled:
         if path_feedback_summary_entries:
             annotate_runs_with_path_feedback_gates(
                 runs,
                 path_feedback_summaries=path_feedback_summary_entries,
-                gate_config=system_calibration_config.get("path_feedback_gate", {}),
+                gate_config=_system_path_feedback_gate_config(system_calibration_config),
             )
             system_selection = select_system_best_run(
                 runs,
@@ -972,7 +1026,7 @@ def _run_training(
             calibration_recommendation["profile_selection_reason_codes"] = [
                 "system_gate_best_run_selection"
             ]
-        elif "path_feedback_gate" in system_calibration_config:
+        else:
             raise ValueError("system_calibration.path_feedback_gate requires path feedback summaries")
     if system_selection is None:
         if "teacher_margin_curriculum_profiles" in config:

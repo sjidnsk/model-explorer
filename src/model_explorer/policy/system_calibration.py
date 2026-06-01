@@ -54,8 +54,12 @@ def evaluate_path_feedback_gate(summary: dict[str, Any], gate_config: dict[str, 
     config = dict(gate_config or {})
     metrics = _path_feedback_metrics(summary)
     reason_codes: list[str] = []
+    warning_reason_codes: list[str] = []
     if bool(config.get("require_open_grid_fallback_used_false", True)) and metrics["open_grid_fallback_used"]:
         reason_codes.append("open_grid_fallback_used")
+    acceptance_metadata = _evaluate_acceptance_metadata(summary, config.get("acceptance_gate"))
+    warning_reason_codes.extend(acceptance_metadata["warning_reason_codes"])
+    reason_codes.extend(acceptance_metadata["exclusion_reason_codes"])
     _append_rate_violation(
         reason_codes,
         config,
@@ -116,7 +120,9 @@ def evaluate_path_feedback_gate(summary: dict[str, Any], gate_config: dict[str, 
     return {
         "status": "failed" if reason_codes else "passed",
         "reason_codes": reason_codes or ["path_feedback_gate_passed"],
+        "warning_reason_codes": warning_reason_codes,
         "metrics": metrics,
+        "acceptance_metadata": acceptance_metadata,
         "stress_diagnostics": _path_feedback_group_diagnostics(summary, "stress"),
         "mixed_stress_diagnostics": _path_feedback_group_diagnostics(summary, "mixed_stress"),
         "quality_signal_use": "calibration_only",
@@ -137,7 +143,7 @@ def build_system_calibration_summary(
     if not run_copies:
         raise ValueError("system calibration requires training runs")
     entries = list(path_feedback_summaries or [])
-    system_gate_configured = bool(system_config)
+    system_gate_configured = _path_feedback_gate_enabled(system_config)
     if system_gate_configured:
         annotate_runs_with_path_feedback_gates(
             run_copies,
@@ -187,7 +193,13 @@ def build_system_calibration_summary(
             ),
         )
     )
-    return {
+    sample_quality_config = _sample_quality_config(system_config)
+    sample_quality_summary = (
+        build_sample_quality_summary(entries, sample_quality_config)
+        if sample_quality_config is not None
+        else None
+    )
+    summary = {
         "schema_version": SYSTEM_CALIBRATION_SCHEMA_VERSION,
         "status": "selected" if selected_run is not None else "no_eligible_run",
         "policy": str(policy),
@@ -203,6 +215,9 @@ def build_system_calibration_summary(
         "selection": _selection_summary(selection),
         "runs": summary_runs,
     }
+    if sample_quality_summary is not None:
+        summary["sample_quality_summary"] = sample_quality_summary
+    return summary
 
 
 def select_system_best_run(
@@ -268,10 +283,286 @@ def _raw_path_feedback_summary_entries(config: dict[str, Any]) -> list[dict[str,
 def _path_feedback_gate_config(config: dict[str, Any]) -> dict[str, Any]:
     value = config.get("path_feedback_gate", {})
     if value is None:
-        return {}
+        value = {}
     if not isinstance(value, dict):
         raise ValueError("system_calibration.path_feedback_gate must be an object")
+    gate_config = dict(value)
+    if "acceptance_gate" in config:
+        gate_config["acceptance_gate"] = config["acceptance_gate"]
+    return gate_config
+
+
+def _path_feedback_gate_enabled(config: dict[str, Any]) -> bool:
+    return "path_feedback_gate" in config or "acceptance_gate" in config
+
+
+def _sample_quality_config(config: dict[str, Any]) -> dict[str, Any] | None:
+    value = config.get("sample_quality")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("system_calibration.sample_quality must be an object")
+    if not bool(value.get("enabled", True)):
+        return None
     return dict(value)
+
+
+def _evaluate_acceptance_metadata(summary: dict[str, Any], expected_gate: Any) -> dict[str, Any]:
+    if expected_gate is None:
+        return {
+            "status": "not_configured",
+            "reason_codes": ["acceptance_metadata_check_not_configured"],
+            "warning_reason_codes": [],
+            "exclusion_reason_codes": [],
+            "mismatches": [],
+        }
+    if not isinstance(expected_gate, dict):
+        raise ValueError("system_calibration.acceptance_gate must be an object")
+    metadata = summary.get("acceptance_metadata")
+    if not isinstance(metadata, dict):
+        return {
+            "status": "missing",
+            "reason_codes": ["acceptance_metadata_missing"],
+            "warning_reason_codes": ["acceptance_metadata_missing"],
+            "exclusion_reason_codes": ["acceptance_metadata_missing"],
+            "mismatches": [],
+            "expected": dict(expected_gate),
+        }
+    checks = (
+        ("scenario_set", expected_gate.get("scenario_set")),
+        ("diagnostic_profile", expected_gate.get("diagnostic_profile")),
+        ("top_k", expected_gate.get("top_k")),
+    )
+    mismatches = []
+    for field, expected in checks:
+        if expected is None:
+            continue
+        actual = metadata.get(field, summary.get(field))
+        if str(actual) != str(expected):
+            mismatches.append({"field": field, "expected": expected, "actual": actual})
+    if "planner_extra_args" in expected_gate:
+        expected_args = [str(value) for value in expected_gate.get("planner_extra_args", [])]
+        actual_args = [str(value) for value in metadata.get("planner_extra_args", summary.get("planner_extra_args", []))]
+        if actual_args != expected_args:
+            mismatches.append({"field": "planner_extra_args", "expected": expected_args, "actual": actual_args})
+    required_open_grid = expected_gate.get("require_open_grid_fallback_used")
+    if required_open_grid is not None:
+        actual_open_grid = bool(metadata.get("open_grid_fallback_used", summary.get("open_grid_fallback_used")))
+        if actual_open_grid is not bool(required_open_grid):
+            mismatches.append(
+                {
+                    "field": "open_grid_fallback_used",
+                    "expected": bool(required_open_grid),
+                    "actual": actual_open_grid,
+                }
+            )
+    if mismatches:
+        return {
+            "status": "mismatched",
+            "reason_codes": ["acceptance_metadata_mismatch"],
+            "warning_reason_codes": ["acceptance_metadata_mismatch"],
+            "exclusion_reason_codes": ["acceptance_metadata_mismatch"],
+            "mismatches": mismatches,
+            "expected": dict(expected_gate),
+            "actual": dict(metadata),
+        }
+    return {
+        "status": "passed",
+        "reason_codes": ["acceptance_metadata_matched"],
+        "warning_reason_codes": [],
+        "exclusion_reason_codes": [],
+        "mismatches": [],
+        "expected": dict(expected_gate),
+        "actual": dict(metadata),
+    }
+
+
+def build_sample_quality_summary(
+    path_feedback_summaries: list[dict[str, Any]],
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    quality_config = dict(config or {})
+    exclude_reason_codes = _string_set(quality_config.get("exclude_reason_codes", ()))
+    downweight_reason_codes = _string_set(quality_config.get("downweight_reason_codes", ()))
+    downweight_factor = _optional_float(quality_config.get("downweight_factor", 0.5))
+    if downweight_factor is None:
+        downweight_factor = 0.5
+    records: list[dict[str, Any]] = []
+    for entry in path_feedback_summaries:
+        summary = entry.get("summary") if isinstance(entry, dict) and "summary" in entry else entry
+        if not isinstance(summary, dict):
+            continue
+        for scenario in summary.get("scenarios", []):
+            if not isinstance(scenario, dict):
+                continue
+            reason_codes = _sample_quality_reason_codes(scenario)
+            decision = "keep"
+            sample_weight = 1.0
+            if exclude_reason_codes.intersection(reason_codes):
+                decision = "exclude"
+                sample_weight = 0.0
+            elif downweight_reason_codes.intersection(reason_codes):
+                decision = "downweight"
+                sample_weight = max(0.0, float(downweight_factor))
+            records.append(
+                {
+                    "scenario_id": str(scenario.get("scenario_id", "")),
+                    "scenario_group": str(scenario.get("scenario_group", "unknown")),
+                    "decision": decision,
+                    "sample_weight": sample_weight,
+                    "reason_codes": reason_codes,
+                    "quality_signal_use": "calibration_only",
+                    "not_real_world_performance_claim": True,
+                }
+            )
+    decision_counts = _counts(record["decision"] for record in records)
+    return {
+        "schema_version": "sample-quality-summary/v1",
+        "enabled": True,
+        "quality_signal_scope": str(quality_config.get("quality_signal_scope", "calibration_only")),
+        "benchmark_scope": str(
+            quality_config.get("benchmark_scope", "not real-world generalization benchmark")
+        ),
+        "quality_signal_use": "calibration_only",
+        "not_real_world_performance_claim": True,
+        "record_count": len(records),
+        "excluded_sample_count": int(decision_counts.get("exclude", 0)),
+        "downweighted_sample_count": int(decision_counts.get("downweight", 0)),
+        "kept_sample_count": int(decision_counts.get("keep", 0)),
+        "decision_counts": decision_counts,
+        "reason_code_counts": _counts(
+            reason
+            for record in records
+            for reason in record["reason_codes"]
+        ),
+        "records": records,
+    }
+
+
+def filter_episodes_by_sample_quality(
+    episodes,
+    sample_quality_summary: dict[str, Any],
+    config: dict[str, Any] | None = None,
+):
+    quality_config = dict(config or {})
+    match_key = str(quality_config.get("match_key", "scenario_id"))
+    episode_tuple = tuple(episodes)
+    records_by_id = {
+        str(record.get(match_key, record.get("scenario_id"))): record
+        for record in sample_quality_summary.get("records", [])
+        if isinstance(record, dict) and record.get(match_key, record.get("scenario_id")) is not None
+    }
+    kept = []
+    applied_records = []
+    for episode in episode_tuple:
+        sample_id = _episode_quality_match_value(episode, match_key)
+        record = records_by_id.get(sample_id)
+        if record is not None:
+            applied_records.append(dict(record))
+        if record is not None and record.get("decision") == "exclude":
+            continue
+        kept.append(episode)
+    decision_counts = _counts(record.get("decision", "keep") for record in applied_records)
+    applied_summary = dict(sample_quality_summary)
+    applied_summary.update(
+        {
+            "match_key": match_key,
+            "input_episode_count": len(episode_tuple),
+            "matched_sample_count": len(applied_records),
+            "excluded_sample_count": int(decision_counts.get("exclude", 0)),
+            "downweighted_sample_count": int(decision_counts.get("downweight", 0)),
+            "kept_episode_count": len(kept),
+            "applied_records": applied_records,
+        }
+    )
+    return tuple(kept), applied_summary
+
+
+def _sample_quality_reason_codes(scenario: dict[str, Any]) -> list[str]:
+    codes: list[str] = []
+    feedback = scenario.get("path_feedback", {})
+    if isinstance(feedback, dict):
+        if _int_value(feedback.get("failure_count")) > 0:
+            codes.append("path_planning_failure")
+        if _int_value(feedback.get("replan_count")) > 0:
+            codes.append("replan_required")
+        for candidate in feedback.get("candidates", []):
+            if not isinstance(candidate, dict):
+                continue
+            interpretation = candidate.get("diagnostic_interpretation", {})
+            if isinstance(interpretation, dict):
+                for flag in interpretation.get("diagnostic_flags", []):
+                    codes.append(_normalize_sample_quality_reason(flag))
+                if bool(interpretation.get("open_grid_fallback_used")):
+                    codes.append("open_grid_fallback")
+            if candidate.get("failure_reason"):
+                codes.append("path_planning_failure")
+            if bool(candidate.get("replan_required")):
+                codes.append("replan_required")
+    interpretation = scenario.get("diagnostic_interpretation", {})
+    if isinstance(interpretation, dict):
+        for source in interpretation.get("failure_sources", []):
+            codes.append(_normalize_sample_quality_reason(source))
+        if bool(interpretation.get("open_grid_fallback_used")):
+            codes.append("open_grid_fallback")
+    if bool(scenario.get("open_grid_fallback_used")):
+        codes.append("open_grid_fallback")
+    return _dedupe_strings(code for code in codes if code and code != "none") or ["sample_quality_passed"]
+
+
+def _normalize_sample_quality_reason(value: Any) -> str:
+    text = str(value).strip()
+    aliases = {
+        "replan": "replan_required",
+        "path_failure": "path_planning_failure",
+        "failure": "path_planning_failure",
+        "iris_region_fallback": "iris_fallback",
+        "region_graph_start_goal_disconnected": "region_graph_disconnected",
+    }
+    return aliases.get(text, text)
+
+
+def _episode_quality_match_value(episode, match_key: str) -> str:
+    for transition in getattr(episode, "transitions", ()):
+        extra = getattr(getattr(transition, "info", None), "extra", {})
+        if not isinstance(extra, dict):
+            continue
+        if match_key in extra:
+            return str(extra[match_key])
+        provenance = extra.get("provenance")
+        if isinstance(provenance, dict) and match_key in provenance:
+            return str(provenance[match_key])
+    return ""
+
+
+def _string_set(value: Any) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        return {value}
+    if not isinstance(value, list | tuple | set):
+        raise ValueError("sample quality reason code lists must be arrays")
+    return {str(item) for item in value}
+
+
+def _counts(values) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        key = str(value)
+        counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _dedupe_strings(values) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value)
+        if text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
 
 
 def _resolve_path(base_dir: Path, value: Any) -> Path:
