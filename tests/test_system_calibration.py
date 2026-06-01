@@ -409,6 +409,25 @@ class SystemCalibrationSummaryTests(unittest.TestCase):
                 )
 
             with patch("model_explorer.policy.training.train_policy_on_episodes", side_effect=training_result):
+                implicit = _run_training(
+                    (base_episode, clean_episode),
+                    {
+                        "seed": 1,
+                        "checkpoint": str(root / "implicit.pt"),
+                        "evaluate_trained_policy": False,
+                        "system_calibration": {
+                            "path_feedback_summaries": [{"path": str(feedback_path)}],
+                            "sample_quality": {
+                                "match_key": "scenario_id",
+                                "exclude_reason_codes": ["open_grid_fallback"],
+                                "downweight_reason_codes": ["path_planning_failure", "replan_required"],
+                            },
+                        },
+                    },
+                    base_dir=root,
+                )
+
+            with patch("model_explorer.policy.training.train_policy_on_episodes", side_effect=training_result):
                 gated = _run_training(
                     (base_episode, clean_episode),
                     {
@@ -430,10 +449,130 @@ class SystemCalibrationSummaryTests(unittest.TestCase):
 
         self.assertNotIn("sample_quality_summary", legacy)
         self.assertEqual(legacy["sample_count"], 2)
+        self.assertNotIn("sample_quality_summary", implicit)
+        self.assertEqual(implicit["sample_count"], 2)
         self.assertIn("sample_quality_summary", gated)
         self.assertEqual(gated["sample_count"], 1)
         self.assertEqual(gated["sample_quality_summary"]["excluded_sample_count"], 1)
         self.assertIn("open_grid_fallback", gated["sample_quality_summary"]["records"][0]["reason_codes"])
+
+    def test_sample_quality_audit_summary_aggregates_cross_summary_metadata_and_actions(self) -> None:
+        from model_explorer.policy.system_calibration import build_sample_quality_audit_summary
+
+        hard_exclusion_summary = _path_feedback_summary(
+            open_grid_fallback_used=True,
+            failure_count=1,
+            replan_count=1,
+        )
+        hard_exclusion_summary["scenarios"][0]["scenario_id"] = "roi-open-grid"
+        hard_exclusion_summary["scenarios"][0]["roi_group"] = "south-pole-rim"
+        hard_exclusion_summary["scenarios"][0]["data_class"] = "quasi_real"
+        hard_exclusion_summary["scenarios"][0]["mask_stress_augmented"] = True
+        hard_exclusion_summary["scenarios"][0]["benchmark_scope"] = "not real-world generalization benchmark"
+
+        downweight_summary = _path_feedback_summary(
+            open_grid_fallback_used=False,
+            failure_count=1,
+            replan_count=1,
+            iris_fallback_count=1,
+            region_graph_fallback_count=1,
+            region_graph_disconnected_count=1,
+            scenario_set="stress",
+            diagnostic_profile="iris",
+        )
+        downweight_summary["scenarios"][0]["scenario_id"] = "roi-region-diagnostic"
+        downweight_summary["scenarios"][0]["roi_group"] = "shadowed-crater"
+        downweight_summary["scenarios"][0]["data_class"] = "quasi_real"
+        downweight_summary["scenarios"][0]["mask_stress_augmented"] = True
+        downweight_summary["scenarios"][0]["benchmark_scope"] = "not real-world generalization benchmark"
+
+        audit = build_sample_quality_audit_summary(
+            [
+                {"path": "outputs/run-a/path-feedback-summary.json", "summary": hard_exclusion_summary},
+                {"path": "outputs/run-b/path-feedback-summary.json", "summary": downweight_summary},
+            ],
+            {
+                "enabled": True,
+                "data_class": "quasi_real",
+                "mask_stress_augmented": True,
+                "benchmark_scope": "not real-world generalization benchmark",
+                "downweight_factor": 0.25,
+            },
+        )
+
+        self.assertEqual(audit["schema_version"], "sample-quality-audit-summary/v1")
+        self.assertEqual(audit["data_class"], "quasi_real")
+        self.assertTrue(audit["mask_stress_augmented"])
+        self.assertEqual(audit["benchmark_scope"], "not real-world generalization benchmark")
+        self.assertEqual(audit["by_action"]["exclude"]["record_count"], 1)
+        self.assertEqual(audit["by_action"]["downweight"]["record_count"], 1)
+        self.assertEqual(audit["by_source_summary_path"]["outputs/run-a/path-feedback-summary.json"]["record_count"], 1)
+        self.assertEqual(audit["by_scenario_set"]["all"]["record_count"], 1)
+        self.assertEqual(audit["by_scenario_set"]["stress"]["record_count"], 1)
+        self.assertEqual(audit["by_diagnostic_profile"]["iris"]["record_count"], 1)
+        self.assertEqual(audit["by_top_k"]["3"]["record_count"], 2)
+        self.assertEqual(audit["by_roi_group"]["shadowed-crater"]["record_count"], 1)
+        self.assertEqual(audit["by_reason_code"]["open_grid_fallback"]["action_counts"]["exclude"], 1)
+        self.assertEqual(audit["by_reason_code"]["region_graph_disconnected"]["action_counts"]["downweight"], 1)
+        self.assertEqual(
+            audit["records"][0]["acceptance_metadata"]["open_grid_fallback_used_gate"]["status"],
+            "failed",
+        )
+        self.assertEqual(audit["records"][1]["sample_weight"], 0.25)
+        self.assertTrue(
+            all(
+                isinstance(reason, str)
+                for record in audit["records"]
+                for reason in record["reason_codes"]
+            )
+        )
+
+    def test_system_summary_exposes_sample_quality_audit_for_enabled_dataset_application(self) -> None:
+        from model_explorer.policy.system_calibration import build_system_calibration_summary
+
+        runs = [_run("selected.pt", 0.7, seed=1)]
+        path_summary = _path_feedback_summary(
+            failure_count=1,
+            replan_count=1,
+            iris_fallback_count=1,
+            region_graph_fallback_count=1,
+            region_graph_disconnected_count=1,
+        )
+        path_summary["scenarios"][0]["roi_group"] = "shadowed-crater"
+        path_summary["scenarios"][0]["data_class"] = "quasi_real"
+        path_summary["scenarios"][0]["mask_stress_augmented"] = True
+        path_summary["scenarios"][0]["benchmark_scope"] = "not real-world generalization benchmark"
+
+        summary = build_system_calibration_summary(
+            {
+                "runs": runs,
+                "calibration_recommendation": {"recommended_checkpoint": "selected.pt"},
+            },
+            path_feedback_summaries=[
+                {"seed": 1, "path": "outputs/run/path-feedback-summary.json", "summary": path_summary},
+            ],
+            config={
+                "data_class": "quasi_real",
+                "benchmark_scope": "not real-world generalization benchmark",
+                "mask_stress_augmented": True,
+                "sample_quality": {
+                    "enabled": True,
+                    "downweight_factor": 0.5,
+                },
+            },
+            policy="torch_policy",
+            metric="final_coverage_rate",
+        )
+
+        self.assertIn("sample_quality_summary", summary)
+        self.assertIn("sample_quality_audit_summary", summary)
+        self.assertEqual(summary["sample_quality_audit_summary"]["by_action"]["downweight"]["record_count"], 1)
+        self.assertEqual(
+            summary["sample_quality_audit_summary"]["records"][0]["source_summary_path"],
+            "outputs/run/path-feedback-summary.json",
+        )
+        self.assertEqual(summary["sample_quality_audit_summary"]["records"][0]["data_class"], "quasi_real")
+        self.assertTrue(summary["sample_quality_audit_summary"]["records"][0]["mask_stress_augmented"])
 
     def test_system_summary_preserves_stress_mixed_stress_diagnostics_and_joint_gate_rates(self) -> None:
         from model_explorer.policy.system_calibration import build_system_calibration_summary

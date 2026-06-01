@@ -117,6 +117,8 @@
     "sample_quality": {
       "enabled": true,
       "match_key": "scenario_id",
+      "data_class": "quasi_real",
+      "mask_stress_augmented": true,
       "quality_signal_scope": "calibration_only",
       "benchmark_scope": "not real-world generalization benchmark",
       "exclude_reason_codes": [
@@ -129,7 +131,19 @@
         "iris_fallback",
         "region_graph_fallback"
       ],
-      "downweight_factor": 0.5
+      "downweight_factor": 0.5,
+      "audit_dimensions": [
+        "scenario_id",
+        "scenario_group",
+        "roi_group",
+        "reason_code",
+        "action",
+        "source_summary_path",
+        "acceptance_metadata",
+        "scenario_set",
+        "diagnostic_profile",
+        "top_k"
+      ]
     },
     "non_goals": [
       "no new network architecture",

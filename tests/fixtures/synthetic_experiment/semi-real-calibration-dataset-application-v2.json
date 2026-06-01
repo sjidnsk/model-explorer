@@ -1,0 +1,354 @@
+{
+  "schema_version": "model-explorer-experiment/v1",
+  "name": "semi-real-calibration-dataset-application-v2-fixture",
+  "run_id": "dataset-v2-fixture",
+  "metadata": {
+    "data_class": "quasi_real",
+    "mask_stress_augmented": true,
+    "benchmark_scope": "not real-world generalization benchmark",
+    "purpose": "sample-quality dataset application and audit JSON boundary fixture"
+  },
+  "scenarios": [
+    "scenario-a.json",
+    "scenario-b.json"
+  ],
+  "max_candidates": 4,
+  "planner": {
+    "backend": "contract_cost"
+  },
+  "train": {
+    "seeds": [
+      11,
+      13
+    ],
+    "hidden_size": 16,
+    "learning_rate": 0.001,
+    "epochs": 1,
+    "evaluate_trained_policy": true,
+    "source_selection_strategies": [
+      "coverage_heuristic",
+      "feedback_aware"
+    ],
+    "teacher_imitation_weights": [
+      0.0,
+      0.1
+    ],
+    "teacher_margin_curriculum_profiles": [
+      "high_only",
+      "soft_all_valid"
+    ],
+    "teacher_quality_gates": {
+      "min_feedback_aware_sample_count": 1,
+      "min_teacher_high_margin_sample_count": 0,
+      "max_missing_teacher_signal_rate": 0.0,
+      "max_low_margin_only_dataset_rate": 1.0
+    },
+    "system_calibration": {
+      "name": "semi-real-calibration-dataset-application-v2",
+      "summary_schema_version": "system-calibration-summary/v1",
+      "sample_quality_audit_schema_version": "sample-quality-audit-summary/v1",
+      "data_class": "quasi_real",
+      "mask_stress_augmented": true,
+      "benchmark_scope": "not real-world generalization benchmark",
+      "quality_signal_scope": "calibration_only",
+      "acceptance_gate": {
+        "scenario_set": "all",
+        "diagnostic_profile": "all",
+        "top_k": 3,
+        "require_open_grid_fallback_used": false
+      },
+      "path_feedback_gate": {
+        "require_open_grid_fallback_used_false": true
+      },
+      "sample_quality": {
+        "enabled": true,
+        "match_key": "scenario_id",
+        "data_class": "quasi_real",
+        "mask_stress_augmented": true,
+        "quality_signal_scope": "calibration_only",
+        "benchmark_scope": "not real-world generalization benchmark",
+        "exclude_reason_codes": [
+          "open_grid_fallback"
+        ],
+        "downweight_reason_codes": [
+          "path_planning_failure",
+          "replan_required",
+          "region_graph_disconnected",
+          "iris_fallback",
+          "region_graph_fallback"
+        ],
+        "downweight_factor": 0.5,
+        "audit_dimensions": [
+          "scenario_id",
+          "scenario_group",
+          "roi_group",
+          "reason_code",
+          "action",
+          "source_summary_path",
+          "acceptance_metadata",
+          "scenario_set",
+          "diagnostic_profile",
+          "top_k"
+        ]
+      },
+      "path_feedback_summaries": [
+        {
+          "source_selection_strategy": "feedback_aware",
+          "teacher_imitation_weight": 0.1,
+          "teacher_margin_curriculum_profile": "soft_all_valid",
+          "path": "outputs/path_feedback_validation_dataset_v2/path-feedback-summary.json",
+          "summary": {
+            "schema_version": "path-feedback-summary/v1",
+            "scenario_count": 2,
+            "scenario_set": "all",
+            "diagnostic_profile": "all",
+            "acceptance_gate": "semi-real-closed-loop",
+            "top_k": 3,
+            "planner_extra_args": [
+              "--simulate-tracking",
+              "--optimize-trajectory",
+              "--drake-iris-regions"
+            ],
+            "candidate_count": 6,
+            "reachable_count": 2,
+            "path_planning_failure_count": 2,
+            "replan_count": 2,
+            "iris_fallback_count": 2,
+            "region_graph_fallback_count": 2,
+            "region_graph_disconnected_count": 2,
+            "open_grid_fallback_used": false,
+            "acceptance_metadata": {
+              "schema_version": "path-feedback-acceptance-metadata/v1",
+              "scenario_set": "all",
+              "diagnostic_profile": "all",
+              "acceptance_gate": "semi-real-closed-loop",
+              "top_k": 3,
+              "planner_extra_args": [
+                "--simulate-tracking",
+                "--optimize-trajectory",
+                "--drake-iris-regions"
+              ],
+              "open_grid_fallback_used": false,
+              "open_grid_fallback_used_gate": {
+                "status": "passed",
+                "expected": false,
+                "actual": false,
+                "reason_codes": [
+                  "open_grid_fallback_not_used"
+                ]
+              }
+            },
+            "scenario_group_summary": {
+              "stress": {
+                "scenario_count": 1,
+                "candidate_count": 3,
+                "reachable_count": 0,
+                "failure_count": 2,
+                "replan_count": 2,
+                "selection_changed_count": 1,
+                "iris_report_count": 3,
+                "iris_fallback_count": 1,
+                "region_graph_fallback_count": 1,
+                "region_graph_start_goal_disconnected_count": 1
+              },
+              "mixed_stress": {
+                "scenario_count": 1,
+                "candidate_count": 3,
+                "reachable_count": 2,
+                "failure_count": 0,
+                "replan_count": 0,
+                "selection_changed_count": 1,
+                "iris_report_count": 3,
+                "iris_fallback_count": 1,
+                "region_graph_fallback_count": 1,
+                "region_graph_start_goal_disconnected_count": 1
+              }
+            },
+            "scenarios": [
+              {
+                "scenario_id": "dataset-v2-stress-roi",
+                "scenario_group": "stress",
+                "roi_group": "south-pole-rim",
+                "data_class": "quasi_real",
+                "mask_stress_augmented": true,
+                "benchmark_scope": "not real-world generalization benchmark",
+                "open_grid_fallback_used": false,
+                "path_feedback": {
+                  "candidate_count": 3,
+                  "reachable_count": 0,
+                  "failure_count": 2,
+                  "replan_count": 2,
+                  "candidates": [
+                    {
+                      "action_index": 0,
+                      "cell": [
+                        1,
+                        1
+                      ],
+                      "reachable": false,
+                      "replan_required": true,
+                      "failure_reason": "path_blocked",
+                      "diagnostic_interpretation": {
+                        "diagnostic_flags": [
+                          "path_planning_failure",
+                          "replan_required",
+                          "iris_fallback",
+                          "region_graph_fallback",
+                          "region_graph_disconnected"
+                        ],
+                        "open_grid_fallback_used": false
+                      }
+                    }
+                  ]
+                },
+                "diagnostic_interpretation": {
+                  "target_replacement_reason": "before_candidate_path_planning_failed",
+                  "failure_sources": [
+                    "path_planning_failure",
+                    "replan_required",
+                    "iris_fallback",
+                    "region_graph_fallback",
+                    "region_graph_disconnected"
+                  ],
+                  "open_grid_fallback_used": false
+                }
+              },
+              {
+                "scenario_id": "dataset-v2-mixed-roi",
+                "scenario_group": "mixed_stress",
+                "roi_group": "shadowed-crater",
+                "data_class": "quasi_real",
+                "mask_stress_augmented": true,
+                "benchmark_scope": "not real-world generalization benchmark",
+                "open_grid_fallback_used": false,
+                "path_feedback": {
+                  "candidate_count": 3,
+                  "reachable_count": 2,
+                  "failure_count": 0,
+                  "replan_count": 0,
+                  "candidates": [
+                    {
+                      "action_index": 1,
+                      "cell": [
+                        2,
+                        2
+                      ],
+                      "reachable": true,
+                      "replan_required": false,
+                      "failure_reason": null,
+                      "diagnostic_interpretation": {
+                        "diagnostic_flags": [
+                          "iris_fallback",
+                          "region_graph_fallback",
+                          "region_graph_disconnected"
+                        ],
+                        "open_grid_fallback_used": false
+                      }
+                    }
+                  ]
+                },
+                "diagnostic_interpretation": {
+                  "target_replacement_reason": "before_candidate_region_graph_fallback",
+                  "failure_sources": [
+                    "iris_fallback",
+                    "region_graph_fallback",
+                    "region_graph_disconnected"
+                  ],
+                  "open_grid_fallback_used": false
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "non_goals": [
+        "no new network architecture",
+        "no full-map action-space expansion",
+        "no PPO replacement",
+        "no GCS graph search or trajectory backend",
+        "no Ackermann/skid-steer/differential feasibility solver",
+        "no Ackermann-feasible trajectory claim",
+        "no IrisNp/IrisNp2/IrisZo/C-space IRIS",
+        "no real-world generalization claim"
+      ]
+    }
+  },
+  "expected_json_boundary": {
+    "calibration_recommendation": {
+      "required_fields": [
+        "recommended_checkpoint",
+        "recommended_seed",
+        "profile_selection_reason_codes"
+      ]
+    },
+    "path_feedback_summary": {
+      "schema_version": "path-feedback-summary/v1",
+      "required_fields": [
+        "acceptance_metadata",
+        "scenario_set",
+        "diagnostic_profile",
+        "top_k",
+        "open_grid_fallback_used"
+      ]
+    },
+    "sample_quality_application": {
+      "enabled_field": "train.system_calibration.sample_quality.enabled",
+      "legacy_default": "disabled unless enabled is true",
+      "actions": [
+        "exclude",
+        "downweight",
+        "keep"
+      ]
+    },
+    "sample_quality_audit_summary": {
+      "schema_version": "sample-quality-audit-summary/v1",
+      "required_record_fields": [
+        "scenario_id",
+        "scenario_group",
+        "roi_group",
+        "action",
+        "sample_weight",
+        "reason_codes",
+        "source_summary_path",
+        "acceptance_metadata",
+        "scenario_set",
+        "diagnostic_profile",
+        "top_k",
+        "data_class",
+        "mask_stress_augmented",
+        "benchmark_scope"
+      ],
+      "aggregation_dimensions": [
+        "scenario_id",
+        "scenario_group",
+        "roi_group",
+        "reason_code",
+        "action",
+        "source_summary_path",
+        "acceptance_metadata",
+        "scenario_set",
+        "diagnostic_profile",
+        "top_k"
+      ],
+      "machine_readable_reason_codes": [
+        "open_grid_fallback",
+        "path_planning_failure",
+        "replan_required",
+        "iris_fallback",
+        "region_graph_fallback",
+        "region_graph_disconnected"
+      ],
+      "action_policy": {
+        "open_grid_fallback": "exclude",
+        "path_planning_failure": "downweight",
+        "replan_required": "downweight",
+        "iris_fallback": "downweight",
+        "region_graph_fallback": "downweight",
+        "region_graph_disconnected": "downweight"
+      }
+    }
+  },
+  "outputs": {
+    "root": "out"
+  }
+}

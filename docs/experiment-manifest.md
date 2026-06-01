@@ -119,6 +119,16 @@ baseline sections. The current benchmark hardening fields add:
   keep machine-readable `reason_codes`. `system_calibration.sample_quality`
   is explicit and default-off; when enabled it writes `sample_quality_summary`
   with sample filtering/downweighting `reason_codes` for calibration use only.
+- Semi-Real Calibration Dataset Application v2 keeps the v1 summary schema and
+  adds `sample_quality_audit_summary` for batch application across
+  quasi-real/mask-stress path-feedback summaries. The audit groups by
+  `scenario_id`, `scenario_group`, ROI/group (`roi_group`), `reason_code`,
+  action (`exclude`, `downweight`, `keep`), source summary path,
+  `acceptance_metadata`, `scenario_set`, `diagnostic_profile`, and `top_k`.
+  `open_grid_fallback` is always a hard sample exclusion once
+  `system_calibration.sample_quality.enabled = true`; path-planning failure,
+  replan, IRIS fallback, region-graph disconnect, and region-graph fallback are
+  calibration/downweighting signals only.
 - `feedback_aware_confidence_calibration` records teacher action probability,
   teacher-label NLL, margin-bucket confidence-vs-agreement, and low-margin
   overconfidence warnings for trained policy evaluation.
@@ -130,5 +140,5 @@ The JSON summary exposes matching machine-readable keys:
 also exposes `system_calibration_summary` with `data_class`, `benchmark_scope`,
 `source_selection_strategy`, `teacher_imitation_weight`,
 `teacher_margin_curriculum_profile`, `seed`, teacher gate, path-feedback gate,
-stress/mixed-stress diagnostics, optional `sample_quality_summary`, and
-selection/exclusion reason codes.
+stress/mixed-stress diagnostics, optional `sample_quality_summary`, optional
+`sample_quality_audit_summary`, and selection/exclusion reason codes.

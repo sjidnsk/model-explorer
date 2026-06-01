@@ -492,7 +492,7 @@ def _system_sample_quality_config(config: dict[str, Any]) -> dict[str, Any] | No
         return None
     if not isinstance(value, dict):
         raise ValueError("system_calibration.sample_quality must be an object")
-    if not bool(value.get("enabled", True)):
+    if not bool(value.get("enabled", False)):
         return None
     return dict(value)
 
@@ -937,6 +937,9 @@ def _run_training(
                         result["teacher_margin_weighting"] = dict(teacher_margin_weighting or {})
                         if source_sample_quality_summary is not None:
                             result["sample_quality_summary"] = dict(source_sample_quality_summary)
+                            audit_summary = source_sample_quality_summary.get("sample_quality_audit_summary")
+                            if isinstance(audit_summary, dict):
+                                result["sample_quality_audit_summary"] = dict(audit_summary)
                         result["teacher_quality_gates"] = summarize_teacher_quality_gates(
                             result.get("dataset_summary", {}),
                             config.get("teacher_quality_gates"),

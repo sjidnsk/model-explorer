@@ -8,6 +8,15 @@ from typing import Any
 
 SYSTEM_CALIBRATION_SCHEMA_VERSION = "system-calibration-summary/v1"
 CALIBRATION_EVALUATION_SCOPE = "calibration evidence; not real-world generalization benchmark"
+SAMPLE_QUALITY_AUDIT_SCHEMA_VERSION = "sample-quality-audit-summary/v1"
+SAMPLE_QUALITY_HARD_EXCLUDE_REASON_CODES = ("open_grid_fallback",)
+SAMPLE_QUALITY_DEFAULT_DOWNWEIGHT_REASON_CODES = (
+    "path_planning_failure",
+    "replan_required",
+    "iris_fallback",
+    "region_graph_disconnected",
+    "region_graph_fallback",
+)
 
 
 def load_path_feedback_summary_entries(config: dict[str, Any], *, base_dir: Path) -> list[dict[str, Any]]:
@@ -217,6 +226,9 @@ def build_system_calibration_summary(
     }
     if sample_quality_summary is not None:
         summary["sample_quality_summary"] = sample_quality_summary
+        audit_summary = sample_quality_summary.get("sample_quality_audit_summary")
+        if isinstance(audit_summary, dict):
+            summary["sample_quality_audit_summary"] = audit_summary
     return summary
 
 
@@ -302,7 +314,7 @@ def _sample_quality_config(config: dict[str, Any]) -> dict[str, Any] | None:
         return None
     if not isinstance(value, dict):
         raise ValueError("system_calibration.sample_quality must be an object")
-    if not bool(value.get("enabled", True)):
+    if not bool(value.get("enabled", False)):
         return None
     return dict(value)
 
@@ -382,39 +394,35 @@ def build_sample_quality_summary(
     config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     quality_config = dict(config or {})
-    exclude_reason_codes = _string_set(quality_config.get("exclude_reason_codes", ()))
-    downweight_reason_codes = _string_set(quality_config.get("downweight_reason_codes", ()))
-    downweight_factor = _optional_float(quality_config.get("downweight_factor", 0.5))
-    if downweight_factor is None:
-        downweight_factor = 0.5
     records: list[dict[str, Any]] = []
-    for entry in path_feedback_summaries:
-        summary = entry.get("summary") if isinstance(entry, dict) and "summary" in entry else entry
-        if not isinstance(summary, dict):
-            continue
-        for scenario in summary.get("scenarios", []):
-            if not isinstance(scenario, dict):
-                continue
-            reason_codes = _sample_quality_reason_codes(scenario)
-            decision = "keep"
-            sample_weight = 1.0
-            if exclude_reason_codes.intersection(reason_codes):
-                decision = "exclude"
-                sample_weight = 0.0
-            elif downweight_reason_codes.intersection(reason_codes):
-                decision = "downweight"
-                sample_weight = max(0.0, float(downweight_factor))
-            records.append(
-                {
-                    "scenario_id": str(scenario.get("scenario_id", "")),
-                    "scenario_group": str(scenario.get("scenario_group", "unknown")),
-                    "decision": decision,
-                    "sample_weight": sample_weight,
-                    "reason_codes": reason_codes,
-                    "quality_signal_use": "calibration_only",
-                    "not_real_world_performance_claim": True,
-                }
-            )
+    audit_summary = build_sample_quality_audit_summary(path_feedback_summaries, quality_config)
+    for audit_record in audit_summary["records"]:
+        decision = str(audit_record.get("action", "keep"))
+        sample_weight = float(audit_record.get("sample_weight", 1.0))
+        reason_codes = [str(reason) for reason in audit_record.get("reason_codes", [])]
+        records.append(
+            {
+                "scenario_id": str(audit_record.get("scenario_id", "")),
+                "scenario_group": str(audit_record.get("scenario_group", "unknown")),
+                "roi_group": str(audit_record.get("roi_group", "unknown")),
+                "decision": decision,
+                "action": decision,
+                "sample_weight": sample_weight,
+                "reason_codes": reason_codes,
+                "source_summary_path": str(audit_record.get("source_summary_path", "")),
+                "acceptance_metadata": dict(audit_record.get("acceptance_metadata", {})),
+                "scenario_set": str(audit_record.get("scenario_set", "unknown")),
+                "diagnostic_profile": str(audit_record.get("diagnostic_profile", "unknown")),
+                "top_k": audit_record.get("top_k"),
+                "data_class": str(audit_record.get("data_class", "unknown")),
+                "mask_stress_augmented": bool(audit_record.get("mask_stress_augmented", False)),
+                "benchmark_scope": str(
+                    audit_record.get("benchmark_scope", "not real-world generalization benchmark")
+                ),
+                "quality_signal_use": "calibration_only",
+                "not_real_world_performance_claim": True,
+            }
+        )
     decision_counts = _counts(record["decision"] for record in records)
     return {
         "schema_version": "sample-quality-summary/v1",
@@ -435,6 +443,105 @@ def build_sample_quality_summary(
             for record in records
             for reason in record["reason_codes"]
         ),
+        "sample_quality_audit_summary": audit_summary,
+        "records": records,
+    }
+
+
+def build_sample_quality_audit_summary(
+    path_feedback_summaries: list[dict[str, Any]],
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    quality_config = dict(config or {})
+    records: list[dict[str, Any]] = []
+    for entry in path_feedback_summaries:
+        summary = _path_feedback_summary_from_entry(entry)
+        if not isinstance(summary, dict):
+            continue
+        source_summary_path = _source_summary_path(entry)
+        acceptance_metadata = _acceptance_metadata_for_summary(summary)
+        scenario_set = str(acceptance_metadata.get("scenario_set", summary.get("scenario_set", "unknown")))
+        diagnostic_profile = str(
+            acceptance_metadata.get("diagnostic_profile", summary.get("diagnostic_profile", "unknown"))
+        )
+        top_k = acceptance_metadata.get("top_k", summary.get("top_k"))
+        for scenario in summary.get("scenarios", []):
+            if not isinstance(scenario, dict):
+                continue
+            reason_codes = _sample_quality_reason_codes(scenario)
+            action, sample_weight = _sample_quality_action(reason_codes, quality_config)
+            data_class = _scenario_summary_config_value(
+                "data_class",
+                scenario,
+                summary,
+                quality_config,
+                default="unknown",
+            )
+            benchmark_scope = _scenario_summary_config_value(
+                "benchmark_scope",
+                scenario,
+                summary,
+                quality_config,
+                default="not real-world generalization benchmark",
+            )
+            records.append(
+                {
+                    "scenario_id": str(scenario.get("scenario_id", "")),
+                    "scenario_group": str(scenario.get("scenario_group", "unknown")),
+                    "roi_group": _scenario_roi_group(scenario),
+                    "action": action,
+                    "sample_weight": sample_weight,
+                    "reason_codes": reason_codes,
+                    "source_summary_path": source_summary_path,
+                    "acceptance_metadata": dict(acceptance_metadata),
+                    "scenario_set": scenario_set,
+                    "diagnostic_profile": diagnostic_profile,
+                    "top_k": top_k,
+                    "data_class": str(data_class),
+                    "mask_stress_augmented": bool(
+                        _scenario_summary_config_value(
+                            "mask_stress_augmented",
+                            scenario,
+                            summary,
+                            quality_config,
+                            default=False,
+                        )
+                    ),
+                    "benchmark_scope": str(benchmark_scope),
+                    "quality_signal_use": "calibration_only",
+                    "not_real_world_performance_claim": True,
+                }
+            )
+    return {
+        "schema_version": SAMPLE_QUALITY_AUDIT_SCHEMA_VERSION,
+        "enabled": True,
+        "quality_signal_scope": str(quality_config.get("quality_signal_scope", "calibration_only")),
+        "quality_signal_use": "calibration_only",
+        "data_class": str(quality_config.get("data_class", _first_record_value(records, "data_class", "unknown"))),
+        "mask_stress_augmented": bool(
+            quality_config.get(
+                "mask_stress_augmented",
+                any(bool(record.get("mask_stress_augmented")) for record in records),
+            )
+        ),
+        "benchmark_scope": str(
+            quality_config.get(
+                "benchmark_scope",
+                _first_record_value(records, "benchmark_scope", "not real-world generalization benchmark"),
+            )
+        ),
+        "not_real_world_performance_claim": True,
+        "record_count": len(records),
+        "by_scenario_id": _sample_quality_aggregate_by_field(records, "scenario_id"),
+        "by_scenario_group": _sample_quality_aggregate_by_field(records, "scenario_group"),
+        "by_roi_group": _sample_quality_aggregate_by_field(records, "roi_group"),
+        "by_action": _sample_quality_aggregate_by_field(records, "action"),
+        "by_source_summary_path": _sample_quality_aggregate_by_field(records, "source_summary_path"),
+        "by_acceptance_metadata": _sample_quality_aggregate_by_acceptance_metadata(records),
+        "by_scenario_set": _sample_quality_aggregate_by_field(records, "scenario_set"),
+        "by_diagnostic_profile": _sample_quality_aggregate_by_field(records, "diagnostic_profile"),
+        "by_top_k": _sample_quality_aggregate_by_field(records, "top_k"),
+        "by_reason_code": _sample_quality_aggregate_by_reason_code(records),
         "records": records,
     }
 
@@ -490,6 +597,7 @@ def _sample_quality_reason_codes(scenario: dict[str, Any]) -> list[str]:
             if not isinstance(candidate, dict):
                 continue
             interpretation = candidate.get("diagnostic_interpretation", {})
+            candidate_interpretation = interpretation if isinstance(interpretation, dict) else {}
             if isinstance(interpretation, dict):
                 for flag in interpretation.get("diagnostic_flags", []):
                     codes.append(_normalize_sample_quality_reason(flag))
@@ -499,12 +607,27 @@ def _sample_quality_reason_codes(scenario: dict[str, Any]) -> list[str]:
                 codes.append("path_planning_failure")
             if bool(candidate.get("replan_required")):
                 codes.append("replan_required")
+            if bool(candidate_interpretation.get("iris_fallback_used")):
+                codes.append("iris_fallback")
+            if bool(candidate_interpretation.get("region_graph_fallback_used")):
+                codes.append("region_graph_fallback")
+            if candidate_interpretation.get("region_graph_start_goal_connected") is False:
+                codes.append("region_graph_disconnected")
     interpretation = scenario.get("diagnostic_interpretation", {})
     if isinstance(interpretation, dict):
         for source in interpretation.get("failure_sources", []):
             codes.append(_normalize_sample_quality_reason(source))
         if bool(interpretation.get("open_grid_fallback_used")):
             codes.append("open_grid_fallback")
+    iris_diagnostics = scenario.get("iris_diagnostics", {})
+    if isinstance(iris_diagnostics, dict) and _int_value(iris_diagnostics.get("fallback_count")) > 0:
+        codes.append("iris_fallback")
+    region_graph_diagnostics = scenario.get("region_graph_diagnostics", {})
+    if isinstance(region_graph_diagnostics, dict):
+        if _int_value(region_graph_diagnostics.get("fallback_count")) > 0:
+            codes.append("region_graph_fallback")
+        if _int_value(region_graph_diagnostics.get("start_goal_disconnected_count")) > 0:
+            codes.append("region_graph_disconnected")
     if bool(scenario.get("open_grid_fallback_used")):
         codes.append("open_grid_fallback")
     return _dedupe_strings(code for code in codes if code and code != "none") or ["sample_quality_passed"]
@@ -520,6 +643,160 @@ def _normalize_sample_quality_reason(value: Any) -> str:
         "region_graph_start_goal_disconnected": "region_graph_disconnected",
     }
     return aliases.get(text, text)
+
+
+def _sample_quality_action(reason_codes: list[str], config: dict[str, Any]) -> tuple[str, float]:
+    exclude_reason_codes = _string_set(config.get("exclude_reason_codes", ()))
+    exclude_reason_codes.update(SAMPLE_QUALITY_HARD_EXCLUDE_REASON_CODES)
+    downweight_reason_codes = _string_set(
+        config.get("downweight_reason_codes", SAMPLE_QUALITY_DEFAULT_DOWNWEIGHT_REASON_CODES)
+    )
+    reason_set = set(reason_codes)
+    if exclude_reason_codes.intersection(reason_set):
+        return "exclude", 0.0
+    if downweight_reason_codes.intersection(reason_set):
+        downweight_factor = _optional_float(config.get("downweight_factor", 0.5))
+        if downweight_factor is None:
+            downweight_factor = 0.5
+        return "downweight", max(0.0, float(downweight_factor))
+    return "keep", 1.0
+
+
+def _path_feedback_summary_from_entry(entry: Any) -> dict[str, Any] | None:
+    if isinstance(entry, dict) and "summary" in entry:
+        summary = entry.get("summary")
+        return summary if isinstance(summary, dict) else None
+    return entry if isinstance(entry, dict) else None
+
+
+def _source_summary_path(entry: Any) -> str:
+    if not isinstance(entry, dict):
+        return ""
+    for key in ("path", "source_summary_path", "summary_path"):
+        if entry.get(key) is not None:
+            return str(entry[key])
+    return ""
+
+
+def _acceptance_metadata_for_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    metadata = summary.get("acceptance_metadata")
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    return {
+        "scenario_set": summary.get("scenario_set", "unknown"),
+        "diagnostic_profile": summary.get("diagnostic_profile", "unknown"),
+        "top_k": summary.get("top_k"),
+        "open_grid_fallback_used": bool(summary.get("open_grid_fallback_used")),
+    }
+
+
+def _scenario_summary_config_value(
+    key: str,
+    scenario: dict[str, Any],
+    summary: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    default: Any,
+) -> Any:
+    if key in scenario:
+        return scenario[key]
+    metadata = summary.get("metadata", {})
+    if isinstance(metadata, dict) and key in metadata:
+        return metadata[key]
+    if key in summary:
+        return summary[key]
+    if key in config:
+        return config[key]
+    return default
+
+
+def _scenario_roi_group(scenario: dict[str, Any]) -> str:
+    for key in ("roi_group", "roi_name", "roi_id", "group"):
+        if scenario.get(key) is not None:
+            return str(scenario[key])
+    roi = scenario.get("roi")
+    if isinstance(roi, dict):
+        for key in ("name", "id", "group"):
+            if roi.get(key) is not None:
+                return str(roi[key])
+    if roi is not None:
+        return str(roi)
+    return "unknown"
+
+
+def _sample_quality_aggregate_by_field(records: list[dict[str, Any]], field: str) -> dict[str, dict[str, Any]]:
+    buckets: dict[str, dict[str, Any]] = {}
+    for record in records:
+        key = str(record.get(field, "unknown"))
+        _sample_quality_add_record_to_bucket(buckets, key, record)
+    return dict(sorted(buckets.items()))
+
+
+def _sample_quality_aggregate_by_acceptance_metadata(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    buckets: dict[str, dict[str, Any]] = {}
+    for record in records:
+        metadata = record.get("acceptance_metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        key = "|".join(
+            (
+                f"scenario_set={metadata.get('scenario_set', record.get('scenario_set', 'unknown'))}",
+                f"diagnostic_profile={metadata.get('diagnostic_profile', record.get('diagnostic_profile', 'unknown'))}",
+                f"top_k={metadata.get('top_k', record.get('top_k'))}",
+                f"open_grid_fallback_used={metadata.get('open_grid_fallback_used', 'unknown')}",
+            )
+        )
+        _sample_quality_add_record_to_bucket(buckets, key, record)
+        buckets[key]["acceptance_metadata"] = dict(metadata)
+    return dict(sorted(buckets.items()))
+
+
+def _sample_quality_aggregate_by_reason_code(records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    buckets: dict[str, dict[str, Any]] = {}
+    for record in records:
+        reason_codes = record.get("reason_codes", [])
+        for reason in reason_codes if isinstance(reason_codes, list) else []:
+            _sample_quality_add_record_to_bucket(buckets, str(reason), record)
+    return dict(sorted(buckets.items()))
+
+
+def _sample_quality_add_record_to_bucket(
+    buckets: dict[str, dict[str, Any]],
+    key: str,
+    record: dict[str, Any],
+) -> None:
+    bucket = buckets.setdefault(
+        key,
+        {
+            "record_count": 0,
+            "action_counts": {},
+            "reason_code_counts": {},
+            "scenario_ids": [],
+            "source_summary_paths": [],
+        },
+    )
+    bucket["record_count"] += 1
+    action = str(record.get("action", "keep"))
+    bucket["action_counts"][action] = bucket["action_counts"].get(action, 0) + 1
+    for reason in record.get("reason_codes", []):
+        reason_text = str(reason)
+        bucket["reason_code_counts"][reason_text] = bucket["reason_code_counts"].get(reason_text, 0) + 1
+    _append_unique_string(bucket["scenario_ids"], record.get("scenario_id", ""))
+    _append_unique_string(bucket["source_summary_paths"], record.get("source_summary_path", ""))
+
+
+def _append_unique_string(values: list[str], value: Any) -> None:
+    text = str(value)
+    if text and text not in values:
+        values.append(text)
+
+
+def _first_record_value(records: list[dict[str, Any]], key: str, default: Any) -> Any:
+    for record in records:
+        value = record.get(key)
+        if value not in (None, ""):
+            return value
+    return default
 
 
 def _episode_quality_match_value(episode, match_key: str) -> str:

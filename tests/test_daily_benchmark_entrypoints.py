@@ -741,10 +741,19 @@ class BenchmarkDocumentationTests(unittest.TestCase):
         progress_doc = (ROOT / "docs" / "network-architecture-v1.1-progress.md").read_text(encoding="utf-8")
         manifest_path = ROOT / "data" / "manifests" / "feedback_aware_distillation_calibration_v5.json"
         fixture_path = ROOT / "tests" / "fixtures" / "synthetic_experiment" / "semi-real-system-calibration-v1.json"
+        dataset_v2_fixture_path = (
+            ROOT
+            / "tests"
+            / "fixtures"
+            / "synthetic_experiment"
+            / "semi-real-calibration-dataset-application-v2.json"
+        )
 
         self.assertTrue(manifest_path.exists())
+        self.assertTrue(dataset_v2_fixture_path.exists())
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+        dataset_v2_fixture = json.loads(dataset_v2_fixture_path.read_text(encoding="utf-8"))
         train = manifest["train"]
 
         for text in (
@@ -757,12 +766,14 @@ class BenchmarkDocumentationTests(unittest.TestCase):
             "`path_feedback_gate`",
             "`system_calibration.sample_quality`",
             "`sample_quality_summary`",
+            "`sample_quality_audit_summary`",
             "`acceptance_metadata`",
             "`open_grid_fallback_used`",
         ):
             self.assertIn(text, manifest_doc)
         self.assertIn("Distillation Calibration v5", progress_doc)
         self.assertIn("Semi-Real Closed-Loop Calibration v1", progress_doc)
+        self.assertIn("Semi-Real Calibration Dataset Application v2", progress_doc)
         self.assertEqual(train["source_selection_strategies"], ["coverage_heuristic", "feedback_aware"])
         self.assertIn("high_only", train["teacher_margin_curriculum_profiles"])
         self.assertIn("soft_all_valid", train["teacher_margin_curriculum_profiles"])
@@ -778,6 +789,24 @@ class BenchmarkDocumentationTests(unittest.TestCase):
         self.assertEqual(fixture_calibration["path_feedback_summaries"][0]["summary"]["acceptance_metadata"]["scenario_set"], "all")
         self.assertEqual(fixture_calibration["sample_quality"]["enabled"], True)
         self.assertIn("path_planning_failure", fixture_calibration["sample_quality"]["downweight_reason_codes"])
+        dataset_v2_calibration = dataset_v2_fixture["train"]["system_calibration"]
+        self.assertEqual(dataset_v2_calibration["name"], "semi-real-calibration-dataset-application-v2")
+        self.assertEqual(dataset_v2_calibration["sample_quality"]["enabled"], True)
+        self.assertEqual(dataset_v2_calibration["sample_quality"]["data_class"], "quasi_real")
+        self.assertEqual(
+            dataset_v2_calibration["sample_quality"]["benchmark_scope"],
+            "not real-world generalization benchmark",
+        )
+        self.assertIn("sample_quality_audit_summary", dataset_v2_fixture["expected_json_boundary"])
+        audit_boundary = dataset_v2_fixture["expected_json_boundary"]["sample_quality_audit_summary"]
+        self.assertEqual(audit_boundary["schema_version"], "sample-quality-audit-summary/v1")
+        self.assertIn("source_summary_path", audit_boundary["required_record_fields"])
+        self.assertIn("acceptance_metadata", audit_boundary["required_record_fields"])
+        self.assertIn("scenario_set", audit_boundary["aggregation_dimensions"])
+        self.assertIn("diagnostic_profile", audit_boundary["aggregation_dimensions"])
+        self.assertIn("top_k", audit_boundary["aggregation_dimensions"])
+        self.assertIn("roi_group", audit_boundary["aggregation_dimensions"])
+        self.assertTrue(all(isinstance(reason, str) for reason in audit_boundary["machine_readable_reason_codes"]))
 
     def test_benchmark_and_manifest_docs_define_current_synthetic_scope(self):
         benchmark_doc = (ROOT / "docs" / "benchmark-readiness.md").read_text(encoding="utf-8")
