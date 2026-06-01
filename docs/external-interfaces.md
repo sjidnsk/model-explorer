@@ -175,9 +175,13 @@ Summary 输出包含：
 - `selected_cell_before_path_feedback`：原始 `top_goals` 中第一个 reachable 目标。
 - `selected_cell_after_path_feedback`：路径反馈后按可达、非 replan、低 `path_cost`、低 `risk`、高 `utility` 重排得到的目标。
 - `selection_changed_by_path_feedback`：路径反馈是否改变目标。
+- `selected_path_cost_before_feedback`、`selected_path_cost_after_feedback`、`path_cost_delta_after_feedback`：用于逐场景比较 baseline 选择与路径反馈选择的路径代价差异。
+- `selection_changed_count`、`selection_changed_rate`：用于实验级汇总路径反馈改变目标选择的频次和比例。
 - `open_grid_fallback_used`：是否使用了 open-grid fallback；半真实可信实验应为 `false`。
 - `path_planning_failure_count`、`replan_count`、`tracking_safety_violation_count`、`trajectory_optimization_fallback_count`、`region_graph_disconnected_count`。
 - `coverage_per_path_cost`：覆盖率增量与路径代价的比值，用于比较“单位路径代价覆盖收益”。
+
+`path-feedback run` 的 stdout 默认是紧凑摘要；完整 `scenarios`、Top-K 候选明细和 baseline-vs-feedback 对比仍写入 manifest 指定的 JSON 与 Markdown 报告。
 
 执行证据与诊断特征应分开解释：
 

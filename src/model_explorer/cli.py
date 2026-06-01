@@ -16,8 +16,10 @@ from .policy.experiment import (
     validate_experiment_manifest,
 )
 from .policy.path_feedback import (
+    compact_path_feedback_summary,
     dry_run_path_feedback_manifest,
-    run_path_feedback_manifest,
+    load_path_feedback_manifest,
+    run_path_feedback,
     validate_path_feedback_manifest,
 )
 from .data.evaluation_matrix import (
@@ -115,7 +117,23 @@ def _main(args_list: list[str]) -> int:
         return 0
     if args.command == "path-feedback":
         if args.path_feedback_command == "run":
-            _print_json(run_path_feedback_manifest(args.manifest))
+            manifest = load_path_feedback_manifest(args.manifest)
+            summary = run_path_feedback(manifest)
+            if manifest.summary_output is not None:
+                manifest.summary_output.parent.mkdir(parents=True, exist_ok=True)
+                manifest.summary_output.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+            if manifest.report_output is not None:
+                from .policy.path_feedback import render_path_feedback_markdown
+
+                manifest.report_output.parent.mkdir(parents=True, exist_ok=True)
+                manifest.report_output.write_text(render_path_feedback_markdown(summary), encoding="utf-8")
+            _print_json(
+                compact_path_feedback_summary(
+                    summary,
+                    summary_output=manifest.summary_output,
+                    report_output=manifest.report_output,
+                )
+            )
         elif args.path_feedback_command == "validate":
             _print_json(validate_path_feedback_manifest(args.manifest))
         elif args.path_feedback_command == "dry-run":

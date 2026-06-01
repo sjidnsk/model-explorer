@@ -1526,12 +1526,27 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertIn("total_path_cost", summary)
         self.assertIn("path_planning_failure_count", summary)
         self.assertIn("coverage_per_path_cost", summary)
+        self.assertIn("selection_changed_count", summary)
+        self.assertIn("selection_changed_rate", summary)
+        self.assertGreaterEqual(summary["selection_changed_count"], 1)
+        self.assertGreater(summary["selection_changed_rate"], 0.0)
         self.assertGreaterEqual(summary["replan_count"], 1)
         self.assertGreaterEqual(summary["region_graph_disconnected_count"], 1)
         self.assertTrue(any(item["selection_changed_by_path_feedback"] for item in summary["scenarios"]))
+        for item in summary["scenarios"]:
+            self.assertIn("selected_path_cost_before_feedback", item)
+            self.assertIn("path_cost_delta_after_feedback", item)
+            self.assertIn("baseline_vs_feedback", item)
+            self.assertEqual(
+                item["baseline_vs_feedback"]["path_cost_delta_after_feedback"],
+                item["path_cost_delta_after_feedback"],
+            )
         self.assertIn("npz_shadow_corridor", report)
         self.assertIn("npz_rock_field_multi_pose", report)
         self.assertIn("npz_low_confidence_risk_band", report)
+        self.assertIn("## Baseline vs Feedback", report)
+        self.assertIn("## Candidate Paths", report)
+        self.assertIn("| scenario | action | cell | reachable | path_cost | risk | utility | replan | failure |", report)
         json.dumps(summary)
 
     def test_path_planner_route_adapter_runs_cli_without_importing_path_planner(self):

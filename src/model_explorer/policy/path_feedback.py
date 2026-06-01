@@ -120,6 +120,39 @@ def run_path_feedback_manifest(path: str | Path) -> dict[str, Any]:
     return summary
 
 
+def compact_path_feedback_summary(
+    summary: dict[str, Any],
+    *,
+    summary_output: Path | None = None,
+    report_output: Path | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "status": "completed",
+        "schema_version": summary.get("schema_version"),
+        "scenario_count": summary.get("scenario_count"),
+        "top_k": summary.get("top_k"),
+        "candidate_count": summary.get("candidate_count"),
+        "reachable_count": summary.get("reachable_count"),
+        "path_planning_failure_count": summary.get("path_planning_failure_count"),
+        "replan_count": summary.get("replan_count"),
+        "selection_changed_count": summary.get("selection_changed_count"),
+        "selection_changed_rate": summary.get("selection_changed_rate"),
+        "total_path_cost": summary.get("total_path_cost"),
+        "average_path_cost": summary.get("average_path_cost"),
+        "coverage_per_path_cost": summary.get("coverage_per_path_cost"),
+        "tracking_safety_violation_count": summary.get("tracking_safety_violation_count"),
+        "trajectory_optimization_fallback_count": summary.get("trajectory_optimization_fallback_count"),
+        "region_graph_disconnected_count": summary.get("region_graph_disconnected_count"),
+        "open_grid_fallback_used": summary.get("open_grid_fallback_used"),
+        "failure_reasons": summary.get("failure_reasons", []),
+    }
+    if summary_output is not None:
+        payload["summary_output"] = str(summary_output)
+    if report_output is not None:
+        payload["report_output"] = str(report_output)
+    return payload
+
+
 def run_path_feedback(manifest: PathFeedbackManifest) -> dict[str, Any]:
     scenario_summaries = [
         _run_feedback_scenario(scenario, manifest=manifest)
@@ -132,6 +165,9 @@ def run_path_feedback(manifest: PathFeedbackManifest) -> dict[str, Any]:
         for item in scenario_summaries
         if item["selected_path_cost_after_feedback"] is not None
     ]
+    selection_changed_count = sum(
+        1 for item in scenario_summaries if item["selection_changed_by_path_feedback"]
+    )
     return {
         "schema_version": "path-feedback-summary/v1",
         "scenario_count": len(scenario_summaries),
@@ -149,6 +185,12 @@ def run_path_feedback(manifest: PathFeedbackManifest) -> dict[str, Any]:
         "coverage_per_path_cost": (
             total_coverage_delta / total_path_cost
             if total_path_cost > 0.0
+            else 0.0
+        ),
+        "selection_changed_count": selection_changed_count,
+        "selection_changed_rate": (
+            selection_changed_count / len(scenario_summaries)
+            if scenario_summaries
             else 0.0
         ),
         "tracking_safety_violation_count": sum(
@@ -181,27 +223,56 @@ def render_path_feedback_markdown(summary: dict[str, Any]) -> str:
         f"| reachable_count | {summary['reachable_count']} |",
         f"| path_planning_failure_count | {summary['path_planning_failure_count']} |",
         f"| replan_count | {summary['replan_count']} |",
+        f"| selection_changed_count | {summary['selection_changed_count']} |",
+        f"| selection_changed_rate | {summary['selection_changed_rate']} |",
         f"| total_path_cost | {summary['total_path_cost']} |",
         f"| coverage_per_path_cost | {summary['coverage_per_path_cost']} |",
         f"| open_grid_fallback_used | {summary['open_grid_fallback_used']} |",
         "",
-        "## Scenarios",
+        "## Baseline vs Feedback",
         "",
-        "| scenario | before | after | changed | reachable | failures | path_cost |",
-        "|---|---|---|---:|---:|---:|---:|",
+        "| scenario | before | after | changed | before_path_cost | after_path_cost | delta | coverage_delta | reachable | failures |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for item in summary["scenarios"]:
         lines.append(
-            "| {scenario_id} | {before} | {after} | {changed} | {reachable} | {failures} | {cost} |".format(
+            "| {scenario_id} | {before} | {after} | {changed} | {before_cost} | {after_cost} | {delta} | {coverage_delta} | {reachable} | {failures} |".format(
                 scenario_id=item["scenario_id"],
                 before=item["selected_cell_before_path_feedback"],
                 after=item["selected_cell_after_path_feedback"],
                 changed=item["selection_changed_by_path_feedback"],
+                before_cost=item["selected_path_cost_before_feedback"],
+                after_cost=item["selected_path_cost_after_feedback"],
+                delta=item["path_cost_delta_after_feedback"],
+                coverage_delta=item["coverage_rate_delta"],
                 reachable=item["path_feedback"]["reachable_count"],
                 failures=item["path_feedback"]["failure_count"],
-                cost=item["selected_path_cost_after_feedback"],
             )
         )
+    lines.extend(
+        [
+            "",
+            "## Candidate Paths",
+            "",
+            "| scenario | action | cell | reachable | path_cost | risk | utility | replan | failure |",
+            "|---|---:|---|---:|---:|---:|---:|---:|---|",
+        ]
+    )
+    for item in summary["scenarios"]:
+        for candidate in item["path_feedback"]["candidates"]:
+            lines.append(
+                "| {scenario_id} | {action} | {cell} | {reachable} | {path_cost} | {risk} | {utility} | {replan} | {failure} |".format(
+                    scenario_id=item["scenario_id"],
+                    action=candidate["action_index"],
+                    cell=candidate["cell"],
+                    reachable=candidate["reachable"],
+                    path_cost=candidate["path_cost"],
+                    risk=candidate["risk"],
+                    utility=candidate["utility"],
+                    replan=candidate["replan_required"],
+                    failure=candidate["failure_reason"],
+                )
+            )
     lines.extend(
         [
             "",
@@ -229,24 +300,35 @@ def _run_feedback_scenario(
     selected_before = _selected_before_feedback(contract)
     selected_after = _selected_after_feedback(evaluations)
     selected_after_cost = None if selected_after is None else selected_after.result.path_cost
+    selected_before_cost = _candidate_path_cost_for_cell(
+        evaluations,
+        None if selected_before is None else selected_before.cell,
+    )
+    path_cost_delta = _path_cost_delta(selected_before_cost, selected_after_cost)
+    before_cell = _cell_to_list(selected_before.cell if selected_before is not None else None)
+    after_cell = _cell_to_list(selected_after.cell if selected_after is not None else None)
     return {
         "scenario_id": scenario.scenario_id,
-        "selected_cell_before_path_feedback": _cell_to_list(
-            selected_before.cell if selected_before is not None else None
-        ),
-        "selected_cell_after_path_feedback": _cell_to_list(
-            selected_after.cell if selected_after is not None else None
-        ),
-        "selection_changed_by_path_feedback": (
-            _cell_to_list(selected_before.cell if selected_before is not None else None)
-            != _cell_to_list(selected_after.cell if selected_after is not None else None)
-        ),
+        "selected_cell_before_path_feedback": before_cell,
+        "selected_cell_after_path_feedback": after_cell,
+        "selection_changed_by_path_feedback": before_cell != after_cell,
+        "selected_path_cost_before_feedback": selected_before_cost,
         "selected_path_cost_after_feedback": selected_after_cost,
+        "path_cost_delta_after_feedback": path_cost_delta,
         "coverage_rate_delta": _numeric_observation(contract, "coverage_rate_delta"),
         "open_grid_fallback_used": _open_grid_fallback_used(evaluations),
         "tracking_safety_violation_count": _tracking_safety_violation_count(evaluations),
         "trajectory_optimization_fallback_count": _trajectory_optimization_fallback_count(evaluations),
         "region_graph_disconnected_count": _region_graph_disconnected_count(evaluations),
+        "baseline_vs_feedback": {
+            "before_cell": before_cell,
+            "after_cell": after_cell,
+            "selection_changed": before_cell != after_cell,
+            "selected_path_cost_before_feedback": selected_before_cost,
+            "selected_path_cost_after_feedback": selected_after_cost,
+            "path_cost_delta_after_feedback": path_cost_delta,
+            "coverage_rate_delta": _numeric_observation(contract, "coverage_rate_delta"),
+        },
         "path_feedback": feedback,
     }
 
@@ -287,6 +369,21 @@ def _selected_after_feedback(evaluations) -> Any | None:
             item.cell[1],
         ),
     )
+
+
+def _candidate_path_cost_for_cell(evaluations, cell: tuple[int, int] | None) -> float | None:
+    if cell is None:
+        return None
+    for item in evaluations:
+        if item.cell == cell:
+            return float(item.result.path_cost) if item.result.feasible else None
+    return None
+
+
+def _path_cost_delta(before: float | None, after: float | None) -> float | None:
+    if before is None or after is None:
+        return None
+    return float(after - before)
 
 
 def _scenario_from_payload(payload: Any, *, base_dir: Path) -> PathFeedbackScenario:

@@ -201,8 +201,13 @@ class ExperimentCliEntrypointTests(unittest.TestCase):
             run_summary = json.loads(run.stdout)
             self.assertEqual(run_summary["scenario_count"], 1)
             self.assertFalse(run_summary["open_grid_fallback_used"])
+            self.assertIn("selection_changed_count", run_summary)
+            self.assertNotIn("scenarios", run_summary)
             self.assertTrue(summary_path.exists())
             self.assertTrue(report_path.exists())
+            full_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertIn("scenarios", full_summary)
+            self.assertEqual(full_summary["scenario_count"], 1)
 
     def test_experiment_dry_run_training_matrix_does_not_import_torch(self):
         with tempfile.TemporaryDirectory() as tmpdir:
