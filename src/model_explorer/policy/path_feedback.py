@@ -224,6 +224,7 @@ def compact_path_feedback_summary(
         "region_graph_source_counts": summary.get("region_graph_source_counts", {}),
         "region_graph_fallback_count": summary.get("region_graph_fallback_count"),
         "region_graph_start_goal_disconnected_count": summary.get("region_graph_start_goal_disconnected_count"),
+        "diagnostic_interpretation": summary.get("diagnostic_interpretation", {}),
     }
     if summary_output is not None:
         payload["summary_output"] = str(summary_output)
@@ -248,6 +249,7 @@ def run_path_feedback(manifest: PathFeedbackManifest) -> dict[str, Any]:
         1 for item in scenario_summaries if item["selection_changed_by_path_feedback"]
     )
     diagnostic_summary = _diagnostic_aggregate(scenario_summaries)
+    diagnostic_interpretation = _diagnostic_interpretation_summary(scenario_summaries)
     return {
         "schema_version": PATH_FEEDBACK_SUMMARY_SCHEMA_VERSION,
         "scenario_count": len(scenario_summaries),
@@ -289,6 +291,7 @@ def run_path_feedback(manifest: PathFeedbackManifest) -> dict[str, Any]:
             for reason in item["path_feedback"]["failure_reasons"]
         ],
         **diagnostic_summary,
+        "diagnostic_interpretation": diagnostic_interpretation,
         "scenarios": scenario_summaries,
     }
 
@@ -354,6 +357,57 @@ def render_path_feedback_markdown(summary: dict[str, Any]) -> str:
                     utility=candidate["utility"],
                     replan=candidate["replan_required"],
                     failure=candidate["failure_reason"],
+                )
+            )
+    lines.extend(
+        [
+            "",
+            "## Diagnostic Interpretation",
+            "",
+            "| scenario | group | replacement_reason | failure_sources | primary_failure_reason | iris_region_graph_signal | open_grid_fallback |",
+            "|---|---|---|---|---|---|---:|",
+        ]
+    )
+    for item in summary["scenarios"]:
+        interpretation = item["diagnostic_interpretation"]
+        lines.append(
+            "| {scenario_id} | {group} | {reason} | {sources} | {primary} | {signal} | {open_grid} |".format(
+                scenario_id=item["scenario_id"],
+                group=item["scenario_group"],
+                reason=interpretation["target_replacement_reason"],
+                sources=_list_text(interpretation["failure_sources"]),
+                primary=interpretation["primary_failure_reason"],
+                signal=interpretation["iris_region_graph_signal"],
+                open_grid=interpretation["open_grid_fallback_used"],
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Candidate Diagnostics",
+            "",
+            "| scenario | action | cell | reachable | replan | failure | flags | iris_status | iris_fallback | graph_source | graph_fallback | graph_connected | open_grid |",
+            "|---|---:|---|---:|---:|---|---|---|---:|---|---:|---|---:|",
+        ]
+    )
+    for item in summary["scenarios"]:
+        for candidate in item["path_feedback"]["candidates"]:
+            interpretation = candidate["diagnostic_interpretation"]
+            lines.append(
+                "| {scenario_id} | {action} | {cell} | {reachable} | {replan} | {failure} | {flags} | {iris_status} | {iris_fallback} | {graph_source} | {graph_fallback} | {graph_connected} | {open_grid} |".format(
+                    scenario_id=item["scenario_id"],
+                    action=candidate["action_index"],
+                    cell=candidate["cell"],
+                    reachable=candidate["reachable"],
+                    replan=candidate["replan_required"],
+                    failure=candidate["failure_reason"],
+                    flags=_list_text(interpretation["diagnostic_flags"]),
+                    iris_status=interpretation["iris_status"],
+                    iris_fallback=interpretation["iris_fallback_used"],
+                    graph_source=interpretation["region_graph_source"],
+                    graph_fallback=interpretation["region_graph_fallback_used"],
+                    graph_connected=interpretation["region_graph_start_goal_connected"],
+                    open_grid=interpretation["open_grid_fallback_used"],
                 )
             )
     lines.extend(
@@ -455,7 +509,7 @@ def _run_feedback_scenario(
     path_cost_delta = _path_cost_delta(selected_before_cost, selected_after_cost)
     before_cell = _cell_to_list(selected_before.cell if selected_before is not None else None)
     after_cell = _cell_to_list(selected_after.cell if selected_after is not None else None)
-    return {
+    summary = {
         "scenario_id": scenario.scenario_id,
         "scenario_group": scenario.scenario_group,
         "selected_cell_before_path_feedback": before_cell,
@@ -482,6 +536,8 @@ def _run_feedback_scenario(
         },
         "path_feedback": feedback,
     }
+    summary["diagnostic_interpretation"] = _scenario_diagnostic_interpretation(summary)
+    return summary
 
 
 def _planner_for_scenario(
@@ -595,6 +651,166 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
             for group, payload in sorted(group_summary.items())
         },
     }
+
+
+def _diagnostic_interpretation_summary(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
+    group_summary: dict[str, dict[str, Counter[str]]] = defaultdict(_empty_group_interpretation)
+    for scenario in scenarios:
+        group = str(scenario.get("scenario_group") or "unknown")
+        interpretation = scenario["diagnostic_interpretation"]
+        group_payload = group_summary[group]
+        group_payload["target_replacement_reasons"].update(
+            [str(interpretation["target_replacement_reason"])]
+        )
+        group_payload["iris_region_graph_signal_counts"].update(
+            [str(interpretation["iris_region_graph_signal"])]
+        )
+        for source in interpretation["failure_sources"]:
+            group_payload["failure_sources"].update([str(source)])
+
+    return {
+        "scenario_group_interpretation": {
+            group: {
+                "target_replacement_reasons": dict(sorted(payload["target_replacement_reasons"].items())),
+                "failure_sources": dict(sorted(payload["failure_sources"].items())),
+                "iris_region_graph_signal_counts": dict(
+                    sorted(payload["iris_region_graph_signal_counts"].items())
+                ),
+            }
+            for group, payload in sorted(group_summary.items())
+        }
+    }
+
+
+def _empty_group_interpretation() -> dict[str, Counter[str]]:
+    return {
+        "target_replacement_reasons": Counter(),
+        "failure_sources": Counter(),
+        "iris_region_graph_signal_counts": Counter(),
+    }
+
+
+def _scenario_diagnostic_interpretation(scenario: dict[str, Any]) -> dict[str, Any]:
+    candidates = scenario["path_feedback"]["candidates"]
+    before_candidate = _candidate_by_cell(candidates, scenario["selected_cell_before_path_feedback"])
+    after_candidate = _candidate_by_cell(candidates, scenario["selected_cell_after_path_feedback"])
+    failure_sources = _scenario_failure_sources(scenario)
+    return {
+        "target_replacement_reason": _target_replacement_reason(
+            scenario,
+            before_candidate=before_candidate,
+            after_candidate=after_candidate,
+        ),
+        "failure_sources": failure_sources,
+        "primary_failure_reason": _primary_failure_reason(scenario),
+        "iris_region_graph_signal": _iris_region_graph_signal(scenario),
+        "selected_after_feasible": None if after_candidate is None else bool(after_candidate["reachable"]),
+        "selected_after_replan_required": None
+        if after_candidate is None
+        else bool(after_candidate["replan_required"]),
+        "open_grid_fallback_used": bool(scenario["open_grid_fallback_used"]),
+    }
+
+
+def _target_replacement_reason(
+    scenario: dict[str, Any],
+    *,
+    before_candidate: dict[str, Any] | None,
+    after_candidate: dict[str, Any] | None,
+) -> str:
+    if not scenario["selection_changed_by_path_feedback"]:
+        return "unchanged"
+    if after_candidate is None:
+        return "no_feasible_candidate_after_path_feedback"
+    before_flags = (
+        before_candidate.get("diagnostic_interpretation", {}).get("diagnostic_flags", [])
+        if before_candidate is not None
+        else []
+    )
+    if "path_planning_failure" in before_flags:
+        return "before_candidate_path_planning_failed"
+    if "region_graph_disconnected" in before_flags:
+        return "before_candidate_region_graph_disconnected"
+    if "region_graph_fallback" in before_flags:
+        return "before_candidate_region_graph_fallback"
+    if "iris_fallback" in before_flags:
+        return "before_candidate_iris_fallback"
+    if "replan_required" in before_flags:
+        return "before_candidate_replan_required"
+    before_cost = scenario["selected_path_cost_before_feedback"]
+    after_cost = scenario["selected_path_cost_after_feedback"]
+    if before_cost is None:
+        return "selected_before_not_evaluated_or_infeasible"
+    if after_cost is not None and float(after_cost) < float(before_cost):
+        return "lower_path_cost_candidate"
+    return "path_feedback_tiebreak"
+
+
+def _scenario_failure_sources(scenario: dict[str, Any]) -> list[str]:
+    sources: list[str] = []
+    feedback = scenario["path_feedback"]
+    if int(feedback["failure_count"]) > 0:
+        sources.append("path_planning_failure")
+    if int(feedback["replan_count"]) > 0:
+        sources.append("replan_required")
+    if int(scenario["tracking_safety_violation_count"]) > 0:
+        sources.append("tracking_safety_violation")
+    if int(scenario["trajectory_optimization_fallback_count"]) > 0:
+        sources.append("trajectory_optimization_fallback")
+    if int(scenario["region_graph_disconnected_count"]) > 0:
+        sources.append("region_graph_disconnected")
+    if int(scenario["region_graph_diagnostics"]["fallback_count"]) > 0:
+        sources.append("region_graph_fallback")
+    if int(scenario["iris_diagnostics"]["fallback_count"]) > 0:
+        sources.append("iris_fallback")
+    if bool(scenario["open_grid_fallback_used"]):
+        sources.append("open_grid_fallback")
+    return sources or ["none"]
+
+
+def _primary_failure_reason(scenario: dict[str, Any]) -> str | None:
+    reasons = scenario["path_feedback"].get("failure_reasons", [])
+    if not reasons:
+        graph_reasons = scenario["region_graph_diagnostics"].get("fallback_reasons", {})
+        if graph_reasons:
+            return next(iter(graph_reasons))
+        iris_reasons = scenario["iris_diagnostics"].get("fallback_reasons", {})
+        if iris_reasons:
+            return next(iter(iris_reasons))
+        return None
+    counts = Counter(str(reason) for reason in reasons)
+    return counts.most_common(1)[0][0]
+
+
+def _iris_region_graph_signal(scenario: dict[str, Any]) -> str:
+    if (
+        int(scenario["region_graph_disconnected_count"]) > 0
+        or int(scenario["region_graph_diagnostics"]["fallback_count"]) > 0
+        or int(scenario["iris_diagnostics"]["fallback_count"]) > 0
+    ):
+        return "diagnostic_explains_replan_or_failure"
+    if scenario["region_graph_diagnostics"]["source_counts"] or int(scenario["iris_diagnostics"]["report_count"]) > 0:
+        return "diagnostic_present"
+    return "not_reported"
+
+
+def _candidate_by_cell(candidates: list[dict[str, Any]], cell: list[int] | None) -> dict[str, Any] | None:
+    if cell is None:
+        return None
+    for candidate in candidates:
+        if candidate.get("cell") == cell:
+            return candidate
+    return None
+
+
+def _list_text(values: Any) -> str:
+    if not values:
+        return "none"
+    if isinstance(values, dict):
+        return ", ".join(f"{key}:{value}" for key, value in values.items()) or "none"
+    if isinstance(values, list | tuple | set):
+        return ", ".join(str(value) for value in values) or "none"
+    return str(values)
 
 
 def _empty_group_summary() -> dict[str, int]:

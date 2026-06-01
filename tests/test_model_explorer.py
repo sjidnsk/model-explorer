@@ -1430,6 +1430,16 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(summary["failure_reasons"], ["goal_blocked"])
         self.assertEqual(summary["candidates"][0]["diagnostics"]["search_mode"], "platform_aware_astar")
         self.assertEqual(summary["best_by_path_cost"]["cell"], [2, 1])
+        blocked_candidate = summary["candidates"][0]
+        self.assertEqual(
+            blocked_candidate["diagnostic_interpretation"]["primary_source"],
+            "path_planning_failure",
+        )
+        self.assertIn(
+            "path_planning_failure",
+            blocked_candidate["diagnostic_interpretation"]["diagnostic_flags"],
+        )
+        self.assertFalse(blocked_candidate["diagnostic_interpretation"]["open_grid_fallback_used"])
         iris_candidate = summary["candidates"][1]
         self.assertEqual(iris_candidate["iris_region"]["status"], "ok")
         self.assertEqual(iris_candidate["iris_region"]["backend"], "workspace_iris")
@@ -1619,10 +1629,13 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertIn("iris_status_counts", summary)
         self.assertIn("region_graph_source_counts", summary)
         self.assertIn("scenario_group_summary", summary)
+        self.assertIn("diagnostic_interpretation", summary)
+        self.assertIn("scenario_group_interpretation", summary["diagnostic_interpretation"])
         self.assertGreaterEqual(summary["iris_requested_count"], 1)
         self.assertEqual(summary["iris_status_counts"]["ok"], 1)
         self.assertEqual(summary["region_graph_source_counts"]["iris"], 1)
         self.assertIn("smoke", summary["scenario_group_summary"])
+        self.assertIn("smoke", summary["diagnostic_interpretation"]["scenario_group_interpretation"])
         self.assertGreaterEqual(summary["selection_changed_count"], 1)
         self.assertGreater(summary["selection_changed_rate"], 0.0)
         self.assertGreaterEqual(summary["replan_count"], 1)
@@ -1632,18 +1645,37 @@ class PathPlanningAdapterTests(unittest.TestCase):
             self.assertIn("selected_path_cost_before_feedback", item)
             self.assertIn("path_cost_delta_after_feedback", item)
             self.assertIn("baseline_vs_feedback", item)
+            self.assertIn("diagnostic_interpretation", item)
+            self.assertIn("target_replacement_reason", item["diagnostic_interpretation"])
+            self.assertIn("failure_sources", item["diagnostic_interpretation"])
             self.assertEqual(
                 item["baseline_vs_feedback"]["path_cost_delta_after_feedback"],
                 item["path_cost_delta_after_feedback"],
             )
+        self.assertTrue(
+            any(
+                "region_graph_disconnected" in item["diagnostic_interpretation"]["failure_sources"]
+                for item in summary["scenarios"]
+            )
+        )
         self.assertIn("npz_shadow_corridor", report)
         self.assertIn("npz_rock_field_multi_pose", report)
         self.assertIn("npz_low_confidence_risk_band", report)
         self.assertIn("## Baseline vs Feedback", report)
         self.assertIn("## Candidate Paths", report)
+        self.assertIn("## Diagnostic Interpretation", report)
+        self.assertIn("## Candidate Diagnostics", report)
         self.assertIn("## IRIS Diagnostics", report)
         self.assertIn("## Region Graph Diagnostics", report)
         self.assertIn("## Scenario Groups", report)
+        self.assertIn(
+            "| scenario | group | replacement_reason | failure_sources | primary_failure_reason | iris_region_graph_signal | open_grid_fallback |",
+            report,
+        )
+        self.assertIn(
+            "| scenario | action | cell | reachable | replan | failure | flags | iris_status | iris_fallback | graph_source | graph_fallback | graph_connected | open_grid |",
+            report,
+        )
         self.assertIn(
             "| scenario | group | before | after | changed | before_path_cost | after_path_cost | delta | coverage_delta | reachable | failures | replans |",
             report,

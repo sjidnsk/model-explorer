@@ -52,7 +52,8 @@ class PathCandidateEvaluation:
     result: PathPlanResult
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        input_sources = _input_source_summary(self.result.metadata.get("request_payload"))
+        payload = {
             "action_index": self.action_index,
             "cell": [self.cell[0], self.cell[1]],
             "utility": float(self.utility),
@@ -70,7 +71,10 @@ class PathCandidateEvaluation:
             ),
             "region_graph": _region_graph_summary(self.result.metadata.get("region_graph_report")),
             "iris_region": _iris_region_summary(self.result.metadata.get("iris_region_report")),
+            "input_sources": input_sources,
+            "open_grid_fallback_used": bool(input_sources["open_grid_fallback_used"]),
         }
+        return payload
 
 
 class PathPlanningAdapter(Protocol):
@@ -454,7 +458,11 @@ def evaluate_candidate_paths(
 
 
 def path_feedback_summary(evaluations: Sequence[PathCandidateEvaluation]) -> dict[str, Any]:
-    items = [evaluation.to_dict() for evaluation in evaluations]
+    items = []
+    for evaluation in evaluations:
+        item = evaluation.to_dict()
+        item["diagnostic_interpretation"] = _candidate_diagnostic_interpretation(item)
+        items.append(item)
     failure_reasons = [
         item["failure_reason"] for item in items if item.get("failure_reason") is not None
     ]
@@ -652,6 +660,106 @@ def _iris_region_summary(value: Any) -> dict[str, Any] | None:
         "failure_status": value.get("failure_status"),
         "failure_reason": value.get("failure_reason"),
     }
+
+
+def _input_source_summary(value: Any) -> dict[str, Any]:
+    metadata = value.get("metadata") if isinstance(value, dict) else {}
+    metadata = metadata if isinstance(metadata, dict) else {}
+    cost_source = metadata.get("cost_source")
+    passable_mask_source = metadata.get("passable_mask_source")
+    return {
+        "cost_source": cost_source,
+        "passable_mask_source": passable_mask_source,
+        "open_grid_fallback_used": (
+            cost_source == "open_grid_fallback"
+            or passable_mask_source == "open_grid_fallback"
+        ),
+    }
+
+
+def _candidate_diagnostic_interpretation(item: dict[str, Any]) -> dict[str, Any]:
+    flags: list[str] = []
+    if item.get("failure_reason") is not None or not bool(item.get("reachable")):
+        flags.append("path_planning_failure")
+    if bool(item.get("replan_required")):
+        flags.append("replan_required")
+    if bool(item.get("open_grid_fallback_used")):
+        flags.append("open_grid_fallback")
+
+    optimization = item.get("trajectory_optimization")
+    if isinstance(optimization, dict):
+        fallback = optimization.get("fallback_status")
+        if isinstance(fallback, str) and fallback not in {"ok", "not_needed", "none"}:
+            flags.append("trajectory_optimization_fallback")
+
+    postprocess = item.get("postprocess")
+    if isinstance(postprocess, dict) and int(postprocess.get("tracking_safety_violation_count") or 0) > 0:
+        flags.append("tracking_safety_violation")
+
+    iris = item.get("iris_region")
+    iris_status = None
+    iris_fallback_used = False
+    if isinstance(iris, dict):
+        iris_status = iris.get("status")
+        iris_fallback_used = bool(iris.get("fallback_used"))
+        if iris_fallback_used:
+            flags.append("iris_fallback")
+        if iris_status == "failed":
+            flags.append("iris_failure")
+
+    graph = item.get("region_graph")
+    graph_source = None
+    graph_fallback_used = False
+    graph_connected = None
+    if isinstance(graph, dict):
+        graph_source = graph.get("graph_source") or graph.get("region_source")
+        graph_fallback_used = bool(graph.get("fallback_used"))
+        graph_connected = graph.get("start_goal_connected")
+        if graph_fallback_used:
+            flags.append("region_graph_fallback")
+        if graph_connected is False:
+            flags.append("region_graph_disconnected")
+
+    ordered_flags = _dedupe(flags)
+    return {
+        "primary_source": _primary_diagnostic_source(ordered_flags),
+        "diagnostic_flags": ordered_flags,
+        "iris_status": iris_status,
+        "iris_fallback_used": iris_fallback_used,
+        "region_graph_source": graph_source,
+        "region_graph_fallback_used": graph_fallback_used,
+        "region_graph_start_goal_connected": graph_connected,
+        "open_grid_fallback_used": bool(item.get("open_grid_fallback_used")),
+    }
+
+
+def _primary_diagnostic_source(flags: Sequence[str]) -> str:
+    priority = (
+        "path_planning_failure",
+        "region_graph_disconnected",
+        "region_graph_fallback",
+        "iris_failure",
+        "iris_fallback",
+        "tracking_safety_violation",
+        "trajectory_optimization_fallback",
+        "open_grid_fallback",
+        "replan_required",
+    )
+    for flag in priority:
+        if flag in flags:
+            return flag
+    return "none"
+
+
+def _dedupe(values: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def _report_present(value: Any) -> bool:
