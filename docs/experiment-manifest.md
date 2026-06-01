@@ -32,6 +32,10 @@ It is intentionally file based so the runner does not import external projects.
   `min_feedback_aware_sample_count`, `min_teacher_high_margin_sample_count`,
   `max_missing_teacher_signal_rate`, and
   `max_low_margin_only_dataset_rate`.
+- `train.teacher_margin_weighting`: optional margin-aware teacher curriculum
+  config. `bucket_weights` may set `high`, `medium`, `low`, and `missing`
+  supervision weights; weights of `0.0` ignore that bucket. Unreachable,
+  padding, and missing teacher action labels remain invalid supervision.
 
 `train.architecture` and `train.architectures` are compatible with older
 single-architecture manifests. `train.architecture` keeps the previous default
@@ -81,7 +85,13 @@ baseline sections. The current benchmark hardening fields add:
 - Feedback-aware distillation matrix runs keep per-run source, teacher
   imitation weight, `teacher_quality_gates`, teacher agreement, margin bucket
   agreement, and feedback-aware baseline deltas in `distillation_matrix`.
+- Feedback-aware distillation calibration v4 adds gate-aware best checkpoint
+  selection, per-run `selection_decision` reason codes, `evaluation_scope`,
+  `distillation_stability_summary`, and checkpoint `teacher_curriculum`
+  metadata. Runs with `teacher_quality_gates.status=failed` are excluded from
+  default best-run selection when any non-failed run is available; manifests
+  without `teacher_quality_gates` keep legacy best-metric behavior.
 
 The JSON summary exposes matching machine-readable keys:
 `policy_ranking`, `baseline_deltas`, `per_group_winners`, `failure_scenarios`,
-`gate_summary`, and `distillation_matrix`.
+`gate_summary`, `distillation_matrix`, and `distillation_stability_summary`.

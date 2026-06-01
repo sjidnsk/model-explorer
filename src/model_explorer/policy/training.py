@@ -30,6 +30,7 @@ def train_policy_on_episode(
     architecture: str | None = None,
     architecture_config: dict[str, Any] | None = None,
     teacher_imitation_weight: float = 0.0,
+    teacher_margin_weighting: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return train_policy_on_episodes(
         (episode,),
@@ -43,6 +44,7 @@ def train_policy_on_episode(
         architecture=architecture,
         architecture_config=architecture_config,
         teacher_imitation_weight=teacher_imitation_weight,
+        teacher_margin_weighting=teacher_margin_weighting,
     )
 
 
@@ -59,6 +61,7 @@ def train_policy_on_episodes(
     architecture: str | None = None,
     architecture_config: dict[str, Any] | None = None,
     teacher_imitation_weight: float = 0.0,
+    teacher_margin_weighting: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     torch = _load_torch()
     from .architectures import build_policy_network
@@ -69,6 +72,7 @@ def train_policy_on_episodes(
     training_source = _training_source_summary(dataset_summary)
     teacher_margin_summary = _teacher_margin_summary(dataset_summary)
     teacher_imitation_weight = max(0.0, float(teacher_imitation_weight))
+    teacher_margin_config = _normalize_teacher_margin_weighting(teacher_margin_weighting)
     trainable_transitions = _trainable_transitions(episode_tuple)
     if not trainable_transitions:
         raise ValueError("episodes must contain at least one trainable transition")
@@ -86,7 +90,9 @@ def train_policy_on_episodes(
         trainable_transitions,
         return_mode=return_mode,
         discount_factor=discount_factor,
+        teacher_margin_weighting=teacher_margin_config,
     )
+    teacher_curriculum = _teacher_curriculum_summary(batch, teacher_margin_config)
 
     losses = None
     total_loss = None
@@ -138,6 +144,7 @@ def train_policy_on_episodes(
             training_source=training_source,
             teacher_imitation=teacher_imitation,
             teacher_margin_summary=teacher_margin_summary,
+            teacher_curriculum=teacher_curriculum,
         )
 
     result = {
@@ -167,6 +174,7 @@ def train_policy_on_episodes(
         "dataset_summary": dataset_summary,
         "training_source": training_source,
         "teacher_margin_summary": teacher_margin_summary,
+        "teacher_curriculum": teacher_curriculum,
         "teacher_imitation": teacher_imitation,
     }
     result["warnings"] = _training_quality_warnings(result)
@@ -421,11 +429,15 @@ def _transitions_to_batch(
     *,
     return_mode: str,
     discount_factor: float,
+    teacher_margin_weighting: dict[str, Any],
 ) -> dict[str, Any]:
     torch = _load_torch()
     observations = tuple(transition.observation for transition in transitions)
     action_count = max(len(observation.action_mask) for observation in observations)
-    teacher_labels = tuple(_teacher_action_label(transition, action_count) for transition in transitions)
+    teacher_records = tuple(
+        _teacher_label_record(transition, action_count, teacher_margin_weighting)
+        for transition in transitions
+    )
     return_advantage_batch = compute_returns_and_advantages(
         rewards=(transition.reward for transition in transitions),
         dones=(transition.done for transition in transitions),
@@ -455,13 +467,23 @@ def _transitions_to_batch(
             dtype=torch.long,
         ),
         "teacher_actions": torch.tensor(
-            [0 if label is None else label for label in teacher_labels],
+            [0 if record["label"] is None else record["label"] for record in teacher_records],
             dtype=torch.long,
         ),
         "teacher_action_valid_mask": torch.tensor(
-            [label is not None for label in teacher_labels],
+            [bool(record["supervision_valid"]) for record in teacher_records],
             dtype=torch.bool,
         ),
+        "teacher_label_candidate_valid_mask": torch.tensor(
+            [bool(record["label_valid"]) for record in teacher_records],
+            dtype=torch.bool,
+        ),
+        "teacher_action_weights": torch.tensor(
+            [float(record["supervision_weight"]) for record in teacher_records],
+            dtype=torch.float32,
+        ),
+        "teacher_label_buckets": tuple(str(record["bucket"]) for record in teacher_records),
+        "teacher_label_records": teacher_records,
         "old_log_probs": torch.tensor(
             [0.0 if transition.log_prob is None else transition.log_prob for transition in transitions],
             dtype=torch.float32,
@@ -477,10 +499,42 @@ def _transitions_to_batch(
     }
 
 
+def _teacher_label_record(
+    transition: RolloutTransition,
+    action_count: int,
+    teacher_margin_weighting: dict[str, Any],
+) -> dict[str, Any]:
+    label = _teacher_action_label(transition, action_count)
+    if label is None:
+        return {
+            "label": None,
+            "label_valid": False,
+            "bucket": "invalid",
+            "configured_weight": 0.0,
+            "supervision_weight": 0.0,
+            "supervision_valid": False,
+        }
+    margin = _transition_teacher_margin(transition)
+    bucket = _teacher_margin_bucket(margin)
+    bucket_weights = teacher_margin_weighting.get("bucket_weights", {})
+    weight = _safe_float(bucket_weights.get(bucket, 1.0))
+    supervision_valid = weight > 0.0
+    return {
+        "label": label,
+        "label_valid": True,
+        "bucket": bucket,
+        "configured_weight": weight,
+        "supervision_weight": weight if supervision_valid else 0.0,
+        "supervision_valid": supervision_valid,
+    }
+
+
 def _teacher_action_label(transition: RolloutTransition, action_count: int) -> int | None:
+    if "teacher_action_index" not in transition.info.extra:
+        return None
     raw_index = transition.info.extra.get("teacher_action_index")
     if raw_index is None:
-        raw_index = transition.action_index
+        return None
     if isinstance(raw_index, bool):
         return None
     try:
@@ -493,6 +547,131 @@ def _teacher_action_label(transition: RolloutTransition, action_count: int) -> i
     if index >= len(mask) or not bool(mask[index]):
         return None
     return index
+
+
+_TEACHER_LOW_MARGIN_THRESHOLD = 0.05
+_TEACHER_HIGH_MARGIN_THRESHOLD = 0.20
+_TEACHER_MARGIN_BUCKETS = ("high", "medium", "low", "missing", "invalid")
+
+
+def _normalize_teacher_margin_weighting(value: dict[str, Any] | None) -> dict[str, Any]:
+    default_weights = {"high": 1.0, "medium": 1.0, "low": 1.0, "missing": 1.0}
+    if value is None:
+        return {
+            "enabled": False,
+            "configured": {},
+            "bucket_weights": dict(default_weights),
+            "teacher_low_margin_threshold": _TEACHER_LOW_MARGIN_THRESHOLD,
+            "teacher_high_margin_threshold": _TEACHER_HIGH_MARGIN_THRESHOLD,
+        }
+    if not isinstance(value, dict):
+        raise ValueError("teacher_margin_weighting must be an object")
+    raw_bucket_weights = value.get("bucket_weights", {})
+    if raw_bucket_weights is None:
+        raw_bucket_weights = {}
+    if not isinstance(raw_bucket_weights, dict):
+        raise ValueError("teacher_margin_weighting.bucket_weights must be an object")
+    unknown = sorted(set(raw_bucket_weights) - {"high", "medium", "low", "missing"})
+    if unknown:
+        raise ValueError(f"unknown teacher margin bucket: {unknown[0]}")
+    bucket_weights = dict(default_weights)
+    for bucket_name, weight in raw_bucket_weights.items():
+        bucket_weights[str(bucket_name)] = max(0.0, _safe_float(weight))
+    return {
+        "enabled": True,
+        "configured": dict(value),
+        "bucket_weights": bucket_weights,
+        "teacher_low_margin_threshold": _TEACHER_LOW_MARGIN_THRESHOLD,
+        "teacher_high_margin_threshold": _TEACHER_HIGH_MARGIN_THRESHOLD,
+    }
+
+
+def _transition_teacher_margin(transition: RolloutTransition) -> float | None:
+    value = transition.info.extra.get("teacher_score_margin")
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if isfinite(numeric) else None
+
+
+def _teacher_margin_bucket(margin: float | None) -> str:
+    if margin is None:
+        return "missing"
+    if margin <= _TEACHER_LOW_MARGIN_THRESHOLD:
+        return "low"
+    if margin <= _TEACHER_HIGH_MARGIN_THRESHOLD:
+        return "medium"
+    return "high"
+
+
+def _teacher_curriculum_summary(
+    batch: dict[str, Any],
+    teacher_margin_weighting: dict[str, Any],
+) -> dict[str, Any]:
+    records = tuple(batch.get("teacher_label_records", ()))
+    bucket_weights = dict(teacher_margin_weighting.get("bucket_weights", {}))
+    bucket_stats = {
+        bucket: {
+            "configured_weight": 0.0 if bucket == "invalid" else _safe_float(bucket_weights.get(bucket, 1.0)),
+            "sample_count": 0,
+            "candidate_valid_teacher_label_count": 0,
+            "valid_teacher_label_count": 0,
+            "ignored_teacher_label_count": 0,
+            "total_supervision_weight": 0.0,
+        }
+        for bucket in _TEACHER_MARGIN_BUCKETS
+    }
+    valid_count = 0
+    ignored_count = 0
+    candidate_valid_count = 0
+    total_weight = 0.0
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        bucket_name = str(record.get("bucket", "invalid"))
+        if bucket_name not in bucket_stats:
+            bucket_name = "invalid"
+        bucket = bucket_stats[bucket_name]
+        supervision_valid = bool(record.get("supervision_valid"))
+        label_valid = bool(record.get("label_valid"))
+        weight = _safe_float(record.get("supervision_weight"))
+        bucket["sample_count"] += 1
+        if label_valid:
+            candidate_valid_count += 1
+            bucket["candidate_valid_teacher_label_count"] += 1
+        if supervision_valid:
+            valid_count += 1
+            total_weight += weight
+            bucket["valid_teacher_label_count"] += 1
+            bucket["total_supervision_weight"] += weight
+        else:
+            ignored_count += 1
+            bucket["ignored_teacher_label_count"] += 1
+    return {
+        "enabled": bool(teacher_margin_weighting.get("enabled", False)),
+        "teacher_margin_weighting": {
+            "bucket_weights": bucket_weights,
+            "teacher_low_margin_threshold": _TEACHER_LOW_MARGIN_THRESHOLD,
+            "teacher_high_margin_threshold": _TEACHER_HIGH_MARGIN_THRESHOLD,
+        },
+        "candidate_valid_teacher_label_count": candidate_valid_count,
+        "valid_teacher_label_count": valid_count,
+        "ignored_teacher_label_count": ignored_count,
+        "total_supervision_weight": total_weight,
+        "teacher_label_bucket_stats": bucket_stats,
+    }
+
+
+def _teacher_supervision_weight_sum(batch: dict[str, Any]) -> float:
+    weights = batch.get("teacher_action_weights")
+    valid_mask = batch.get("teacher_action_valid_mask")
+    if weights is None or valid_mask is None:
+        return 0.0
+    selected = weights[valid_mask]
+    return float(selected.sum().detach().cpu()) if bool(selected.numel()) else 0.0
 
 
 def _padded_candidate_features(observation, action_count: int) -> tuple[tuple[float, ...], ...]:
@@ -536,7 +715,13 @@ def _teacher_imitation_loss(network, batch: dict[str, Any]):
     )
     valid_mask = valid_mask.to(device=output.masked_logits.device)
     teacher_actions = batch["teacher_actions"].to(device=output.masked_logits.device, dtype=torch.long)
-    return F.cross_entropy(output.masked_logits[valid_mask], teacher_actions[valid_mask])
+    weights = batch["teacher_action_weights"].to(device=output.masked_logits.device, dtype=torch.float32)
+    losses = F.cross_entropy(output.masked_logits[valid_mask], teacher_actions[valid_mask], reduction="none")
+    valid_weights = weights[valid_mask]
+    weight_sum = valid_weights.sum()
+    if float(weight_sum.detach().cpu()) <= 0.0:
+        return batch["candidate_features"].new_tensor(0.0)
+    return (losses * valid_weights).sum() / weight_sum
 
 
 def _teacher_imitation_metrics(network, batch: dict[str, Any], *, weight: float) -> dict[str, Any]:
@@ -550,6 +735,7 @@ def _teacher_imitation_metrics(network, batch: dict[str, Any], *, weight: float)
         "weight": float(weight),
         "valid_teacher_label_count": valid_count,
         "ignored_teacher_label_count": ignored_count,
+        "total_supervision_weight": _teacher_supervision_weight_sum(batch),
         "teacher_imitation_loss": 0.0,
         "teacher_action_accuracy": 0.0,
     }
@@ -570,7 +756,10 @@ def _teacher_imitation_metrics(network, batch: dict[str, Any], *, weight: float)
         teacher_actions = batch["teacher_actions"].to(device=output.masked_logits.device, dtype=torch.long)
         logits = output.masked_logits[valid_mask]
         labels = teacher_actions[valid_mask]
-        loss = F.cross_entropy(logits, labels)
+        weights = batch["teacher_action_weights"].to(device=output.masked_logits.device, dtype=torch.float32)
+        valid_weights = weights[valid_mask]
+        losses = F.cross_entropy(logits, labels, reduction="none")
+        loss = (losses * valid_weights).sum() / valid_weights.sum()
         predictions = torch.argmax(logits, dim=-1)
         accuracy = (predictions == labels).to(dtype=torch.float32).mean()
     metrics["teacher_imitation_loss"] = float(loss.detach().cpu())
@@ -596,6 +785,7 @@ def _save_policy_checkpoint(
     training_source: dict[str, Any],
     teacher_imitation: dict[str, Any],
     teacher_margin_summary: dict[str, Any],
+    teacher_curriculum: dict[str, Any],
 ) -> None:
     torch = _load_torch()
     torch.save(
@@ -626,6 +816,7 @@ def _save_policy_checkpoint(
                 "training_source": dict(training_source),
                 "teacher_imitation": dict(teacher_imitation),
                 "teacher_margin_summary": dict(teacher_margin_summary),
+                "teacher_curriculum": dict(teacher_curriculum),
             },
         },
         Path(path),

@@ -5,7 +5,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from importlib import util as importlib_util
-from math import sqrt
+from math import isfinite, sqrt
 from pathlib import Path
 from typing import Any
 
@@ -823,6 +823,7 @@ def _run_training(
                         architecture=architecture,
                         architecture_config=_training_architecture_config(config, architecture_name),
                         teacher_imitation_weight=teacher_weight,
+                        teacher_margin_weighting=config.get("teacher_margin_weighting"),
                     )
                     if loss_log is not None:
                         _ensure_parent_dir(loss_log)
@@ -900,11 +901,9 @@ def _run_training(
                     result["training_summary_output"] = str(training_summary_output)
                     runs.append(result)
 
-    best_run = _select_best_training_run(
-        runs,
-        metric=str(config.get("best_metric", "final_coverage_rate")),
-        policy=str(config.get("best_policy", "torch_policy")),
-    )
+    best_policy = str(config.get("best_policy", "torch_policy"))
+    best_metric = str(config.get("best_metric", "final_coverage_rate"))
+    best_run = _select_best_training_run(runs, metric=best_metric, policy=best_policy)
     selected = dict(best_run)
     selected["checkpoint"] = best_run["checkpoint"]
     selected["best_seed"] = int(best_run["seed"])
@@ -922,27 +921,23 @@ def _run_training(
     ]
     selected["teacher_imitation_weights"] = [float(weight) for weight in teacher_weights]
     selected["source_comparison"] = _training_source_comparison(runs)
-    selected["distillation_matrix"] = _training_distillation_matrix(runs)
+    selected["distillation_matrix"] = _training_distillation_matrix(
+        runs,
+        selected_run=best_run,
+        policy=best_policy,
+        metric=best_metric,
+    )
     selected["source_weight_comparison"] = list(selected["distillation_matrix"])
     selected["multi_seed_summary"] = _multi_seed_evaluation_summary(runs)
     selected["multi_seed_loss_summary"] = _loss_summary(runs)
     selected["multi_seed_delta_summary"] = _multi_seed_delta_summary(runs)
-    selected["best_selection"] = {
-        "policy": str(config.get("best_policy", "torch_policy")),
-        "metric": str(config.get("best_metric", "final_coverage_rate")),
-        "mode": "max",
-        "value": _training_run_metric(
-            best_run,
-            policy=str(config.get("best_policy", "torch_policy")),
-            metric=str(config.get("best_metric", "final_coverage_rate")),
-        ),
-        "reason": (
-            f"max {config.get('best_policy', 'torch_policy')}."
-            f"{config.get('best_metric', 'final_coverage_rate')} on validation evaluation; "
-            f"source={_normalize_training_source_name(best_run.get('training_data_selection_strategy'))}; "
-            f"teacher_imitation_weight={float(best_run.get('teacher_imitation_weight', 0.0))}"
-        ),
-    }
+    selected["distillation_stability_summary"] = _distillation_stability_summary(runs)
+    selected["best_selection"] = _best_selection_record(
+        runs,
+        best_run,
+        policy=best_policy,
+        metric=best_metric,
+    )
     return selected
 
 
@@ -999,7 +994,13 @@ def _training_source_comparison(runs: list[dict[str, Any]]) -> dict[str, Any]:
     return comparison
 
 
-def _training_distillation_matrix(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _training_distillation_matrix(
+    runs: list[dict[str, Any]],
+    *,
+    selected_run: dict[str, Any] | None = None,
+    policy: str = "torch_policy",
+    metric: str = "final_coverage_rate",
+) -> list[dict[str, Any]]:
     matrix: list[dict[str, Any]] = []
     for run in runs:
         torch_metrics = _comparison_from_evaluation(run.get("validation_evaluation", {})).get("torch_policy", {})
@@ -1023,9 +1024,69 @@ def _training_distillation_matrix(runs: list[dict[str, Any]]) -> list[dict[str, 
                 "data_class": dataset_summary.get("data_class"),
                 "dataset_id": dataset_summary.get("dataset_id"),
                 "mask_stress_augmented": bool(dataset_summary.get("mask_stress_augmented", False)),
+                "evaluation_scope": _distillation_evaluation_scope(dataset_summary),
+                "selection_decision": _distillation_run_selection_decision(
+                    run,
+                    selected_run=selected_run,
+                    policy=policy,
+                    metric=metric,
+                    torch_metrics=torch_metrics,
+                ),
             }
         )
     return matrix
+
+
+def _distillation_evaluation_scope(dataset_summary: dict[str, Any]) -> str:
+    if dataset_summary.get("data_class") == "quasi_real" or bool(dataset_summary.get("mask_stress_augmented", False)):
+        return "calibration evidence; not real-world generalization benchmark"
+    return "synthetic calibration evidence; not real-world generalization benchmark"
+
+
+def _distillation_run_selection_decision(
+    run: dict[str, Any],
+    *,
+    selected_run: dict[str, Any] | None,
+    policy: str,
+    metric: str,
+    torch_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    gate_status = _teacher_quality_gate_status(run)
+    metric_value = _training_run_metric(run, policy=policy, metric=metric)
+    source = _normalize_training_source_name(run.get("training_data_selection_strategy"))
+    teacher_weight = float(run.get("teacher_imitation_weight", 0.0))
+    baseline_deltas = run.get("baseline_deltas", {})
+    feedback_delta = baseline_deltas.get("feedback_aware", {}) if isinstance(baseline_deltas, dict) else {}
+    margin_bucket = torch_metrics.get("feedback_aware_margin_bucket_agreement", {})
+    is_selected = selected_run is not None and run is selected_run
+    reason_codes: list[str] = []
+    status = "candidate"
+    if _teacher_quality_gate_failed(run) and not is_selected:
+        status = "excluded"
+        reason_codes.append("teacher_quality_gate_failed")
+    elif is_selected:
+        status = "selected"
+        reason_codes.append("selected_best_run")
+        if _teacher_quality_gate_failed(run):
+            reason_codes.append("gate_failed_selection")
+    else:
+        reason_codes.append("eligible_not_selected")
+    return {
+        "status": status,
+        "reason_codes": reason_codes,
+        "policy": str(policy),
+        "metric": str(metric),
+        "metric_value": metric_value,
+        "source_selection_strategy": source,
+        "teacher_imitation_weight": teacher_weight,
+        "gate_status": gate_status,
+        "baseline_delta": dict(feedback_delta) if isinstance(feedback_delta, dict) else {},
+        "margin_bucket_performance": dict(margin_bucket) if isinstance(margin_bucket, dict) else {},
+        "reason": (
+            f"{status}: source={source}; teacher_imitation_weight={teacher_weight}; "
+            f"gate_status={gate_status}; {policy}.{metric}={metric_value}"
+        ),
+    }
 
 
 def _teacher_agreement_summary(torch_metrics: dict[str, Any]) -> dict[str, Any]:
@@ -1038,6 +1099,89 @@ def _teacher_agreement_summary(torch_metrics: dict[str, Any]) -> dict[str, Any]:
         "feedback_aware_margin_bucket_agreement",
     )
     return {field: torch_metrics[field] for field in fields if field in torch_metrics}
+
+
+def _distillation_stability_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    grouped: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for run in runs:
+        source = _normalize_training_source_name(run.get("training_data_selection_strategy"))
+        teacher_weight = f"{float(run.get('teacher_imitation_weight', 0.0)):g}"
+        grouped.setdefault(source, {}).setdefault(teacher_weight, []).append(run)
+    return {
+        source: {
+            weight: _distillation_stability_group_summary(group_runs)
+            for weight, group_runs in sorted(weight_groups.items())
+        }
+        for source, weight_groups in sorted(grouped.items())
+    }
+
+
+def _distillation_stability_group_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
+    teacher_agreement_values: dict[str, list[float]] = {}
+    margin_bucket_values: dict[str, dict[str, list[float]]] = {}
+    feedback_delta_values: dict[str, list[float]] = {}
+    gate_pass_count = 0
+    for run in runs:
+        if _teacher_quality_gate_status(run) == "passed":
+            gate_pass_count += 1
+        evaluation = run.get("validation_evaluation", {})
+        evaluation = _comparison_from_evaluation(evaluation) if isinstance(evaluation, dict) else {}
+        torch_metrics = evaluation.get("torch_policy", {})
+        torch_metrics = torch_metrics if isinstance(torch_metrics, dict) else {}
+        teacher_agreement = _teacher_agreement_summary(torch_metrics)
+        for metric, value in teacher_agreement.items():
+            if metric == "feedback_aware_margin_bucket_agreement":
+                continue
+            numeric = _optional_numeric(value)
+            if numeric is not None:
+                teacher_agreement_values.setdefault(metric, []).append(numeric)
+        margin_report = teacher_agreement.get("feedback_aware_margin_bucket_agreement", {})
+        if isinstance(margin_report, dict):
+            for bucket_name, bucket_metrics in margin_report.items():
+                if not isinstance(bucket_metrics, dict):
+                    continue
+                bucket_values = margin_bucket_values.setdefault(str(bucket_name), {})
+                for metric, value in bucket_metrics.items():
+                    numeric = _optional_numeric(value)
+                    if numeric is not None:
+                        bucket_values.setdefault(str(metric), []).append(numeric)
+        baseline_deltas = run.get("baseline_deltas", {})
+        feedback_delta = baseline_deltas.get("feedback_aware", {}) if isinstance(baseline_deltas, dict) else {}
+        if isinstance(feedback_delta, dict):
+            for metric, value in feedback_delta.items():
+                numeric = _optional_numeric(value)
+                if numeric is not None:
+                    feedback_delta_values.setdefault(str(metric), []).append(numeric)
+    run_count = len(runs)
+    return {
+        "run_count": run_count,
+        "seed_count": len({int(run["seed"]) for run in runs if run.get("seed") is not None}),
+        "teacher_quality_gate_pass_rate": gate_pass_count / run_count if run_count else 0.0,
+        "teacher_quality_gate_pass_count": gate_pass_count,
+        "teacher_agreement": _numeric_stats_by_metric(teacher_agreement_values),
+        "margin_bucket_agreement": {
+            bucket: _numeric_stats_by_metric(metrics)
+            for bucket, metrics in sorted(margin_bucket_values.items())
+        },
+        "feedback_aware_baseline_delta": _numeric_stats_by_metric(feedback_delta_values),
+    }
+
+
+def _numeric_stats_by_metric(values: dict[str, list[float]]) -> dict[str, dict[str, float]]:
+    return {
+        metric: _numeric_stats(tuple(metric_values))
+        for metric, metric_values in sorted(values.items())
+    }
+
+
+def _optional_numeric(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if isfinite(numeric) else None
 
 
 def _split_training_episodes(
@@ -1202,7 +1346,72 @@ def _path_parent_contains_any_placeholder(path_text: str, placeholders: tuple[st
 def _select_best_training_run(runs: list[dict[str, Any]], *, policy: str, metric: str) -> dict[str, Any]:
     if not runs:
         raise ValueError("training must produce at least one run")
-    return max(runs, key=lambda run: _training_run_metric(run, policy=policy, metric=metric))
+    eligible_runs = [run for run in runs if not _teacher_quality_gate_failed(run)]
+    candidates = eligible_runs if eligible_runs else runs
+    return max(candidates, key=lambda run: _training_run_metric(run, policy=policy, metric=metric))
+
+
+def _best_selection_record(
+    runs: list[dict[str, Any]],
+    best_run: dict[str, Any],
+    *,
+    policy: str,
+    metric: str,
+) -> dict[str, Any]:
+    excluded_runs = [
+        _excluded_run_record(run, policy=policy, metric=metric)
+        for run in runs
+        if run is not best_run and _teacher_quality_gate_failed(run)
+    ]
+    gate_status = _teacher_quality_gate_status(best_run)
+    gate_failed_selection = _teacher_quality_gate_failed(best_run)
+    source = _normalize_training_source_name(best_run.get("training_data_selection_strategy"))
+    teacher_weight = float(best_run.get("teacher_imitation_weight", 0.0))
+    metric_value = _training_run_metric(best_run, policy=policy, metric=metric)
+    reason_codes = ["selected_best_run"]
+    if gate_failed_selection:
+        reason_codes.append("gate_failed_selection")
+    return {
+        "policy": str(policy),
+        "metric": str(metric),
+        "mode": "max",
+        "value": metric_value,
+        "source_selection_strategy": source,
+        "teacher_imitation_weight": teacher_weight,
+        "gate_status": gate_status,
+        "gate_failed_selection": gate_failed_selection,
+        "reason_codes": reason_codes,
+        "eligible_run_count": sum(1 for run in runs if not _teacher_quality_gate_failed(run)),
+        "excluded_run_count": len(excluded_runs),
+        "excluded_runs": excluded_runs,
+        "reason": (
+            f"max {policy}.{metric} on validation evaluation; "
+            f"source={source}; teacher_imitation_weight={teacher_weight}; gate_status={gate_status}"
+        ),
+    }
+
+
+def _excluded_run_record(run: dict[str, Any], *, policy: str, metric: str) -> dict[str, Any]:
+    return {
+        "checkpoint": run.get("checkpoint"),
+        "seed": run.get("seed"),
+        "source_selection_strategy": _normalize_training_source_name(run.get("training_data_selection_strategy")),
+        "teacher_imitation_weight": float(run.get("teacher_imitation_weight", 0.0)),
+        "gate_status": _teacher_quality_gate_status(run),
+        "metric_value": _training_run_metric(run, policy=policy, metric=metric),
+        "reason_codes": ["teacher_quality_gate_failed"],
+    }
+
+
+def _teacher_quality_gate_status(run: dict[str, Any]) -> str:
+    gates = run.get("teacher_quality_gates")
+    if not isinstance(gates, dict):
+        return "not_configured"
+    return str(gates.get("status", "not_configured"))
+
+
+def _teacher_quality_gate_failed(run: dict[str, Any]) -> bool:
+    return _teacher_quality_gate_status(run) == "failed"
 
 
 def _training_run_metric(run: dict[str, Any], *, policy: str, metric: str) -> float:

@@ -9,7 +9,7 @@
 | Current baseline | `mlp_v1` masked candidate policy |
 | Scope | Candidate-list policy over `ModelExplorerContract.top_goals` |
 | Out of scope | Full-map action space, external project imports, contract v1 breaking changes |
-| Last updated | 2026-05-29 |
+| Last updated | 2026-06-01 |
 
 ## Progress Table
 
@@ -125,8 +125,9 @@
 | ID | Task | Status | Evidence | Next Action |
 |---|---|---|---|---|
 | FA-0 | Feedback-aware training source closure | Completed | Rollout, dataset, training, evaluation, and experiment summaries record `feedback_aware` selection source, teacher action/cell, score margin, top-k agreement, margin bucket agreement, and feedback-aware baseline deltas without changing `model-explorer-contract/v1` or the candidate-list action space | Keep `teacher_imitation_weight` defaulted to 0.0 |
-| FA-1 | Source x teacher-weight matrix | In progress | Experiment manifests can use `train.source_selection_strategies`, `train.teacher_imitation_weights`, and `train.teacher_quality_gates`; JSON summary records per-run `distillation_matrix` entries with teacher agreement, teacher-quality gates, margin bucket agreement, and baseline deltas | Use this as distillation evidence only |
-| FA-2 | Quasi-real/mask-stress labels | In progress | Distillation matrix summaries preserve `quasi_real` and `mask_stress_augmented` dataset labels and reports continue to state `not real-world generalization benchmark` | Do not treat quasi-real or mask-stress results as real-world generalization proof |
+| FA-1 | Source x teacher-weight matrix | Completed | Experiment manifests can use `train.source_selection_strategies`, `train.teacher_imitation_weights`, and `train.teacher_quality_gates`; JSON summary records per-run `distillation_matrix` entries with teacher agreement, teacher-quality gates, margin bucket agreement, and baseline deltas | Use this as distillation evidence only |
+| FA-2 | Quasi-real/mask-stress labels | Completed | Distillation matrix summaries preserve `quasi_real`, `mask_stress_augmented`, and `not real-world generalization benchmark` scope labels | Do not treat quasi-real or mask-stress results as real-world generalization proof |
+| FA-3 | Distillation Calibration v4 | Completed | Training accepts optional `teacher_margin_weighting`, records `teacher_curriculum` in summaries/checkpoints, excludes failed `teacher_quality_gates` from default best-run selection when non-failed runs exist, and adds machine-readable `selection_decision`, `evaluation_scope`, and `distillation_stability_summary` fields; `python -m unittest discover -s tests -v` passed 165 tests | Keep this as calibration/curriculum/model-selection support, not a motion feasibility solver |
 
 ## Current Architecture Snapshot
 

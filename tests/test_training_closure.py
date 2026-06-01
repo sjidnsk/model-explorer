@@ -467,6 +467,168 @@ class BestCheckpointSelectionTests(unittest.TestCase):
         self.assertEqual(best["seed"], 13)
         self.assertEqual(best["checkpoint"], "seed-13/checkpoint.pt")
 
+    def test_best_checkpoint_selection_skips_failed_teacher_quality_gate_by_default(self):
+        from model_explorer.policy.experiment import _best_selection_record, _select_best_training_run
+
+        runs = [
+            {
+                "seed": 11,
+                "checkpoint": "seed-11/checkpoint.pt",
+                "training_data_selection_strategy": "coverage_heuristic",
+                "teacher_imitation_weight": 0.1,
+                "teacher_quality_gates": {"status": "failed", "violations": [{"gate": "min_feedback_aware_sample_count"}]},
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.9}},
+            },
+            {
+                "seed": 13,
+                "checkpoint": "seed-13/checkpoint.pt",
+                "training_data_selection_strategy": "feedback_aware",
+                "teacher_imitation_weight": 0.1,
+                "teacher_quality_gates": {"status": "passed", "violations": []},
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.4}},
+            },
+        ]
+
+        best = _select_best_training_run(runs, policy="torch_policy", metric="final_coverage_rate")
+        record = _best_selection_record(
+            runs,
+            best,
+            policy="torch_policy",
+            metric="final_coverage_rate",
+        )
+
+        self.assertEqual(best["seed"], 13)
+        self.assertFalse(record["gate_failed_selection"])
+        self.assertEqual(record["gate_status"], "passed")
+        self.assertEqual(record["excluded_run_count"], 1)
+        self.assertEqual(record["excluded_runs"][0]["reason_codes"], ["teacher_quality_gate_failed"])
+
+    def test_best_checkpoint_selection_keeps_legacy_behavior_without_teacher_quality_gates(self):
+        from model_explorer.policy.experiment import _best_selection_record, _select_best_training_run
+
+        runs = [
+            {
+                "seed": 11,
+                "checkpoint": "seed-11/checkpoint.pt",
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.2}},
+            },
+            {
+                "seed": 13,
+                "checkpoint": "seed-13/checkpoint.pt",
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.35}},
+            },
+        ]
+
+        best = _select_best_training_run(runs, policy="torch_policy", metric="final_coverage_rate")
+        record = _best_selection_record(
+            runs,
+            best,
+            policy="torch_policy",
+            metric="final_coverage_rate",
+        )
+
+        self.assertEqual(best["seed"], 13)
+        self.assertEqual(record["gate_status"], "not_configured")
+        self.assertFalse(record["gate_failed_selection"])
+        self.assertEqual(record["excluded_run_count"], 0)
+
+    def test_distillation_matrix_records_selection_and_exclusion_reasons(self):
+        from model_explorer.policy.experiment import (
+            _distillation_stability_summary,
+            _select_best_training_run,
+            _training_distillation_matrix,
+        )
+
+        runs = [
+            {
+                "seed": 11,
+                "checkpoint": "failed/checkpoint.pt",
+                "training_data_selection_strategy": "coverage_heuristic",
+                "teacher_imitation_weight": 0.1,
+                "teacher_quality_gates": {"status": "failed"},
+                "validation_evaluation": {
+                    "torch_policy": {
+                        "final_coverage_rate": 0.9,
+                        "feedback_aware_action_agreement_rate": 0.25,
+                        "feedback_aware_margin_bucket_agreement": {
+                            "high": {"action_agreement_rate": 0.5}
+                        },
+                    },
+                    "feedback_aware": {"final_coverage_rate": 0.4},
+                },
+                "baseline_deltas": {"feedback_aware": {"final_coverage_rate": 0.5}},
+            },
+            {
+                "seed": 13,
+                "checkpoint": "passed-a/checkpoint.pt",
+                "training_data_selection_strategy": "feedback_aware",
+                "teacher_imitation_weight": 0.1,
+                "teacher_quality_gates": {"status": "passed"},
+                "validation_evaluation": {
+                    "torch_policy": {
+                        "final_coverage_rate": 0.4,
+                        "feedback_aware_action_agreement_rate": 0.75,
+                        "feedback_aware_margin_bucket_agreement": {
+                            "high": {"action_agreement_rate": 1.0}
+                        },
+                    },
+                    "feedback_aware": {"final_coverage_rate": 0.3},
+                },
+                "baseline_deltas": {"feedback_aware": {"final_coverage_rate": 0.1}},
+            },
+            {
+                "seed": 17,
+                "checkpoint": "passed-b/checkpoint.pt",
+                "training_data_selection_strategy": "feedback_aware",
+                "teacher_imitation_weight": 0.1,
+                "teacher_quality_gates": {"status": "passed"},
+                "validation_evaluation": {
+                    "torch_policy": {
+                        "final_coverage_rate": 0.6,
+                        "feedback_aware_action_agreement_rate": 0.25,
+                        "feedback_aware_margin_bucket_agreement": {
+                            "high": {"action_agreement_rate": 0.0}
+                        },
+                    },
+                    "feedback_aware": {"final_coverage_rate": 0.4},
+                },
+                "baseline_deltas": {"feedback_aware": {"final_coverage_rate": 0.2}},
+            },
+        ]
+
+        best = _select_best_training_run(runs, policy="torch_policy", metric="final_coverage_rate")
+        matrix = _training_distillation_matrix(
+            runs,
+            selected_run=best,
+            policy="torch_policy",
+            metric="final_coverage_rate",
+        )
+        stability = _distillation_stability_summary(runs)
+
+        failed_record = next(record for record in matrix if record["checkpoint"] == "failed/checkpoint.pt")
+        selected_record = next(record for record in matrix if record["checkpoint"] == "passed-b/checkpoint.pt")
+        feedback_summary = stability["feedback_aware"]["0.1"]
+
+        self.assertEqual(best["checkpoint"], "passed-b/checkpoint.pt")
+        self.assertEqual(failed_record["selection_decision"]["status"], "excluded")
+        self.assertIn("teacher_quality_gate_failed", failed_record["selection_decision"]["reason_codes"])
+        self.assertEqual(selected_record["selection_decision"]["status"], "selected")
+        self.assertIn("selected_best_run", selected_record["selection_decision"]["reason_codes"])
+        self.assertEqual(feedback_summary["run_count"], 2)
+        self.assertEqual(feedback_summary["teacher_quality_gate_pass_rate"], 1.0)
+        self.assertEqual(
+            feedback_summary["teacher_agreement"]["feedback_aware_action_agreement_rate"]["mean"],
+            0.5,
+        )
+        self.assertEqual(
+            feedback_summary["feedback_aware_baseline_delta"]["final_coverage_rate"]["mean"],
+            0.15000000000000002,
+        )
+        self.assertEqual(
+            feedback_summary["margin_bucket_agreement"]["high"]["action_agreement_rate"]["mean"],
+            0.5,
+        )
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not available")
 class TrainingClosureTests(unittest.TestCase):
@@ -755,6 +917,87 @@ class TrainingClosureTests(unittest.TestCase):
         self.assertEqual(checkpoint["metadata"]["teacher_imitation"]["enabled"], True)
         self.assertEqual(checkpoint["metadata"]["teacher_imitation"]["valid_teacher_label_count"], 1)
         self.assertEqual(checkpoint["metadata"]["teacher_margin_summary"]["teacher_margin_sample_count"], 2)
+
+    def test_margin_aware_teacher_curriculum_records_bucket_weights_and_ignores_invalid_labels(self):
+        import torch
+
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.rollout import RolloutEpisode
+        from model_explorer.policy.training import train_policy_on_episodes
+
+        base_episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[
+                            {"cell": [1, 1], "utility": 0.5, "reachable": True},
+                            {"cell": [2, 1], "utility": 9.0, "reachable": False},
+                        ],
+                        observation_update={"coverage_rate_delta": 0.1},
+                    )
+                )
+            ],
+            max_candidates=3,
+        )
+        base_transition = base_episode.transitions[0]
+
+        def transition_with(extra):
+            merged = {**base_transition.info.extra, **extra}
+            for key, value in tuple(merged.items()):
+                if value == "__drop__":
+                    del merged[key]
+            return replace(
+                base_transition,
+                info=replace(base_transition.info, extra=merged),
+            )
+
+        episode = RolloutEpisode(
+            transitions=(
+                transition_with({"teacher_action_index": 0, "teacher_score_margin": 0.30}),
+                transition_with({"teacher_action_index": 0, "teacher_score_margin": 0.10}),
+                transition_with({"teacher_action_index": 0, "teacher_score_margin": 0.01}),
+                transition_with({"teacher_action_index": 0, "teacher_score_margin": "__drop__"}),
+                transition_with({"teacher_action_index": 1, "teacher_score_margin": 0.30}),
+                transition_with({"teacher_action_index": 2, "teacher_score_margin": 0.30}),
+                transition_with({"teacher_action_index": "__drop__", "teacher_score_margin": 0.30}),
+            ),
+            metrics=base_episode.metrics,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "curriculum-policy.pt"
+            result = train_policy_on_episodes(
+                [episode],
+                checkpoint_path=checkpoint_path,
+                seed=43,
+                hidden_size=16,
+                epochs=1,
+                teacher_imitation_weight=0.25,
+                teacher_margin_weighting={
+                    "bucket_weights": {"high": 2.0, "medium": 1.0, "low": 0.0, "missing": 0.0}
+                },
+            )
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+        curriculum = result["teacher_curriculum"]
+        bucket_stats = curriculum["teacher_label_bucket_stats"]
+        self.assertTrue(curriculum["enabled"])
+        self.assertEqual(result["teacher_imitation"]["valid_teacher_label_count"], 2)
+        self.assertEqual(result["teacher_imitation"]["ignored_teacher_label_count"], 5)
+        self.assertEqual(curriculum["valid_teacher_label_count"], 2)
+        self.assertEqual(curriculum["ignored_teacher_label_count"], 5)
+        self.assertEqual(bucket_stats["high"]["valid_teacher_label_count"], 1)
+        self.assertEqual(bucket_stats["high"]["total_supervision_weight"], 2.0)
+        self.assertEqual(bucket_stats["medium"]["valid_teacher_label_count"], 1)
+        self.assertEqual(bucket_stats["medium"]["total_supervision_weight"], 1.0)
+        self.assertEqual(bucket_stats["low"]["ignored_teacher_label_count"], 1)
+        self.assertEqual(bucket_stats["missing"]["ignored_teacher_label_count"], 1)
+        self.assertEqual(bucket_stats["invalid"]["ignored_teacher_label_count"], 3)
+        self.assertEqual(
+            checkpoint["metadata"]["teacher_curriculum"]["teacher_label_bucket_stats"],
+            bucket_stats,
+        )
+        self.assertIn("teacher_curriculum", checkpoint["metadata"])
 
     def test_mlp_missing_architecture_trains_saves_and_loads_from_checkpoint(self):
         import torch
@@ -1426,7 +1669,17 @@ class TrainingClosureTests(unittest.TestCase):
             self.assertIn("feedback_aware", record["baseline_deltas"])
             self.assertEqual(record["data_class"], "quasi_real")
             self.assertTrue(record["mask_stress_augmented"])
+            self.assertEqual(
+                record["evaluation_scope"],
+                "calibration evidence; not real-world generalization benchmark",
+            )
+            self.assertIn("selection_decision", record)
+            self.assertIn("reason_codes", record["selection_decision"])
+        self.assertIn("distillation_stability_summary", training)
+        self.assertIn("feedback_aware", training["distillation_stability_summary"])
+        self.assertIn("0.1", training["distillation_stability_summary"]["feedback_aware"])
         self.assertIn("teacher_imitation_weight", training["best_selection"]["reason"])
+        self.assertIn("gate_failed_selection", training["best_selection"])
         self.assertIn("## Distillation Matrix", report)
         self.assertIn("| feedback_aware | 0.1 |", report)
         self.assertIn("not a real-world generalization benchmark", report)
