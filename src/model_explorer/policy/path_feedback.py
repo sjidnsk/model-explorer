@@ -21,6 +21,48 @@ from .planning import (
 
 
 PATH_FEEDBACK_SCHEMA_VERSION = "path-feedback-manifest/v1"
+PATH_FEEDBACK_SUMMARY_SCHEMA_VERSION = "path-feedback-summary/v1"
+PATH_FEEDBACK_SUMMARY_ACCEPTANCE_METRICS = (
+    "selection_changed_rate",
+    "path_planning_failure_count",
+    "replan_count",
+    "tracking_safety_violation_count",
+    "trajectory_optimization_fallback_count",
+    "region_graph_disconnected_count",
+    "coverage_per_path_cost",
+)
+PATH_FEEDBACK_SUMMARY_REQUIRED_KEYS = (
+    "schema_version",
+    "scenario_count",
+    "top_k",
+    "candidate_count",
+    "reachable_count",
+    "path_planning_failure_count",
+    "replan_count",
+    "total_path_cost",
+    "average_path_cost",
+    "coverage_per_path_cost",
+    "selection_changed_count",
+    "selection_changed_rate",
+    "tracking_safety_violation_count",
+    "trajectory_optimization_fallback_count",
+    "region_graph_disconnected_count",
+    "open_grid_fallback_used",
+    "failure_reasons",
+    "iris_requested_count",
+    "iris_report_count",
+    "iris_status_counts",
+    "iris_fallback_count",
+    "iris_failure_count",
+    "iris_region_count_total",
+    "iris_fallback_reasons",
+    "region_graph_source_counts",
+    "region_graph_fallback_count",
+    "region_graph_fallback_reasons",
+    "region_graph_start_goal_disconnected_count",
+    "scenario_group_summary",
+    "scenarios",
+)
 
 
 @dataclass(frozen=True)
@@ -114,6 +156,7 @@ def validate_path_feedback_manifest(path: str | Path) -> dict[str, Any]:
 def run_path_feedback_manifest(path: str | Path) -> dict[str, Any]:
     manifest = load_path_feedback_manifest(path)
     summary = run_path_feedback(manifest)
+    validate_path_feedback_summary_contract(summary)
     if manifest.summary_output is not None:
         manifest.summary_output.parent.mkdir(parents=True, exist_ok=True)
         manifest.summary_output.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -121,6 +164,31 @@ def run_path_feedback_manifest(path: str | Path) -> dict[str, Any]:
         manifest.report_output.parent.mkdir(parents=True, exist_ok=True)
         manifest.report_output.write_text(render_path_feedback_markdown(summary), encoding="utf-8")
     return summary
+
+
+def validate_path_feedback_summary_contract(
+    summary: dict[str, Any],
+    *,
+    require_sidecar_inputs: bool = True,
+) -> dict[str, Any]:
+    if not isinstance(summary, dict):
+        raise ValueError("path-feedback-summary/v1 summary must be an object")
+    schema_version = summary.get("schema_version")
+    if schema_version != PATH_FEEDBACK_SUMMARY_SCHEMA_VERSION:
+        raise ValueError(
+            f"schema_version must be {PATH_FEEDBACK_SUMMARY_SCHEMA_VERSION}, got {schema_version!r}"
+        )
+    missing = [key for key in PATH_FEEDBACK_SUMMARY_REQUIRED_KEYS if key not in summary]
+    if missing:
+        raise ValueError("path-feedback-summary/v1 missing required keys: " + ", ".join(missing))
+    if require_sidecar_inputs and summary.get("open_grid_fallback_used") is not False:
+        raise ValueError("open_grid_fallback_used must be false for semi-real path feedback validation")
+    return {
+        "status": "valid",
+        "schema_version": PATH_FEEDBACK_SUMMARY_SCHEMA_VERSION,
+        "required_key_count": len(PATH_FEEDBACK_SUMMARY_REQUIRED_KEYS),
+        "acceptance_metric_count": len(PATH_FEEDBACK_SUMMARY_ACCEPTANCE_METRICS),
+    }
 
 
 def compact_path_feedback_summary(
@@ -181,7 +249,7 @@ def run_path_feedback(manifest: PathFeedbackManifest) -> dict[str, Any]:
     )
     diagnostic_summary = _diagnostic_aggregate(scenario_summaries)
     return {
-        "schema_version": "path-feedback-summary/v1",
+        "schema_version": PATH_FEEDBACK_SUMMARY_SCHEMA_VERSION,
         "scenario_count": len(scenario_summaries),
         "top_k": manifest.top_k,
         "candidate_count": sum(int(item["path_feedback"]["candidate_count"]) for item in scenario_summaries),

@@ -1132,6 +1132,57 @@ class RolloutCollectorTests(unittest.TestCase):
 
 
 class PathPlanningAdapterTests(unittest.TestCase):
+    def test_path_feedback_summary_contract_lists_required_acceptance_metrics(self):
+        from model_explorer.policy.path_feedback import (
+            PATH_FEEDBACK_SUMMARY_ACCEPTANCE_METRICS,
+            PATH_FEEDBACK_SUMMARY_REQUIRED_KEYS,
+            validate_path_feedback_summary_contract,
+        )
+
+        acceptance_metrics = {
+            "selection_changed_rate",
+            "path_planning_failure_count",
+            "replan_count",
+            "tracking_safety_violation_count",
+            "trajectory_optimization_fallback_count",
+            "region_graph_disconnected_count",
+            "coverage_per_path_cost",
+        }
+
+        self.assertTrue(acceptance_metrics.issubset(set(PATH_FEEDBACK_SUMMARY_ACCEPTANCE_METRICS)))
+        self.assertTrue(set(PATH_FEEDBACK_SUMMARY_ACCEPTANCE_METRICS).issubset(set(PATH_FEEDBACK_SUMMARY_REQUIRED_KEYS)))
+
+        summary = {key: 0 for key in PATH_FEEDBACK_SUMMARY_REQUIRED_KEYS}
+        summary.update(
+            {
+                "schema_version": "path-feedback-summary/v1",
+                "scenario_count": 1,
+                "top_k": 3,
+                "candidate_count": 3,
+                "open_grid_fallback_used": False,
+                "failure_reasons": [],
+                "iris_status_counts": {},
+                "region_graph_source_counts": {},
+                "scenario_group_summary": {},
+                "scenarios": [],
+            }
+        )
+
+        validation = validate_path_feedback_summary_contract(summary)
+
+        self.assertEqual(validation["status"], "valid")
+        self.assertEqual(validation["schema_version"], "path-feedback-summary/v1")
+
+        missing_metric = dict(summary)
+        del missing_metric["coverage_per_path_cost"]
+        with self.assertRaisesRegex(ValueError, "coverage_per_path_cost"):
+            validate_path_feedback_summary_contract(missing_metric)
+
+        fallback_summary = dict(summary)
+        fallback_summary["open_grid_fallback_used"] = True
+        with self.assertRaisesRegex(ValueError, "open_grid_fallback_used"):
+            validate_path_feedback_summary_contract(fallback_summary)
+
     def test_contract_cost_planner_uses_finite_defaults_when_fields_are_missing(self):
         from model_explorer.policy.planning import ContractCostPlanner, PathPlanRequest
 
