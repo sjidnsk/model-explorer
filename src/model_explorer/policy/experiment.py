@@ -570,53 +570,61 @@ def _training_would_write_paths(manifest: ExperimentManifest, *, base_dir: Path)
     architectures = _training_architectures(config)
     source_strategies = _training_source_selection_strategies(config)
     teacher_weights = _training_teacher_imitation_weights(config)
+    curriculum_profiles = _training_teacher_margin_curriculum_profiles(config)
     multi_seed = len(seeds) > 1
     multi_architecture = len(architectures) > 1
     multi_source = len(source_strategies) > 1
     multi_teacher_weight = len(teacher_weights) > 1
+    multi_curriculum_profile = len(curriculum_profiles) > 1
     paths: list[Path] = []
     for source_strategy in source_strategies:
         for teacher_weight in teacher_weights:
-            for architecture in architectures:
-                architecture_name = _normalize_training_architecture_name(architecture)
-                for seed in seeds:
-                    checkpoint = _training_output_path(
-                        config,
-                        "checkpoint",
-                        seed=seed,
-                        architecture=architecture_name,
-                        selection_strategy=source_strategy,
-                        teacher_imitation_weight=teacher_weight,
-                        base_dir=base_dir,
-                        run_output_dir=manifest.run_output_dir,
-                        default_name="checkpoint.pt",
-                        multi_seed=multi_seed,
-                        multi_architecture=multi_architecture,
-                        multi_source=multi_source,
-                        multi_teacher_weight=multi_teacher_weight,
-                        required=True,
-                    )
-                    loss_log = _training_output_path(
-                        config,
-                        "loss_log",
-                        seed=seed,
-                        architecture=architecture_name,
-                        selection_strategy=source_strategy,
-                        teacher_imitation_weight=teacher_weight,
-                        base_dir=base_dir,
-                        run_output_dir=manifest.run_output_dir,
-                        default_name="losses.jsonl",
-                        multi_seed=multi_seed,
-                        multi_architecture=multi_architecture,
-                        multi_source=multi_source,
-                        multi_teacher_weight=multi_teacher_weight,
-                        required=False,
-                    )
-                    paths.append(checkpoint)
-                    if loss_log is not None:
-                        paths.append(loss_log)
-                    paths.append(checkpoint.parent / "training-summary.json")
-                    paths.append(checkpoint.parent / "validation-evaluation.json")
+            for curriculum_profile in curriculum_profiles:
+                profile_name = str(curriculum_profile["name"])
+                for architecture in architectures:
+                    architecture_name = _normalize_training_architecture_name(architecture)
+                    for seed in seeds:
+                        checkpoint = _training_output_path(
+                            config,
+                            "checkpoint",
+                            seed=seed,
+                            architecture=architecture_name,
+                            selection_strategy=source_strategy,
+                            teacher_imitation_weight=teacher_weight,
+                            curriculum_profile=profile_name,
+                            base_dir=base_dir,
+                            run_output_dir=manifest.run_output_dir,
+                            default_name="checkpoint.pt",
+                            multi_seed=multi_seed,
+                            multi_architecture=multi_architecture,
+                            multi_source=multi_source,
+                            multi_teacher_weight=multi_teacher_weight,
+                            multi_curriculum_profile=multi_curriculum_profile,
+                            required=True,
+                        )
+                        loss_log = _training_output_path(
+                            config,
+                            "loss_log",
+                            seed=seed,
+                            architecture=architecture_name,
+                            selection_strategy=source_strategy,
+                            teacher_imitation_weight=teacher_weight,
+                            curriculum_profile=profile_name,
+                            base_dir=base_dir,
+                            run_output_dir=manifest.run_output_dir,
+                            default_name="losses.jsonl",
+                            multi_seed=multi_seed,
+                            multi_architecture=multi_architecture,
+                            multi_source=multi_source,
+                            multi_teacher_weight=multi_teacher_weight,
+                            multi_curriculum_profile=multi_curriculum_profile,
+                            required=False,
+                        )
+                        paths.append(checkpoint)
+                        if loss_log is not None:
+                            paths.append(loss_log)
+                        paths.append(checkpoint.parent / "training-summary.json")
+                        paths.append(checkpoint.parent / "validation-evaluation.json")
     return tuple(paths)
 
 
@@ -759,10 +767,13 @@ def _run_training(
     architectures = _training_architectures(config)
     source_strategies = _training_source_selection_strategies(config)
     teacher_weights = _training_teacher_imitation_weights(config)
+    curriculum_profiles = _training_teacher_margin_curriculum_profiles(config)
     multi_seed = len(seeds) > 1
     multi_architecture = len(architectures) > 1
     multi_source = len(source_strategies) > 1
     multi_teacher_weight = len(teacher_weights) > 1
+    multi_curriculum_profile = len(curriculum_profiles) > 1
+    profile_matrix_configured = "teacher_margin_curriculum_profiles" in config
     runs: list[dict[str, Any]] = []
 
     for source_strategy in source_strategies:
@@ -775,135 +786,159 @@ def _run_training(
             reward_config=reward_config,
         )
         for teacher_weight in teacher_weights:
-            for architecture in architectures:
-                architecture_name = _normalize_training_architecture_name(architecture)
-                for seed in seeds:
-                    checkpoint = _training_output_path(
-                        config,
-                        "checkpoint",
-                        seed=seed,
-                        architecture=architecture_name,
-                        selection_strategy=source_strategy,
-                        teacher_imitation_weight=teacher_weight,
-                        base_dir=base_dir,
-                        run_output_dir=run_output_dir,
-                        default_name="checkpoint.pt",
-                        multi_seed=multi_seed,
-                        multi_architecture=multi_architecture,
-                        multi_source=multi_source,
-                        multi_teacher_weight=multi_teacher_weight,
-                        required=True,
-                    )
-                    loss_log = _training_output_path(
-                        config,
-                        "loss_log",
-                        seed=seed,
-                        architecture=architecture_name,
-                        selection_strategy=source_strategy,
-                        teacher_imitation_weight=teacher_weight,
-                        base_dir=base_dir,
-                        run_output_dir=run_output_dir,
-                        default_name="losses.jsonl",
-                        multi_seed=multi_seed,
-                        multi_architecture=multi_architecture,
-                        multi_source=multi_source,
-                        multi_teacher_weight=multi_teacher_weight,
-                        required=False,
-                    )
-                    _ensure_parent_dir(checkpoint)
-                    result = train_policy_on_episodes(
-                        source_episodes,
-                        checkpoint_path=checkpoint,
-                        seed=seed,
-                        hidden_size=int(config.get("hidden_size", 64)),
-                        learning_rate=float(config.get("learning_rate", 1.0e-3)),
-                        epochs=int(config.get("epochs", 1)),
-                        return_mode=str(config.get("return_mode", "reward_as_return")),
-                        discount_factor=float(config.get("discount_factor", 0.99)),
-                        architecture=architecture,
-                        architecture_config=_training_architecture_config(config, architecture_name),
-                        teacher_imitation_weight=teacher_weight,
-                        teacher_margin_weighting=config.get("teacher_margin_weighting"),
-                    )
-                    if loss_log is not None:
-                        _ensure_parent_dir(loss_log)
-                        loss_records = result.get("epoch_losses", [])
-                        if not isinstance(loss_records, list) or not loss_records:
-                            loss_records = [result]
-                        loss_log.write_text(
-                            "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in loss_records),
-                            encoding="utf-8",
+            for curriculum_profile in curriculum_profiles:
+                profile_name = str(curriculum_profile["name"])
+                teacher_margin_weighting = curriculum_profile.get("teacher_margin_weighting")
+                for architecture in architectures:
+                    architecture_name = _normalize_training_architecture_name(architecture)
+                    for seed in seeds:
+                        checkpoint = _training_output_path(
+                            config,
+                            "checkpoint",
+                            seed=seed,
+                            architecture=architecture_name,
+                            selection_strategy=source_strategy,
+                            teacher_imitation_weight=teacher_weight,
+                            curriculum_profile=profile_name,
+                            base_dir=base_dir,
+                            run_output_dir=run_output_dir,
+                            default_name="checkpoint.pt",
+                            multi_seed=multi_seed,
+                            multi_architecture=multi_architecture,
+                            multi_source=multi_source,
+                            multi_teacher_weight=multi_teacher_weight,
+                            multi_curriculum_profile=multi_curriculum_profile,
+                            required=True,
                         )
-                    result["checkpoint"] = str(checkpoint)
-                    if loss_log is not None:
-                        result["loss_log"] = str(loss_log)
-                    result["training_data_selection_strategy"] = (
-                        None if source_strategy is None else str(source_strategy)
-                    )
-                    result["teacher_imitation_weight"] = float(teacher_weight)
-                    result["teacher_quality_gates"] = summarize_teacher_quality_gates(
-                        result.get("dataset_summary", {}),
-                        config.get("teacher_quality_gates"),
-                    )
-                    result["train_episode_count"] = len(source_episodes)
-                    result["validation_episode_count"] = len(validation_episodes)
-                    if evaluation_scenarios:
-                        trained_policy = load_policy_checkpoint(checkpoint)
-                        aggregate_validation_evaluation = evaluate_policy_baseline_scenarios(
-                            evaluation_scenarios,
-                            torch_policy=trained_policy,
-                            planning_adapter=planner,
+                        loss_log = _training_output_path(
+                            config,
+                            "loss_log",
+                            seed=seed,
+                            architecture=architecture_name,
+                            selection_strategy=source_strategy,
+                            teacher_imitation_weight=teacher_weight,
+                            curriculum_profile=profile_name,
+                            base_dir=base_dir,
+                            run_output_dir=run_output_dir,
+                            default_name="losses.jsonl",
+                            multi_seed=multi_seed,
+                            multi_architecture=multi_architecture,
+                            multi_source=multi_source,
+                            multi_teacher_weight=multi_teacher_weight,
+                            multi_curriculum_profile=multi_curriculum_profile,
+                            required=False,
                         )
-                        validation_evaluation = (
-                            _grouped_evaluation(
-                                validation_groups,
+                        _ensure_parent_dir(checkpoint)
+                        result = train_policy_on_episodes(
+                            source_episodes,
+                            checkpoint_path=checkpoint,
+                            seed=seed,
+                            hidden_size=int(config.get("hidden_size", 64)),
+                            learning_rate=float(config.get("learning_rate", 1.0e-3)),
+                            epochs=int(config.get("epochs", 1)),
+                            return_mode=str(config.get("return_mode", "reward_as_return")),
+                            discount_factor=float(config.get("discount_factor", 0.99)),
+                            architecture=architecture,
+                            architecture_config=_training_architecture_config(config, architecture_name),
+                            teacher_imitation_weight=teacher_weight,
+                            teacher_margin_weighting=teacher_margin_weighting,
+                        )
+                        if loss_log is not None:
+                            _ensure_parent_dir(loss_log)
+                            loss_records = result.get("epoch_losses", [])
+                            if not isinstance(loss_records, list) or not loss_records:
+                                loss_records = [result]
+                            loss_log.write_text(
+                                "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in loss_records),
+                                encoding="utf-8",
+                            )
+                        result["checkpoint"] = str(checkpoint)
+                        if loss_log is not None:
+                            result["loss_log"] = str(loss_log)
+                        result["training_data_selection_strategy"] = (
+                            None if source_strategy is None else str(source_strategy)
+                        )
+                        result["teacher_imitation_weight"] = float(teacher_weight)
+                        if profile_matrix_configured:
+                            result["teacher_margin_curriculum_profile"] = profile_name
+                        result["teacher_margin_weighting"] = dict(teacher_margin_weighting or {})
+                        result["teacher_quality_gates"] = summarize_teacher_quality_gates(
+                            result.get("dataset_summary", {}),
+                            config.get("teacher_quality_gates"),
+                        )
+                        result["train_episode_count"] = len(source_episodes)
+                        result["validation_episode_count"] = len(validation_episodes)
+                        if evaluation_scenarios:
+                            trained_policy = load_policy_checkpoint(checkpoint)
+                            aggregate_validation_evaluation = evaluate_policy_baseline_scenarios(
                                 evaluation_scenarios,
-                                validation_paths or (),
-                                planner=planner,
-                                aggregate=aggregate_validation_evaluation,
                                 torch_policy=trained_policy,
+                                planning_adapter=planner,
                             )
-                            if validation_groups and validation_paths
-                            else aggregate_validation_evaluation
-                        )
-                        result["validation_evaluation"] = validation_evaluation
-                        result["baseline_deltas"] = _baseline_deltas(
-                            _comparison_from_evaluation(validation_evaluation)
-                        ).get("torch_policy", {})
-                        validation_output = checkpoint.parent / "validation-evaluation.json"
-                        _write_json(validation_output, validation_evaluation)
-                        result["validation_evaluation_output"] = str(validation_output)
-                    if test_scenarios:
-                        trained_policy = load_policy_checkpoint(checkpoint)
-                        aggregate_test_evaluation = evaluate_policy_baseline_scenarios(
-                            test_scenarios,
-                            torch_policy=trained_policy,
-                            planning_adapter=planner,
-                        )
-                        test_evaluation = (
-                            _grouped_evaluation(
-                                test_groups,
+                            validation_evaluation = (
+                                _grouped_evaluation(
+                                    validation_groups,
+                                    evaluation_scenarios,
+                                    validation_paths or (),
+                                    planner=planner,
+                                    aggregate=aggregate_validation_evaluation,
+                                    torch_policy=trained_policy,
+                                )
+                                if validation_groups and validation_paths
+                                else aggregate_validation_evaluation
+                            )
+                            result["validation_evaluation"] = validation_evaluation
+                            result["baseline_deltas"] = _baseline_deltas(
+                                _comparison_from_evaluation(validation_evaluation)
+                            ).get("torch_policy", {})
+                            validation_output = checkpoint.parent / "validation-evaluation.json"
+                            _write_json(validation_output, validation_evaluation)
+                            result["validation_evaluation_output"] = str(validation_output)
+                        if test_scenarios:
+                            trained_policy = load_policy_checkpoint(checkpoint)
+                            aggregate_test_evaluation = evaluate_policy_baseline_scenarios(
                                 test_scenarios,
-                                test_paths or (),
-                                planner=planner,
-                                aggregate=aggregate_test_evaluation,
                                 torch_policy=trained_policy,
+                                planning_adapter=planner,
                             )
-                            if test_groups and test_paths
-                            else aggregate_test_evaluation
-                        )
-                        result["test_evaluation"] = test_evaluation
-                        test_output = checkpoint.parent / "test-evaluation.json"
-                        _write_json(test_output, test_evaluation)
-                        result["test_evaluation_output"] = str(test_output)
-                    training_summary_output = checkpoint.parent / "training-summary.json"
-                    _write_json(training_summary_output, result)
-                    result["training_summary_output"] = str(training_summary_output)
-                    runs.append(result)
+                            test_evaluation = (
+                                _grouped_evaluation(
+                                    test_groups,
+                                    test_scenarios,
+                                    test_paths or (),
+                                    planner=planner,
+                                    aggregate=aggregate_test_evaluation,
+                                    torch_policy=trained_policy,
+                                )
+                                if test_groups and test_paths
+                                else aggregate_test_evaluation
+                            )
+                            result["test_evaluation"] = test_evaluation
+                            test_output = checkpoint.parent / "test-evaluation.json"
+                            _write_json(test_output, test_evaluation)
+                            result["test_evaluation_output"] = str(test_output)
+                        training_summary_output = checkpoint.parent / "training-summary.json"
+                        _write_json(training_summary_output, result)
+                        result["training_summary_output"] = str(training_summary_output)
+                        runs.append(result)
 
     best_policy = str(config.get("best_policy", "torch_policy"))
     best_metric = str(config.get("best_metric", "final_coverage_rate"))
-    best_run = _select_best_training_run(runs, metric=best_metric, policy=best_policy)
+    if "teacher_margin_curriculum_profiles" in config:
+        calibration_recommendation = _calibration_recommendation(
+            runs,
+            metric=best_metric,
+            policy=best_policy,
+        )
+        best_run = _recommended_run(runs, calibration_recommendation)
+    else:
+        best_run = _select_best_training_run(runs, metric=best_metric, policy=best_policy)
+        calibration_recommendation = _calibration_recommendation(
+            runs,
+            metric=best_metric,
+            policy=best_policy,
+            selected_run=best_run,
+        )
     selected = dict(best_run)
     selected["checkpoint"] = best_run["checkpoint"]
     selected["best_seed"] = int(best_run["seed"])
@@ -920,6 +955,7 @@ def _run_training(
         _normalize_training_source_name(strategy) for strategy in source_strategies if strategy is not None
     ]
     selected["teacher_imitation_weights"] = [float(weight) for weight in teacher_weights]
+    selected["teacher_margin_curriculum_profiles"] = [str(profile["name"]) for profile in curriculum_profiles]
     selected["source_comparison"] = _training_source_comparison(runs)
     selected["distillation_matrix"] = _training_distillation_matrix(
         runs,
@@ -932,6 +968,7 @@ def _run_training(
     selected["multi_seed_loss_summary"] = _loss_summary(runs)
     selected["multi_seed_delta_summary"] = _multi_seed_delta_summary(runs)
     selected["distillation_stability_summary"] = _distillation_stability_summary(runs)
+    selected["calibration_recommendation"] = calibration_recommendation
     selected["best_selection"] = _best_selection_record(
         runs,
         best_run,
@@ -1018,8 +1055,11 @@ def _training_distillation_matrix(
                 "training_source": dict(run.get("training_source", {})),
                 "teacher_imitation": dict(run.get("teacher_imitation", {})),
                 "teacher_margin_summary": dict(run.get("teacher_margin_summary", {})),
+                "teacher_margin_curriculum_profile": _run_curriculum_profile_name(run),
+                "teacher_curriculum": dict(run.get("teacher_curriculum", {})),
                 "teacher_quality_gates": dict(run.get("teacher_quality_gates", {})),
                 "teacher_agreement": _teacher_agreement_summary(torch_metrics),
+                "confidence_calibration": dict(torch_metrics.get("feedback_aware_confidence_calibration", {})),
                 "baseline_deltas": dict(run.get("baseline_deltas", {})),
                 "data_class": dataset_summary.get("data_class"),
                 "dataset_id": dataset_summary.get("dataset_id"),
@@ -1079,6 +1119,7 @@ def _distillation_run_selection_decision(
         "metric_value": metric_value,
         "source_selection_strategy": source,
         "teacher_imitation_weight": teacher_weight,
+        "teacher_margin_curriculum_profile": _run_curriculum_profile_name(run),
         "gate_status": gate_status,
         "baseline_delta": dict(feedback_delta) if isinstance(feedback_delta, dict) else {},
         "margin_bucket_performance": dict(margin_bucket) if isinstance(margin_bucket, dict) else {},
@@ -1102,15 +1143,39 @@ def _teacher_agreement_summary(torch_metrics: dict[str, Any]) -> dict[str, Any]:
 
 
 def _distillation_stability_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
-    grouped: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    profile_dimension = _distillation_profile_dimension_enabled(runs)
+    grouped: dict[str, dict[str, dict[str, list[dict[str, Any]]] | list[dict[str, Any]]]] = {}
     for run in runs:
         source = _normalize_training_source_name(run.get("training_data_selection_strategy"))
         teacher_weight = f"{float(run.get('teacher_imitation_weight', 0.0)):g}"
-        grouped.setdefault(source, {}).setdefault(teacher_weight, []).append(run)
+        if profile_dimension:
+            profile = _run_curriculum_profile_name(run)
+            source_group = grouped.setdefault(source, {})
+            weight_group = source_group.setdefault(teacher_weight, {})
+            assert isinstance(weight_group, dict)
+            weight_group.setdefault(profile, []).append(run)
+        else:
+            source_group = grouped.setdefault(source, {})
+            weight_runs = source_group.setdefault(teacher_weight, [])
+            assert isinstance(weight_runs, list)
+            weight_runs.append(run)
+    if profile_dimension:
+        return {
+            source: {
+                weight: {
+                    profile: _distillation_stability_group_summary(profile_runs)
+                    for profile, profile_runs in sorted(profile_groups.items())
+                }
+                for weight, profile_groups in sorted(weight_groups.items())
+                if isinstance(profile_groups, dict)
+            }
+            for source, weight_groups in sorted(grouped.items())
+        }
     return {
         source: {
             weight: _distillation_stability_group_summary(group_runs)
             for weight, group_runs in sorted(weight_groups.items())
+            if isinstance(group_runs, list)
         }
         for source, weight_groups in sorted(grouped.items())
     }
@@ -1119,6 +1184,8 @@ def _distillation_stability_summary(runs: list[dict[str, Any]]) -> dict[str, Any
 def _distillation_stability_group_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
     teacher_agreement_values: dict[str, list[float]] = {}
     margin_bucket_values: dict[str, dict[str, list[float]]] = {}
+    confidence_values: dict[str, list[float]] = {}
+    confidence_bucket_values: dict[str, dict[str, list[float]]] = {}
     feedback_delta_values: dict[str, list[float]] = {}
     gate_pass_count = 0
     for run in runs:
@@ -1142,9 +1209,16 @@ def _distillation_stability_group_summary(runs: list[dict[str, Any]]) -> dict[st
                     continue
                 bucket_values = margin_bucket_values.setdefault(str(bucket_name), {})
                 for metric, value in bucket_metrics.items():
-                    numeric = _optional_numeric(value)
-                    if numeric is not None:
-                        bucket_values.setdefault(str(metric), []).append(numeric)
+                        numeric = _optional_numeric(value)
+                        if numeric is not None:
+                            bucket_values.setdefault(str(metric), []).append(numeric)
+        confidence = torch_metrics.get("feedback_aware_confidence_calibration", {})
+        if isinstance(confidence, dict):
+            _collect_confidence_values(
+                confidence,
+                confidence_values=confidence_values,
+                confidence_bucket_values=confidence_bucket_values,
+            )
         baseline_deltas = run.get("baseline_deltas", {})
         feedback_delta = baseline_deltas.get("feedback_aware", {}) if isinstance(baseline_deltas, dict) else {}
         if isinstance(feedback_delta, dict):
@@ -1163,8 +1237,49 @@ def _distillation_stability_group_summary(runs: list[dict[str, Any]]) -> dict[st
             bucket: _numeric_stats_by_metric(metrics)
             for bucket, metrics in sorted(margin_bucket_values.items())
         },
+        "confidence_calibration": {
+            **_numeric_stats_by_metric(confidence_values),
+            "margin_buckets": {
+                bucket: _numeric_stats_by_metric(metrics)
+                for bucket, metrics in sorted(confidence_bucket_values.items())
+            },
+        },
         "feedback_aware_baseline_delta": _numeric_stats_by_metric(feedback_delta_values),
     }
+
+
+def _collect_confidence_values(
+    confidence: dict[str, Any],
+    *,
+    confidence_values: dict[str, list[float]],
+    confidence_bucket_values: dict[str, dict[str, list[float]]],
+) -> None:
+    for metric, value in confidence.items():
+        if metric in {"margin_buckets", "warnings"}:
+            continue
+        numeric = _nested_metric_mean(value)
+        if numeric is not None:
+            confidence_values.setdefault(str(metric), []).append(numeric)
+    margin_buckets = confidence.get("margin_buckets", {})
+    if isinstance(margin_buckets, dict):
+        for bucket_name, bucket_metrics in margin_buckets.items():
+            if not isinstance(bucket_metrics, dict):
+                continue
+            bucket_values = confidence_bucket_values.setdefault(str(bucket_name), {})
+            for metric, value in bucket_metrics.items():
+                numeric = _nested_metric_mean(value)
+                if numeric is not None:
+                    bucket_values.setdefault(str(metric), []).append(numeric)
+
+
+def _nested_metric_mean(value: Any) -> float | None:
+    if isinstance(value, dict) and "mean" in value:
+        return _optional_numeric(value.get("mean"))
+    return _optional_numeric(value)
+
+
+def _distillation_profile_dimension_enabled(runs: list[dict[str, Any]]) -> bool:
+    return any("teacher_margin_curriculum_profile" in run for run in runs)
 
 
 def _numeric_stats_by_metric(values: dict[str, list[float]]) -> dict[str, dict[str, float]]:
@@ -1240,6 +1355,73 @@ def _training_teacher_imitation_weights(config: dict[str, Any]) -> tuple[float, 
     return tuple(max(0.0, float(value)) for value in raw_value)
 
 
+def _training_teacher_margin_curriculum_profiles(config: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+    raw_value = config.get("teacher_margin_curriculum_profiles")
+    if raw_value is None:
+        weighting = config.get("teacher_margin_weighting")
+        profile_name = "default"
+        if isinstance(weighting, dict):
+            profile_name = str(weighting.get("profile_name", "custom")).strip() or "custom"
+        return ({"name": profile_name, "teacher_margin_weighting": weighting},)
+    if isinstance(raw_value, dict):
+        raw_entries = [
+            {"name": name, **(value if isinstance(value, dict) else {"bucket_weights": value})}
+            for name, value in raw_value.items()
+        ]
+    else:
+        if not isinstance(raw_value, list) or not raw_value:
+            raise ValueError("train.teacher_margin_curriculum_profiles must be a non-empty list or mapping")
+        raw_entries = list(raw_value)
+    profiles: list[dict[str, Any]] = []
+    for entry in raw_entries:
+        profiles.append(_coerce_teacher_margin_curriculum_profile(entry))
+    names = [profile["name"] for profile in profiles]
+    if len(set(names)) != len(names):
+        raise ValueError("train.teacher_margin_curriculum_profiles names must be unique")
+    return tuple(profiles)
+
+
+def _coerce_teacher_margin_curriculum_profile(value: Any) -> dict[str, Any]:
+    if isinstance(value, str):
+        return _builtin_teacher_margin_curriculum_profile(value)
+    if not isinstance(value, dict):
+        raise ValueError("teacher margin curriculum profile must be a name or object")
+    name = str(value.get("name", "")).strip()
+    if not name:
+        raise ValueError("teacher margin curriculum profile requires a non-empty name")
+    if "teacher_margin_weighting" in value:
+        weighting = value["teacher_margin_weighting"]
+        if weighting is not None and not isinstance(weighting, dict):
+            raise ValueError("teacher_margin_curriculum_profile.teacher_margin_weighting must be an object")
+        weighting_config = dict(weighting or {})
+    else:
+        weighting_config = {
+            key: value[key]
+            for key in ("bucket_weights", "teacher_low_margin_threshold", "teacher_high_margin_threshold")
+            if key in value
+        }
+    weighting_config["profile_name"] = name
+    return {"name": name, "teacher_margin_weighting": weighting_config}
+
+
+def _builtin_teacher_margin_curriculum_profile(name: str) -> dict[str, Any]:
+    profile_name = str(name).strip()
+    profiles = {
+        "high_only": {"high": 1.0, "medium": 0.0, "low": 0.0, "missing": 0.0},
+        "high_medium": {"high": 1.0, "medium": 0.5, "low": 0.0, "missing": 0.0},
+        "soft_all_valid": {"high": 1.0, "medium": 0.5, "low": 0.1, "missing": 0.0},
+    }
+    if profile_name not in profiles:
+        raise ValueError(f"unknown teacher margin curriculum profile: {profile_name}")
+    return {
+        "name": profile_name,
+        "teacher_margin_weighting": {
+            "profile_name": profile_name,
+            "bucket_weights": dict(profiles[profile_name]),
+        },
+    }
+
+
 def _training_architectures(config: dict[str, Any]) -> tuple[str | None, ...]:
     if "architectures" not in config:
         return (config.get("architecture"),)
@@ -1276,6 +1458,7 @@ def _training_output_path(
     architecture: str,
     selection_strategy: str | None,
     teacher_imitation_weight: float,
+    curriculum_profile: str,
     base_dir: Path,
     run_output_dir: Path | None,
     default_name: str,
@@ -1283,10 +1466,12 @@ def _training_output_path(
     multi_architecture: bool,
     multi_source: bool,
     multi_teacher_weight: bool,
+    multi_curriculum_profile: bool,
     required: bool,
 ) -> Path | None:
     source_name = _normalize_training_source_name(selection_strategy)
     teacher_weight_name = _normalize_teacher_weight_name(teacher_imitation_weight)
+    curriculum_profile_name = _normalize_curriculum_profile_name(curriculum_profile)
     value = config.get(key)
     if value is not None:
         text = str(value)
@@ -1296,6 +1481,8 @@ def _training_output_path(
             selection_strategy=source_name,
             teacher_imitation_weight=teacher_weight_name,
             teacher_weight=teacher_weight_name,
+            teacher_margin_curriculum_profile=curriculum_profile_name,
+            curriculum_profile=curriculum_profile_name,
         )
         path = _resolve_path(base_dir, formatted)
         parent = path.parent
@@ -1306,6 +1493,11 @@ def _training_output_path(
             ("{teacher_imitation_weight}", "{teacher_weight}"),
         ):
             parent = parent / f"teacher-weight-{teacher_weight_name}"
+        if multi_curriculum_profile and not _path_parent_contains_any_placeholder(
+            text,
+            ("{teacher_margin_curriculum_profile}", "{curriculum_profile}"),
+        ):
+            parent = parent / f"curriculum-profile-{curriculum_profile_name}"
         if multi_architecture and not _path_parent_contains_placeholder(text, "{architecture}"):
             parent = parent / architecture
         if (multi_seed or multi_architecture) and not _path_parent_contains_placeholder(text, "{seed}"):
@@ -1318,6 +1510,8 @@ def _training_output_path(
             parent = parent / f"source-{source_name}"
         if multi_teacher_weight:
             parent = parent / f"teacher-weight-{teacher_weight_name}"
+        if multi_curriculum_profile:
+            parent = parent / f"curriculum-profile-{curriculum_profile_name}"
         if multi_architecture:
             parent = parent / architecture
         return parent / f"seed-{seed}" / default_name
@@ -1335,12 +1529,176 @@ def _normalize_teacher_weight_name(value: float) -> str:
     return text.replace("-", "neg-").replace(".", "p")
 
 
+def _normalize_curriculum_profile_name(value: str | None) -> str:
+    text = "default" if value is None else str(value).strip()
+    return (text or "default").replace("/", "_").replace(" ", "_")
+
+
 def _path_parent_contains_placeholder(path_text: str, placeholder: str) -> bool:
     return any(placeholder in part for part in Path(path_text).parent.parts)
 
 
 def _path_parent_contains_any_placeholder(path_text: str, placeholders: tuple[str, ...]) -> bool:
     return any(_path_parent_contains_placeholder(path_text, placeholder) for placeholder in placeholders)
+
+
+def _calibration_recommendation(
+    runs: list[dict[str, Any]],
+    *,
+    policy: str,
+    metric: str,
+    selected_run: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not runs:
+        raise ValueError("training must produce at least one run")
+    profile_records = _calibration_profile_records(runs, policy=policy, metric=metric)
+    eligible_profiles = [record for record in profile_records if not record["gate_failed_profile"]]
+    if selected_run is None:
+        candidate_profiles = eligible_profiles if eligible_profiles else profile_records
+        best_profile = max(
+            candidate_profiles,
+            key=lambda record: (
+                record["metric"]["mean"],
+                record["teacher_quality_gate_pass_rate"],
+                record["source_selection_strategy"],
+                str(record["teacher_imitation_weight"]),
+                record["teacher_margin_curriculum_profile"],
+            ),
+        )
+    else:
+        selected_profile_key = _calibration_profile_key(selected_run)
+        best_profile = next(record for record in profile_records if record["profile_key"] == selected_profile_key)
+    profile_runs = [
+        run
+        for run in runs
+        if _calibration_profile_key(run) == best_profile["profile_key"]
+    ]
+    best_run = selected_run or _select_best_training_run(profile_runs, policy=policy, metric=metric)
+    gate_failed_selection = best_profile["gate_failed_profile"] or _teacher_quality_gate_failed(best_run)
+    reason_codes = ["selected_best_profile"] if selected_run is None else ["legacy_best_run_selection"]
+    if gate_failed_selection:
+        reason_codes.append("gate_failed_selection")
+    excluded_profiles = [
+        {
+            key: record[key]
+            for key in (
+                "profile_key",
+                "source_selection_strategy",
+                "teacher_imitation_weight",
+                "teacher_margin_curriculum_profile",
+                "gate_status",
+                "teacher_quality_gate_pass_rate",
+                "metric",
+                "reason_codes",
+            )
+        }
+        for record in profile_records
+        if record["profile_key"] != best_profile["profile_key"] and record["gate_failed_profile"]
+    ]
+    return {
+        "status": "selected",
+        "policy": str(policy),
+        "metric": str(metric),
+        "mode": "max_mean" if selected_run is None else "legacy_best_run",
+        "profile_key": best_profile["profile_key"],
+        "source_selection_strategy": best_profile["source_selection_strategy"],
+        "teacher_imitation_weight": best_profile["teacher_imitation_weight"],
+        "teacher_margin_curriculum_profile": best_profile["teacher_margin_curriculum_profile"],
+        "recommended_checkpoint": best_run.get("checkpoint"),
+        "recommended_seed": best_run.get("seed"),
+        "gate_status": best_profile["gate_status"],
+        "gate_failed_selection": gate_failed_selection,
+        "inconclusive": False,
+        "profile_selection_reason_codes": reason_codes,
+        "eligible_profile_count": len(eligible_profiles),
+        "excluded_profile_count": len(excluded_profiles),
+        "excluded_profiles": excluded_profiles,
+        "profiles": [
+            {key: value for key, value in record.items() if key != "_runs"}
+            for record in profile_records
+        ],
+        "selected_profile": {key: value for key, value in best_profile.items() if key != "_runs"},
+        "reason": (
+            f"selected profile {best_profile['profile_key']} by mean {policy}.{metric}; "
+            f"gate_status={best_profile['gate_status']}"
+        ),
+    }
+
+
+def _calibration_profile_records(
+    runs: list[dict[str, Any]],
+    *,
+    policy: str,
+    metric: str,
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for run in runs:
+        grouped.setdefault(_calibration_profile_key(run), []).append(run)
+    records: list[dict[str, Any]] = []
+    for profile_key, profile_runs in sorted(grouped.items()):
+        metric_values = tuple(_training_run_metric(run, policy=policy, metric=metric) for run in profile_runs)
+        failed_count = sum(1 for run in profile_runs if _teacher_quality_gate_failed(run))
+        pass_count = sum(1 for run in profile_runs if _teacher_quality_gate_status(run) == "passed")
+        gate_failed_profile = failed_count == len(profile_runs)
+        gate_status = (
+            "failed"
+            if gate_failed_profile
+            else "passed"
+            if pass_count == len(profile_runs)
+            else "mixed"
+            if failed_count or pass_count
+            else "not_configured"
+        )
+        first = profile_runs[0]
+        reason_codes = ["teacher_quality_gate_failed"] if gate_failed_profile else ["eligible_profile"]
+        records.append(
+            {
+                "profile_key": profile_key,
+                "source_selection_strategy": _normalize_training_source_name(
+                    first.get("training_data_selection_strategy")
+                ),
+                "teacher_imitation_weight": float(first.get("teacher_imitation_weight", 0.0)),
+                "teacher_margin_curriculum_profile": _run_curriculum_profile_name(first),
+                "run_count": len(profile_runs),
+                "seed_count": len({int(run["seed"]) for run in profile_runs if run.get("seed") is not None}),
+                "gate_status": gate_status,
+                "gate_failed_profile": gate_failed_profile,
+                "teacher_quality_gate_pass_rate": pass_count / len(profile_runs) if profile_runs else 0.0,
+                "teacher_quality_gate_pass_count": pass_count,
+                "metric": _numeric_stats(metric_values),
+                "stability": _distillation_stability_group_summary(profile_runs),
+                "reason_codes": reason_codes,
+                "_runs": profile_runs,
+            }
+        )
+    return records
+
+
+def _recommended_run(runs: list[dict[str, Any]], recommendation: dict[str, Any]) -> dict[str, Any]:
+    checkpoint = recommendation.get("recommended_checkpoint")
+    for run in runs:
+        if run.get("checkpoint") == checkpoint:
+            return run
+    return _select_best_training_run(runs, policy=str(recommendation["policy"]), metric=str(recommendation["metric"]))
+
+
+def _calibration_profile_key(run: dict[str, Any]) -> str:
+    return "|".join(
+        (
+            _normalize_training_source_name(run.get("training_data_selection_strategy")),
+            f"{float(run.get('teacher_imitation_weight', 0.0)):g}",
+            _run_curriculum_profile_name(run),
+        )
+    )
+
+
+def _run_curriculum_profile_name(run: dict[str, Any]) -> str:
+    value = run.get("teacher_margin_curriculum_profile")
+    if value is None:
+        curriculum = run.get("teacher_curriculum", {})
+        if isinstance(curriculum, dict):
+            value = curriculum.get("profile_name")
+    return _normalize_curriculum_profile_name(None if value is None else str(value))
 
 
 def _select_best_training_run(runs: list[dict[str, Any]], *, policy: str, metric: str) -> dict[str, Any]:
@@ -1367,6 +1725,7 @@ def _best_selection_record(
     gate_failed_selection = _teacher_quality_gate_failed(best_run)
     source = _normalize_training_source_name(best_run.get("training_data_selection_strategy"))
     teacher_weight = float(best_run.get("teacher_imitation_weight", 0.0))
+    curriculum_profile = _run_curriculum_profile_name(best_run)
     metric_value = _training_run_metric(best_run, policy=policy, metric=metric)
     reason_codes = ["selected_best_run"]
     if gate_failed_selection:
@@ -1378,6 +1737,7 @@ def _best_selection_record(
         "value": metric_value,
         "source_selection_strategy": source,
         "teacher_imitation_weight": teacher_weight,
+        "teacher_margin_curriculum_profile": curriculum_profile,
         "gate_status": gate_status,
         "gate_failed_selection": gate_failed_selection,
         "reason_codes": reason_codes,
@@ -1397,6 +1757,7 @@ def _excluded_run_record(run: dict[str, Any], *, policy: str, metric: str) -> di
         "seed": run.get("seed"),
         "source_selection_strategy": _normalize_training_source_name(run.get("training_data_selection_strategy")),
         "teacher_imitation_weight": float(run.get("teacher_imitation_weight", 0.0)),
+        "teacher_margin_curriculum_profile": _run_curriculum_profile_name(run),
         "gate_status": _teacher_quality_gate_status(run),
         "metric_value": _training_run_metric(run, policy=policy, metric=metric),
         "reason_codes": ["teacher_quality_gate_failed"],

@@ -36,6 +36,10 @@ It is intentionally file based so the runner does not import external projects.
   config. `bucket_weights` may set `high`, `medium`, `low`, and `missing`
   supervision weights; weights of `0.0` ignore that bucket. Unreachable,
   padding, and missing teacher action labels remain invalid supervision.
+- `train.teacher_margin_curriculum_profiles`: optional curriculum profile
+  matrix. Entries may be built-in names `high_only`, `high_medium`, and
+  `soft_all_valid`, or objects with `name` and `bucket_weights`. Profiles only
+  weight the auxiliary teacher imitation loss; PPO remains the main path.
 
 `train.architecture` and `train.architectures` are compatible with older
 single-architecture manifests. `train.architecture` keeps the previous default
@@ -55,12 +59,13 @@ With `outputs.root`, matrix checkpoints are derived as:
 
 `train.checkpoint` and `train.loss_log` may use `{architecture}` and `{seed}`
 placeholders. They may also use `{selection_strategy}` and
-`{teacher_imitation_weight}` placeholders for feedback-aware distillation
-matrix runs. For matrix or multi-seed runs, placeholders in parent directories
-are treated as output dimensions. If an explicit path does not place
-architecture, seed, source, or teacher weight in parent directories, the runner
-appends the missing directories to avoid overwriting checkpoints, loss logs,
-and sidecar summaries.
+`{teacher_imitation_weight}` and `{teacher_margin_curriculum_profile}`
+placeholders for feedback-aware distillation matrix runs. For matrix or
+multi-seed runs, placeholders in parent directories are treated as output
+dimensions. If an explicit path does not place architecture, seed, source,
+teacher weight, or curriculum profile in parent directories, the runner appends
+the missing directories to avoid overwriting checkpoints, loss logs, and
+sidecar summaries.
 
 ## Stable Report Sections
 
@@ -91,7 +96,16 @@ baseline sections. The current benchmark hardening fields add:
   metadata. Runs with `teacher_quality_gates.status=failed` are excluded from
   default best-run selection when any non-failed run is available; manifests
   without `teacher_quality_gates` keep legacy best-metric behavior.
+- Feedback-aware distillation calibration v5 adds group-level
+  `calibration_recommendation` over source, teacher weight, curriculum profile,
+  and seed. `distillation_matrix` records `teacher_margin_curriculum_profile`
+  and per-run `confidence_calibration`; `distillation_stability_summary`
+  includes the profile dimension when profiles are configured.
+- `feedback_aware_confidence_calibration` records teacher action probability,
+  teacher-label NLL, margin-bucket confidence-vs-agreement, and low-margin
+  overconfidence warnings for trained policy evaluation.
 
 The JSON summary exposes matching machine-readable keys:
 `policy_ranking`, `baseline_deltas`, `per_group_winners`, `failure_scenarios`,
-`gate_summary`, `distillation_matrix`, and `distillation_stability_summary`.
+`gate_summary`, `distillation_matrix`, `distillation_stability_summary`, and
+`calibration_recommendation`.

@@ -736,6 +736,28 @@ class BenchmarkDocumentationTests(unittest.TestCase):
         ):
             self.assertIn(text, progress_doc)
 
+    def test_manifest_docs_and_tracked_manifest_define_calibration_v5_controls(self):
+        manifest_doc = (ROOT / "docs" / "experiment-manifest.md").read_text(encoding="utf-8")
+        progress_doc = (ROOT / "docs" / "network-architecture-v1.1-progress.md").read_text(encoding="utf-8")
+        manifest_path = ROOT / "data" / "manifests" / "feedback_aware_distillation_calibration_v5.json"
+
+        self.assertTrue(manifest_path.exists())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        train = manifest["train"]
+
+        for text in (
+            "`train.teacher_margin_curriculum_profiles`",
+            "`calibration_recommendation`",
+            "`feedback_aware_confidence_calibration`",
+            "`teacher_margin_curriculum_profile`",
+        ):
+            self.assertIn(text, manifest_doc)
+        self.assertIn("Distillation Calibration v5", progress_doc)
+        self.assertEqual(train["source_selection_strategies"], ["coverage_heuristic", "feedback_aware"])
+        self.assertIn("high_only", train["teacher_margin_curriculum_profiles"])
+        self.assertIn("soft_all_valid", train["teacher_margin_curriculum_profiles"])
+        self.assertEqual(manifest["metadata"]["benchmark_scope"], "not real-world generalization benchmark")
+
     def test_benchmark_and_manifest_docs_define_current_synthetic_scope(self):
         benchmark_doc = (ROOT / "docs" / "benchmark-readiness.md").read_text(encoding="utf-8")
         manifest_doc = (ROOT / "docs" / "experiment-manifest.md").read_text(encoding="utf-8")

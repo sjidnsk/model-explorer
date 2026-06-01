@@ -532,6 +532,46 @@ class BestCheckpointSelectionTests(unittest.TestCase):
         self.assertFalse(record["gate_failed_selection"])
         self.assertEqual(record["excluded_run_count"], 0)
 
+    def test_calibration_recommendation_can_preserve_legacy_best_run_without_profile_matrix(self):
+        from model_explorer.policy.experiment import _calibration_recommendation, _select_best_training_run
+
+        runs = [
+            {
+                "seed": 11,
+                "checkpoint": "single-best/checkpoint.pt",
+                "training_data_selection_strategy": "coverage_heuristic",
+                "teacher_imitation_weight": 0.0,
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.95}},
+            },
+            {
+                "seed": 13,
+                "checkpoint": "stable-a/checkpoint.pt",
+                "training_data_selection_strategy": "feedback_aware",
+                "teacher_imitation_weight": 0.0,
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.70}},
+            },
+            {
+                "seed": 17,
+                "checkpoint": "stable-b/checkpoint.pt",
+                "training_data_selection_strategy": "feedback_aware",
+                "teacher_imitation_weight": 0.0,
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.70}},
+            },
+        ]
+
+        best = _select_best_training_run(runs, policy="torch_policy", metric="final_coverage_rate")
+        recommendation = _calibration_recommendation(
+            runs,
+            policy="torch_policy",
+            metric="final_coverage_rate",
+            selected_run=best,
+        )
+
+        self.assertEqual(best["checkpoint"], "single-best/checkpoint.pt")
+        self.assertEqual(recommendation["recommended_checkpoint"], "single-best/checkpoint.pt")
+        self.assertEqual(recommendation["mode"], "legacy_best_run")
+        self.assertIn("legacy_best_run_selection", recommendation["profile_selection_reason_codes"])
+
     def test_distillation_matrix_records_selection_and_exclusion_reasons(self):
         from model_explorer.policy.experiment import (
             _distillation_stability_summary,
@@ -626,6 +666,162 @@ class BestCheckpointSelectionTests(unittest.TestCase):
         )
         self.assertEqual(
             feedback_summary["margin_bucket_agreement"]["high"]["action_agreement_rate"]["mean"],
+            0.5,
+        )
+
+    def test_calibration_recommendation_selects_gate_passing_profile_before_checkpoint(self):
+        from model_explorer.policy.experiment import _calibration_recommendation
+
+        runs = [
+            {
+                "seed": 11,
+                "checkpoint": "soft-all/seed-11/checkpoint.pt",
+                "training_data_selection_strategy": "feedback_aware",
+                "teacher_imitation_weight": 0.1,
+                "teacher_margin_curriculum_profile": "soft_all_valid",
+                "teacher_quality_gates": {"status": "failed"},
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.95}},
+            },
+            {
+                "seed": 13,
+                "checkpoint": "high-only/seed-13/checkpoint.pt",
+                "training_data_selection_strategy": "feedback_aware",
+                "teacher_imitation_weight": 0.1,
+                "teacher_margin_curriculum_profile": "high_only",
+                "teacher_quality_gates": {"status": "passed"},
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.40}},
+            },
+            {
+                "seed": 17,
+                "checkpoint": "high-only/seed-17/checkpoint.pt",
+                "training_data_selection_strategy": "feedback_aware",
+                "teacher_imitation_weight": 0.1,
+                "teacher_margin_curriculum_profile": "high_only",
+                "teacher_quality_gates": {"status": "passed"},
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.60}},
+            },
+        ]
+
+        recommendation = _calibration_recommendation(
+            runs,
+            policy="torch_policy",
+            metric="final_coverage_rate",
+        )
+
+        self.assertEqual(recommendation["teacher_margin_curriculum_profile"], "high_only")
+        self.assertEqual(recommendation["recommended_checkpoint"], "high-only/seed-17/checkpoint.pt")
+        self.assertFalse(recommendation["gate_failed_selection"])
+        self.assertFalse(recommendation["inconclusive"])
+        self.assertIn("selected_best_profile", recommendation["profile_selection_reason_codes"])
+        self.assertEqual(recommendation["excluded_profile_count"], 1)
+        self.assertEqual(
+            recommendation["excluded_profiles"][0]["reason_codes"],
+            ["teacher_quality_gate_failed"],
+        )
+
+    def test_calibration_recommendation_marks_all_failed_profile_selection(self):
+        from model_explorer.policy.experiment import _calibration_recommendation
+
+        runs = [
+            {
+                "seed": 11,
+                "checkpoint": "high-only/seed-11/checkpoint.pt",
+                "training_data_selection_strategy": "feedback_aware",
+                "teacher_imitation_weight": 0.1,
+                "teacher_margin_curriculum_profile": "high_only",
+                "teacher_quality_gates": {"status": "failed"},
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.40}},
+            },
+            {
+                "seed": 13,
+                "checkpoint": "soft-all/seed-13/checkpoint.pt",
+                "training_data_selection_strategy": "feedback_aware",
+                "teacher_imitation_weight": 0.1,
+                "teacher_margin_curriculum_profile": "soft_all_valid",
+                "teacher_quality_gates": {"status": "failed"},
+                "validation_evaluation": {"torch_policy": {"final_coverage_rate": 0.60}},
+            },
+        ]
+
+        recommendation = _calibration_recommendation(
+            runs,
+            policy="torch_policy",
+            metric="final_coverage_rate",
+        )
+
+        self.assertEqual(recommendation["teacher_margin_curriculum_profile"], "soft_all_valid")
+        self.assertEqual(recommendation["recommended_checkpoint"], "soft-all/seed-13/checkpoint.pt")
+        self.assertTrue(recommendation["gate_failed_selection"])
+        self.assertIn("gate_failed_selection", recommendation["profile_selection_reason_codes"])
+        self.assertEqual(recommendation["eligible_profile_count"], 0)
+
+    def test_distillation_stability_summary_groups_by_curriculum_profile_and_confidence(self):
+        from model_explorer.policy.experiment import _distillation_stability_summary
+
+        runs = [
+            {
+                "seed": 11,
+                "training_data_selection_strategy": "feedback_aware",
+                "teacher_imitation_weight": 0.1,
+                "teacher_margin_curriculum_profile": "high_only",
+                "teacher_quality_gates": {"status": "passed"},
+                "validation_evaluation": {
+                    "torch_policy": {
+                        "feedback_aware_action_agreement_rate": 1.0,
+                        "feedback_aware_confidence_calibration": {
+                            "teacher_action_probability": {"mean": 0.8},
+                            "teacher_label_nll": {"mean": 0.25},
+                            "margin_buckets": {
+                                "high": {
+                                    "agreement_rate": 1.0,
+                                    "teacher_action_probability": {"mean": 0.8},
+                                    "teacher_label_nll": {"mean": 0.25},
+                                }
+                            },
+                        },
+                    }
+                },
+            },
+            {
+                "seed": 13,
+                "training_data_selection_strategy": "feedback_aware",
+                "teacher_imitation_weight": 0.1,
+                "teacher_margin_curriculum_profile": "high_only",
+                "teacher_quality_gates": {"status": "passed"},
+                "validation_evaluation": {
+                    "torch_policy": {
+                        "feedback_aware_action_agreement_rate": 0.0,
+                        "feedback_aware_confidence_calibration": {
+                            "teacher_action_probability": {"mean": 0.4},
+                            "teacher_label_nll": {"mean": 1.0},
+                            "margin_buckets": {
+                                "high": {
+                                    "agreement_rate": 0.0,
+                                    "teacher_action_probability": {"mean": 0.4},
+                                    "teacher_label_nll": {"mean": 1.0},
+                                }
+                            },
+                        },
+                    }
+                },
+            },
+        ]
+
+        stability = _distillation_stability_summary(runs)
+        profile_summary = stability["feedback_aware"]["0.1"]["high_only"]
+
+        self.assertEqual(profile_summary["run_count"], 2)
+        self.assertEqual(profile_summary["seed_count"], 2)
+        self.assertEqual(
+            profile_summary["confidence_calibration"]["teacher_action_probability"]["mean"],
+            0.6000000000000001,
+        )
+        self.assertEqual(
+            profile_summary["confidence_calibration"]["teacher_label_nll"]["mean"],
+            0.625,
+        )
+        self.assertEqual(
+            profile_summary["confidence_calibration"]["margin_buckets"]["high"]["agreement_rate"]["mean"],
             0.5,
         )
 
@@ -998,6 +1194,90 @@ class TrainingClosureTests(unittest.TestCase):
             bucket_stats,
         )
         self.assertIn("teacher_curriculum", checkpoint["metadata"])
+
+    def test_teacher_curriculum_records_profile_name_in_summary_and_checkpoint(self):
+        import torch
+
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.training import train_policy_on_episodes
+
+        episode = collect_rollout_episode(
+            [
+                load_contract_from_dict(
+                    minimal_contract(
+                        goals=[
+                            {"cell": [1, 1], "utility": 0.5, "reachable": True},
+                            {"cell": [2, 1], "utility": 0.4, "reachable": True},
+                        ],
+                        observation_update={"coverage_rate_delta": 0.1},
+                    )
+                )
+            ],
+            max_candidates=2,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "profile-policy.pt"
+            result = train_policy_on_episodes(
+                [episode],
+                checkpoint_path=checkpoint_path,
+                seed=47,
+                hidden_size=16,
+                epochs=1,
+                teacher_imitation_weight=0.1,
+                teacher_margin_weighting={
+                    "profile_name": "high_only",
+                    "bucket_weights": {"high": 1.0, "medium": 0.0, "low": 0.0, "missing": 0.0},
+                },
+            )
+            checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+        self.assertEqual(result["teacher_curriculum"]["profile_name"], "high_only")
+        self.assertEqual(
+            checkpoint["metadata"]["teacher_curriculum"]["profile_name"],
+            "high_only",
+        )
+
+    def test_policy_evaluation_records_teacher_action_probability_and_nll_by_margin_bucket(self):
+        from model_explorer.policy.evaluation import evaluate_policy_baselines
+        from model_explorer.policy.planning import PathPlanResult
+
+        class FixedPlanner:
+            def plan(self, request):
+                if request.action_index == 0:
+                    return PathPlanResult(feasible=False, failure_reason="path_blocked")
+                return PathPlanResult(feasible=True, path_cost=1.0, path_length=1.0, risk=0.0)
+
+        class FixedPolicy:
+            def score(self, observation):
+                return (0.0, 2.0)
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [1, 1], "utility": 0.9, "reachable": True, "expected_coverage_rate_delta": 0.9},
+                    {"cell": [2, 1], "utility": 0.2, "reachable": True, "expected_coverage_rate_delta": 0.2},
+                ],
+                observation_update={"coverage_rate": 0.2, "coverage_rate_delta": 0.1},
+            )
+        )
+
+        report = evaluate_policy_baselines(
+            [contract],
+            torch_policy=FixedPolicy(),
+            planning_adapter=FixedPlanner(),
+        )
+        torch_metrics = report["torch_policy"]
+        diagnostic = torch_metrics["action_diagnostics"][0]
+        calibration = torch_metrics["feedback_aware_confidence_calibration"]
+
+        self.assertGreater(diagnostic["feedback_aware_teacher_action_probability"], 0.5)
+        self.assertLess(diagnostic["feedback_aware_teacher_label_nll"], 1.0)
+        self.assertEqual(calibration["comparison_count"], 1)
+        self.assertEqual(calibration["margin_buckets"]["high"]["comparison_count"], 1)
+        self.assertEqual(calibration["margin_buckets"]["high"]["agreement_rate"], 1.0)
+        self.assertGreater(calibration["teacher_action_probability"]["mean"], 0.5)
+        self.assertLess(calibration["teacher_label_nll"]["mean"], 1.0)
 
     def test_mlp_missing_architecture_trains_saves_and_loads_from_checkpoint(self):
         import torch
@@ -1683,6 +1963,107 @@ class TrainingClosureTests(unittest.TestCase):
         self.assertIn("## Distillation Matrix", report)
         self.assertIn("| feedback_aware | 0.1 |", report)
         self.assertIn("not a real-world generalization benchmark", report)
+
+    def test_experiment_runs_curriculum_profile_matrix_and_recommends_profile(self):
+        from model_explorer.policy.experiment import run_experiment_manifest
+
+        train_payload = {
+            "metadata": {
+                "dataset_id": "fixture_lola",
+                "data_class": "quasi_real",
+                "region": "lunar_south_pole",
+                "mask_stress_augmented": True,
+            },
+            "snapshots": [
+                minimal_contract(
+                    goals=[
+                        {"cell": [1, 1], "utility": 0.6, "reachable": True, "expected_coverage_rate_delta": 0.2},
+                        {"cell": [2, 1], "utility": 0.5, "reachable": True, "expected_coverage_rate_delta": 0.6},
+                    ],
+                    observation_update={"coverage_rate": 0.2, "coverage_rate_delta": 0.2},
+                )
+            ],
+        }
+        validation_payload = {
+            "metadata": dict(train_payload["metadata"]),
+            "snapshots": [
+                minimal_contract(
+                    goals=[
+                        {"cell": [1, 2], "utility": 0.6, "reachable": True, "expected_coverage_rate_delta": 0.2},
+                        {"cell": [2, 2], "utility": 0.5, "reachable": True, "expected_coverage_rate_delta": 0.6},
+                    ],
+                    observation_update={"coverage_rate": 0.3, "coverage_rate_delta": 0.1},
+                )
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            train_path = Path(tmpdir) / "train.json"
+            validation_path = Path(tmpdir) / "validation.json"
+            train_path.write_text(json.dumps(train_payload), encoding="utf-8")
+            validation_path.write_text(json.dumps(validation_payload), encoding="utf-8")
+            output_root = Path(tmpdir) / "out"
+            manifest_path = Path(tmpdir) / "experiment.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "name": "calibration-v5",
+                        "run_id": "run-001",
+                        "splits": {
+                            "train": [str(train_path)],
+                            "validation": [str(validation_path)],
+                        },
+                        "planner": {"backend": "contract_cost"},
+                        "max_candidates": 2,
+                        "outputs": {"root": str(output_root)},
+                        "train": {
+                            "seeds": [53, 59],
+                            "hidden_size": 16,
+                            "epochs": 1,
+                            "teacher_imitation_weight": 0.1,
+                            "source_selection_strategies": ["feedback_aware"],
+                            "teacher_margin_curriculum_profiles": ["high_only", "soft_all_valid"],
+                            "teacher_quality_gates": {
+                                "min_feedback_aware_sample_count": 1,
+                                "min_teacher_high_margin_sample_count": 0,
+                                "max_missing_teacher_signal_rate": 0.0,
+                                "max_low_margin_only_dataset_rate": 1.0,
+                            },
+                            "evaluate_trained_policy": True,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_experiment_manifest(manifest_path)
+            run_dir = output_root / "calibration-v5" / "run-001"
+            training_summary_paths = sorted(
+                run_dir.glob("curriculum-profile-*/seed-*/training-summary.json")
+            )
+
+        training = summary["training"]
+        self.assertEqual(training["run_count"], 4)
+        self.assertEqual(len(training_summary_paths), 4)
+        self.assertEqual(training["teacher_margin_curriculum_profiles"], ["high_only", "soft_all_valid"])
+        self.assertIn("calibration_recommendation", training)
+        recommendation = training["calibration_recommendation"]
+        self.assertIn(recommendation["teacher_margin_curriculum_profile"], {"high_only", "soft_all_valid"})
+        self.assertIn("selected_best_profile", recommendation["profile_selection_reason_codes"])
+        self.assertIn("recommended_checkpoint", recommendation)
+        profiles = {
+            record["teacher_margin_curriculum_profile"]
+            for record in training["distillation_matrix"]
+        }
+        self.assertEqual(profiles, {"high_only", "soft_all_valid"})
+        self.assertIn("high_only", training["distillation_stability_summary"]["feedback_aware"]["0.1"])
+        self.assertIn("soft_all_valid", training["distillation_stability_summary"]["feedback_aware"]["0.1"])
+        for record in training["distillation_matrix"]:
+            self.assertIn("confidence_calibration", record)
+            self.assertEqual(
+                record["evaluation_scope"],
+                "calibration evidence; not real-world generalization benchmark",
+            )
 
 
 if __name__ == "__main__":

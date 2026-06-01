@@ -1,0 +1,101 @@
+{
+  "schema_version": "model-explorer-quasi-real-evaluation/v1",
+  "name": "feedback-aware-distillation-calibration-v5",
+  "run_id": "roi32-calibration-v5",
+  "dataset_manifest": "lunar_south_pole_lro_lola_gdr_875s_20m.json",
+  "output_root": "../processed/qreal_distillation_calibration_v5",
+  "candidate_count": 8,
+  "episode_count": 1,
+  "seed": 20260601,
+  "metadata": {
+    "data_class": "quasi_real",
+    "mask_stress_augmented": true,
+    "benchmark_scope": "not real-world generalization benchmark",
+    "purpose": "feedback-aware distillation calibration control plane"
+  },
+  "rois": [
+    {
+      "name": "smooth_high_confidence",
+      "split": "train",
+      "roi_x": 3700,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "train",
+      "roi_x": 3900,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6
+    },
+    {
+      "name": "low_observation_count",
+      "split": "validation",
+      "roi_x": 20,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32
+    },
+    {
+      "name": "mixed_risk",
+      "split": "test",
+      "roi_x": 3600,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32
+    }
+  ],
+  "mask_stress": {
+    "enabled": true,
+    "label": "mask_stress_augmented",
+    "profile": "deterministic-v1",
+    "unreachable_candidate_count": 1,
+    "missing_experimental_fields": [
+      "risk",
+      "path_cost",
+      "energy_cost"
+    ]
+  },
+  "dataset_validation": {
+    "min_trainable_transition_count": 4,
+    "require_finite_reward": true,
+    "min_action_mask_valid_mean": 0.1,
+    "max_unreachable_candidate_rate": 0.95,
+    "min_unreachable_candidate_count": 1,
+    "min_mask_stress_sample_count": 1
+  },
+  "train": {
+    "seeds": [
+      20260601,
+      20260602
+    ],
+    "architecture": "mlp_v1",
+    "hidden_size": 16,
+    "learning_rate": 0.001,
+    "epochs": 1,
+    "evaluate_trained_policy": true,
+    "source_selection_strategies": [
+      "coverage_heuristic",
+      "feedback_aware"
+    ],
+    "teacher_imitation_weights": [
+      0.0,
+      0.1
+    ],
+    "teacher_margin_curriculum_profiles": [
+      "high_only",
+      "high_medium",
+      "soft_all_valid"
+    ],
+    "teacher_quality_gates": {
+      "min_feedback_aware_sample_count": 1,
+      "min_teacher_high_margin_sample_count": 0,
+      "max_missing_teacher_signal_rate": 0.0,
+      "max_low_margin_only_dataset_rate": 1.0
+    }
+  }
+}

@@ -57,13 +57,18 @@ def evaluate_policy_baselines(
         )
         if feedback_metrics is not None:
             torch_metrics.update(_policy_agreement_metrics(torch_metrics, feedback_metrics, "feedback_aware"))
-        torch_metrics["action_diagnostics"] = _policy_action_diagnostics(
+        action_diagnostics = _policy_action_diagnostics(
             snapshots,
             torch_policy,
             utility_metrics=utility_metrics,
             coverage_metrics=coverage_metrics,
             feedback_metrics=feedback_metrics,
         )
+        torch_metrics["action_diagnostics"] = action_diagnostics
+        if feedback_metrics is not None:
+            torch_metrics["feedback_aware_confidence_calibration"] = _confidence_calibration_summary(
+                action_diagnostics
+            )
         report["torch_policy"] = torch_metrics
     return report
 
@@ -784,12 +789,21 @@ def _policy_action_diagnostics(
                 feedback_ranking,
                 None if selected_index < 0 else selected_index,
             )
+            feedback_margin = _float_at(feedback_margins, step_index)
+            teacher_probability = (
+                probabilities[feedback_index]
+                if feedback_index is not None and 0 <= feedback_index < len(probabilities)
+                else 0.0
+            )
             record.update(
                 {
                     "feedback_aware_action_index": feedback_index,
                     "feedback_aware_selected_cell": feedback_cell,
                     "feedback_aware_teacher_rank": feedback_teacher_rank,
-                    "feedback_aware_teacher_score_margin": _float_at(feedback_margins, step_index),
+                    "feedback_aware_teacher_score_margin": feedback_margin,
+                    "feedback_aware_margin_bucket": _teacher_margin_bucket(feedback_margin),
+                    "feedback_aware_teacher_action_probability": _finite_float(teacher_probability),
+                    "feedback_aware_teacher_label_nll": _negative_log_probability(teacher_probability),
                     "agrees_with_feedback_aware": selected_cell == feedback_cell,
                     "action_agrees_with_feedback_aware": (
                         (None if selected_index < 0 else selected_index) == feedback_index
@@ -804,6 +818,104 @@ def _policy_action_diagnostics(
             )
         diagnostics.append(record)
     return diagnostics
+
+
+def _confidence_calibration_summary(diagnostics: list[dict[str, Any]]) -> dict[str, Any]:
+    records = [
+        record
+        for record in diagnostics
+        if _index_at([record.get("feedback_aware_action_index")], 0) is not None
+    ]
+    bucket_records = {
+        bucket: [
+            record
+            for record in records
+            if str(record.get("feedback_aware_margin_bucket", "missing")) == bucket
+        ]
+        for bucket in _TEACHER_MARGIN_BUCKETS
+    }
+    low_records = bucket_records.get("low", [])
+    low_overconfident = _overconfident_count(low_records)
+    return {
+        "comparison_count": len(records),
+        "teacher_action_probability": _numeric_summary(
+            _optional_float(record.get("feedback_aware_teacher_action_probability")) for record in records
+        ),
+        "teacher_label_nll": _numeric_summary(
+            _optional_float(record.get("feedback_aware_teacher_label_nll")) for record in records
+        ),
+        "selected_action_probability": _numeric_summary(
+            _optional_float(record.get("selected_action_probability")) for record in records
+        ),
+        "action_agreement_rate": _agreement_rate(records),
+        "low_margin_overconfident_count": low_overconfident,
+        "low_margin_overconfident_rate": low_overconfident / len(low_records) if low_records else 0.0,
+        "warnings": ["low_margin_overconfidence"] if low_overconfident else [],
+        "margin_buckets": {
+            bucket: _confidence_bucket_summary(bucket_rows)
+            for bucket, bucket_rows in bucket_records.items()
+        },
+    }
+
+
+def _confidence_bucket_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    overconfident = _overconfident_count(records)
+    return {
+        "comparison_count": len(records),
+        "agreement_rate": _agreement_rate(records),
+        "teacher_action_probability": _numeric_summary(
+            _optional_float(record.get("feedback_aware_teacher_action_probability")) for record in records
+        ),
+        "teacher_label_nll": _numeric_summary(
+            _optional_float(record.get("feedback_aware_teacher_label_nll")) for record in records
+        ),
+        "selected_action_probability": _numeric_summary(
+            _optional_float(record.get("selected_action_probability")) for record in records
+        ),
+        "overconfident_count": overconfident,
+        "overconfident_rate": overconfident / len(records) if records else 0.0,
+    }
+
+
+def _agreement_rate(records: list[dict[str, Any]]) -> float:
+    if not records:
+        return 0.0
+    count = sum(1 for record in records if bool(record.get("action_agrees_with_feedback_aware")))
+    return _finite_float(count / len(records))
+
+
+def _overconfident_count(records: list[dict[str, Any]]) -> int:
+    count = 0
+    for record in records:
+        if bool(record.get("action_agrees_with_feedback_aware")):
+            continue
+        selected_probability = _optional_float(record.get("selected_action_probability")) or 0.0
+        teacher_probability = _optional_float(record.get("feedback_aware_teacher_action_probability")) or 0.0
+        if selected_probability >= 0.5 and selected_probability > teacher_probability:
+            count += 1
+    return count
+
+
+def _numeric_summary(values: Iterable[float | None]) -> dict[str, float]:
+    numbers = tuple(value for value in values if value is not None and isfinite(float(value)))
+    if not numbers:
+        return {"count": 0, "mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0}
+    average = sum(numbers) / len(numbers)
+    variance = sum((value - average) ** 2 for value in numbers) / len(numbers)
+    return {
+        "count": len(numbers),
+        "mean": _finite_float(average),
+        "std": _finite_float(variance ** 0.5),
+        "min": _finite_float(min(numbers)),
+        "max": _finite_float(max(numbers)),
+    }
+
+
+def _negative_log_probability(probability: float | None) -> float | None:
+    if probability is None:
+        return None
+    probability = max(min(_finite_float(probability), 1.0), 1.0e-12)
+    return _finite_float(-log(probability))
 
 
 def _policy_scores(policy, observation, *, expected_count: int) -> tuple[float, ...] | None:

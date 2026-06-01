@@ -559,6 +559,7 @@ def _normalize_teacher_margin_weighting(value: dict[str, Any] | None) -> dict[st
     if value is None:
         return {
             "enabled": False,
+            "profile_name": "default",
             "configured": {},
             "bucket_weights": dict(default_weights),
             "teacher_low_margin_threshold": _TEACHER_LOW_MARGIN_THRESHOLD,
@@ -577,8 +578,10 @@ def _normalize_teacher_margin_weighting(value: dict[str, Any] | None) -> dict[st
     bucket_weights = dict(default_weights)
     for bucket_name, weight in raw_bucket_weights.items():
         bucket_weights[str(bucket_name)] = max(0.0, _safe_float(weight))
+    profile_name = str(value.get("profile_name", "custom")).strip() or "custom"
     return {
         "enabled": True,
+        "profile_name": profile_name,
         "configured": dict(value),
         "bucket_weights": bucket_weights,
         "teacher_low_margin_threshold": _TEACHER_LOW_MARGIN_THRESHOLD,
@@ -652,6 +655,7 @@ def _teacher_curriculum_summary(
             bucket["ignored_teacher_label_count"] += 1
     return {
         "enabled": bool(teacher_margin_weighting.get("enabled", False)),
+        "profile_name": str(teacher_margin_weighting.get("profile_name", "default")),
         "teacher_margin_weighting": {
             "bucket_weights": bucket_weights,
             "teacher_low_margin_threshold": _TEACHER_LOW_MARGIN_THRESHOLD,
