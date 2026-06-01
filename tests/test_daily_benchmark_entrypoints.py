@@ -132,6 +132,78 @@ class ExperimentCliEntrypointTests(unittest.TestCase):
         self.assertEqual(error["status"], "error")
         self.assertIn("scenarios", error["message"])
 
+    def test_path_feedback_cli_validate_dry_run_and_run_write_outputs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            contract_path = root / "scenario.json"
+            sidecar_path = root / "sidecar.json"
+            route_path = root / "route.json"
+            manifest_path = root / "path-feedback.json"
+            summary_path = root / "summary.json"
+            report_path = root / "summary.md"
+            contract_path.write_text(json.dumps(minimal_contract()), encoding="utf-8")
+            sidecar_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "path-planner-sidecar/v1",
+                        "grid": {
+                            "width": 6,
+                            "height": 5,
+                            "resolution": 0.5,
+                            "frame_id": "moon_local",
+                            "origin": [0.0, 0.0],
+                        },
+                        "cost": [[1.0 for _ in range(6)] for _ in range(5)],
+                        "passable_mask": [[True for _ in range(6)] for _ in range(5)],
+                        "metadata": {"scenario_id": "cli-path-feedback"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            route_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "path-planner-route/v1",
+                        "reachable": True,
+                        "path_cost": 2.0,
+                        "failure_reason": None,
+                        "geometric_path": {"cells": [[0, 0], [2, 1]], "world": [[0.0, 0.0], [1.0, 0.5]]},
+                        "diagnostics": {"path_length_m": 1.2, "search_mode": "platform_aware_astar"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "path-feedback-manifest/v1",
+                        "top_k": 1,
+                        "scenarios": [
+                            {
+                                "scenario_id": "cli-path-feedback",
+                                "contract": "scenario.json",
+                                "sidecar": "sidecar.json",
+                                "route_fixtures": {"0": "route.json"},
+                            }
+                        ],
+                        "outputs": {"summary": str(summary_path), "report": str(report_path)},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            validate = run_module(["path-feedback", "validate", str(manifest_path)])
+            dry_run = run_module(["path-feedback", "dry-run", str(manifest_path)])
+            run = run_module(["path-feedback", "run", str(manifest_path)])
+
+            self.assertEqual(json.loads(validate.stdout)["status"], "valid")
+            self.assertEqual(json.loads(dry_run.stdout)["status"], "dry_run")
+            run_summary = json.loads(run.stdout)
+            self.assertEqual(run_summary["scenario_count"], 1)
+            self.assertFalse(run_summary["open_grid_fallback_used"])
+            self.assertTrue(summary_path.exists())
+            self.assertTrue(report_path.exists())
+
     def test_experiment_dry_run_training_matrix_does_not_import_torch(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

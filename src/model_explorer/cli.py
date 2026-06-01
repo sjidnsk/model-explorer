@@ -15,6 +15,11 @@ from .policy.experiment import (
     run_experiment_manifest,
     validate_experiment_manifest,
 )
+from .policy.path_feedback import (
+    dry_run_path_feedback_manifest,
+    run_path_feedback_manifest,
+    validate_path_feedback_manifest,
+)
 from .data.evaluation_matrix import (
     dry_run_quasi_real_evaluation_manifest,
     run_quasi_real_evaluation_manifest,
@@ -43,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _main(args_list: list[str]) -> int:
-    if args_list and args_list[0] not in {"experiment", "benchmark", "quasi-real", "verify", "-h", "--help"}:
+    if args_list and args_list[0] not in {"experiment", "benchmark", "path-feedback", "quasi-real", "verify", "-h", "--help"}:
         return _run_legacy_scenario(args_list)
 
     parser = argparse.ArgumentParser(description="model-explorer benchmark and orchestration entrypoint.")
@@ -63,6 +68,15 @@ def _main(args_list: list[str]) -> int:
     generate_parser.add_argument("--scenario-count", type=int, default=1)
     generate_parser.add_argument("--group", choices=BENCHMARK_GROUPS, action="append", default=None)
     generate_parser.add_argument("--difficulty", choices=("easy", "medium", "hard"), default="medium")
+
+    path_feedback_parser = subparsers.add_parser(
+        "path-feedback",
+        help="Run semi-real path feedback summaries from contract + sidecar manifests.",
+    )
+    path_feedback_subparsers = path_feedback_parser.add_subparsers(dest="path_feedback_command", required=True)
+    for command in ("run", "validate", "dry-run"):
+        command_parser = path_feedback_subparsers.add_parser(command)
+        command_parser.add_argument("manifest", type=Path, help="Path to path-feedback manifest JSON.")
 
     quasi_real_parser = subparsers.add_parser("quasi-real", help="Quasi-real LOLA evaluation matrix utilities.")
     quasi_real_subparsers = quasi_real_parser.add_subparsers(dest="quasi_real_command", required=True)
@@ -98,6 +112,14 @@ def _main(args_list: list[str]) -> int:
                 difficulty=args.difficulty,
             )
         )
+        return 0
+    if args.command == "path-feedback":
+        if args.path_feedback_command == "run":
+            _print_json(run_path_feedback_manifest(args.manifest))
+        elif args.path_feedback_command == "validate":
+            _print_json(validate_path_feedback_manifest(args.manifest))
+        elif args.path_feedback_command == "dry-run":
+            _print_json(dry_run_path_feedback_manifest(args.manifest))
         return 0
     if args.command == "quasi-real":
         if args.quasi_real_command == "run":

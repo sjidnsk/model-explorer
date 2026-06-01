@@ -304,6 +304,9 @@ def _planner_config_with_sidecar(config: Any, *, base_dir: Path) -> dict[str, An
         planner_config["passable_grid"] = (
             sidecar_payload["passable_grid"] if isinstance(sidecar_payload, dict) else sidecar_payload
         )
+    path_planner_sidecar = planner_config.get("path_planner_sidecar")
+    if path_planner_sidecar is not None:
+        planner_config["path_planner_sidecar"] = str(_resolve_path(base_dir, path_planner_sidecar))
     return planner_config
 
 

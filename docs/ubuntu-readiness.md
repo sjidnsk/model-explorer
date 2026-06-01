@@ -60,6 +60,6 @@ Ubuntu 目标验证：
 
 - 使用上面的 Linux shell 命令重新验证。
 - 只在需要训练 smoke 时安装 PyTorch，然后通过 `PYTHONPATH=src` 运行训练入口。
-- 确认没有引入 `a_gcs_ws`、`dev-platform-constraints` 或 Windows-only 入口。
+- 确认没有引入旧执行层 `a_gcs_ws`、直接 import `dev-platform-constraints` 或 Windows-only 入口；`path-planner` 联调应先走 JSON/CLI 边界。
 
 当前 benchmark 是 synthetic smoke / regression suite，不代表真实月面泛化能力。

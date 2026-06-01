@@ -1,6 +1,6 @@
 # 外部接口：model-explorer
 
-本文档定义 `model-explorer` 与 `dev-platform-constraints`、`a_gcs_ws-2.0.1` 的工程接口边界。项目职责边界入口见
+本文档定义 `model-explorer` 与 `dev-platform-constraints`、`path-planner` 的工程接口边界。项目职责边界入口见
 [`../PROJECT_BOUNDARY.md`](../PROJECT_BOUNDARY.md)。
 
 ## 文档定位
@@ -49,47 +49,137 @@ world_y = grid.origin[1] + y * grid.resolution
 - 模拟或应用局部观测更新。
 - 输出契约报告、数据契约报告和实验指标。
 
-`dev-platform-constraints` 不承诺在线重规划、完整自主探索状态机、Hybrid A*、IRIS、GCS 或车辆动力学执行接口。这些能力应由 `model-explorer` 编排或由 `a_gcs_ws-2.0.1` 提供。
+`dev-platform-constraints` 不承诺在线重规划、完整自主探索状态机、Hybrid A*、IRIS、GCS 或车辆动力学执行接口。这些能力应由 `model-explorer` 编排或由 `path-planner` 提供路径评估与执行可行性诊断。
 
-## 与 a_gcs_ws-2.0.1
+## 与 path-planner
 
-`a_gcs_ws-2.0.1` 是执行/局部轨迹层。它不理解完整研究语义地图，也不负责探索目标选择、任务价值、信息增益、可信度融合或观测更新。
+`path-planner` 已取代 `a_gcs_ws-2.0.1` 作为本仓库内的路径执行评估层。它不负责探索目标选择、任务价值、信息增益、可信度融合或观测更新；它消费规划请求，输出可达性、路径、平台约束后处理、安全走廊、跟踪仿真、轨迹优化和 IRIS 区域图诊断。
 
 ### 发送给执行层
 
-`model-explorer` 或适配层需要把上游语义输入转换为执行层需要的几何和约束输入：
+`model-explorer` 或适配层需要把上游语义输入转换为 `path-planner-request/v1`：
 
 | 逻辑字段 | 含义 |
 |---|---|
-| `source_pose` | 起点位姿，至少包含世界坐标位置和航向角 |
-| `target_pose` | 目标位姿，由已选探索目标转换得到 |
-| `path_skeleton` | 可选的局部路径骨架，通常来自全局路径或候选路径 |
-| `obstacle_map` / `c_space` / `workspace_regions` | 从硬约束、障碍、可通行区域或安全走廊适配后的执行层输入 |
-| `vehicle_params` | 车辆几何、速度、加速度、转向和曲率限制 |
-| `trajectory_constraints` | 轨迹级速度、加速度、曲率、连续性和工作空间约束 |
-| `cost_weights` | 时间、路径长度、能量或其他执行层代价权重 |
+| `schema_version` | 固定为 `path-planner-request/v1` |
+| `grid` / `resolution` / `origin` | 从 `model-explorer-contract/v1` 的地图摘要和图层派生 |
+| `start` | 当前平台所在栅格或世界坐标 |
+| `goal` | 已选探索目标转换后的栅格或世界坐标 |
+| `cost` / `passable_mask` | 从 `dev-platform-constraints` 的代价图和硬约束摘要派生 |
+| `terrain_layers` | 可选坡度、崎岖度、光照、可信度等结构化图层 |
+| `platform` / `platform_config` | 平台 key 或来自 `dev-platform-constraints/configs/platforms/` 的配置路径 |
+| `options` | 安全裕度、跟踪误差、仿真、优化、IRIS 区域图等开关 |
 
-这些字段是 `model-explorer` 的适配协议，不要求 `a_gcs_ws-2.0.1` 当前直接暴露同名 JSON API。实现时应映射到该项目已有的数据结构，例如 `SE2ConfigurationSpace`、`EndpointState`、`VehicleParams`、`TrajectoryConstraints` 和 `AckermannGCSPlanner.plan_trajectory(...)`。
+这些字段是 `model-explorer` 的适配协议，实现时应映射到 `path-planner` 现有 JSON loader、CLI 或后续 Python API。`model-explorer` 不直接 import `path_planner`，首版通过 JSON 文件或子进程边界联调，以保持测试夹具和训练 smoke 的轻量性。
 
 ### 从执行层接收
 
-执行层结果应被适配为以下逻辑字段：
+`path-planner-route/v1` 结果应被适配为以下逻辑字段：
 
 | 逻辑字段 | 含义 |
 |---|---|
-| `feasible` | 局部轨迹是否可执行 |
-| `trajectory` / `samples` | 优化轨迹对象或可序列化采样点 |
-| `trajectory_cost` | 执行层报告的轨迹代价或可比较成本 |
-| `path_length` | 轨迹长度或局部路径长度 |
-| `solve_time` | 求解耗时 |
-| `constraint_violations` | 速度、加速度、曲率、工作空间或连续性违反报告 |
-| `solver_status` | 求解器状态或收敛原因 |
+| `feasible` | 通常由 `reachable`、后处理状态和可选仿真/优化状态综合得到 |
+| `geometric_path` / `postprocess.smoothed_path` | 原始 A* 路径和平滑路径 |
+| `path_cost` / `path_length` | 路径代价和长度，用于目标效用惩罚和实验指标 |
+| `diagnostics` | 搜索模式、约束来源、阻塞统计和可解释失败信息 |
+| `postprocess` | 安全走廊、曲率报告、可跟踪路径和跟踪安全报告 |
+| `tracking_simulation_report` | 可选低速纯追踪仿真指标 |
+| `trajectory_optimization_report` | 可选固定走廊轨迹优化结果和 fallback 状态 |
+| `region_graph_report` / `iris_region_report` | 可选 IRIS/区域图诊断；当前不是 GCS 轨迹或车辆可行性证明 |
 | `failure_reason` | 失败、不可达或约束违反的可解释原因 |
 
-`model-explorer` 只能把这些结果用于路径反馈融合、重规划触发和实验指标，不应修改 `a_gcs_ws-2.0.1` 内部求解逻辑。
+`model-explorer` 只能把这些结果用于路径反馈融合、重规划触发和实验指标，不应修改 `path-planner` 内部求解逻辑。
 
 ## 首版集成策略
 
-首版 `model-explorer` 应先以 `dev-platform-constraints` 的 `model-explorer-contract/v1` 为主输入建立最小闭环。`a_gcs_ws-2.0.1` 作为可选局部可执行性检查接入：当全局候选目标已选定，并且需要验证局部轨迹可执行性时，再构造执行层适配请求。
+首版 `model-explorer` 应先以 `dev-platform-constraints` 的 `model-explorer-contract/v1` 为主输入建立最小闭环。`path-planner` 作为路径评估层接入：当候选目标已选定或需要比较 Top-K 目标时，构造 `path-planner-request/v1`，消费 `path-planner-route/v1` 中的可达性、路径代价、后处理和诊断字段。
 
-在完整 Drake、IRIS、GCS 或 Ackermann 链路通过前，Windows 本机只做静态接口核对和轻量验证；最终轨迹链路通过必须在目标 Ubuntu 环境中确认。
+在完整 Drake、IRIS、GCS 或 Ackermann 链路通过前，Windows 本机只做静态接口核对和轻量验证；最终轨迹链路通过必须在目标 Ubuntu 环境中确认。当前推荐的联调顺序是：合同代价代理 -> `path-planner` CLI JSON -> Python API 适配 -> 可选 Drake/IRIS 后端。
+
+## 当前适配实现
+
+`model_explorer.policy.planning.PathPlannerRouteAdapter` 已提供首版 `path_planner_route` 后端：
+
+- 使用 `build_path_planner_request_dict(...)` 从 `ModelExplorerContract`、当前起点和已选目标生成 `path-planner-request/v1`。
+- 使用 `path_plan_result_from_route_dict(...)` 解析 `path-planner-route/v1`，把 `reachable`、`path_cost`、`failure_reason`、`diagnostics`、`postprocess`、`tracking_simulation_report`、`trajectory_optimization_report`、`region_graph_report` 和 `iris_region_report` 映射进 `PathPlanResult.metadata`。
+- 默认通过 `python -m path_planner.cli` 子进程运行 sibling `path-planner`，并通过 `PYTHONPATH=<path-planner>/src` 注入源码路径；`model-explorer` 进程内不直接 import `path_planner`。
+- 测试也支持 `route_json` fixture 模式，用于稳定验证 route 解析和奖励/失败指标反馈。
+
+当前 `model-explorer-contract/v1` 稳定字段只包含地图摘要、候选目标和约束摘要，不包含完整 `cost` 与 `passable_mask` 数组。因此适配器支持两种输入来源：
+
+1. 推荐联调路径：在 planner config 或 `PathPlanRequest.metadata` 中显式提供 `cost` 和 `passable_mask`。
+2. 最小 smoke 路径：缺失数组时生成全 1 代价、全可通行的 open-grid fallback，并在 request metadata 中记录 `cost_source = open_grid_fallback` 和 `passable_mask_source = open_grid_fallback`。
+
+open-grid fallback 只用于接口 smoke 和合成测试，不代表真实月面路径风险。进入 `.npz` 半真实地图验证时，应由 `dev-platform-constraints` 或中间导出脚本提供真实代价图和硬约束掩膜。
+
+### path-planner sidecar
+
+半真实验证推荐使用 `path-planner-sidecar/v1`：
+
+| 字段 | 含义 |
+|---|---|
+| `schema_version` | 固定为 `path-planner-sidecar/v1` |
+| `grid` | `width`、`height`、`resolution`、`origin`、`frame_id` |
+| `cost` | 与 `path-planner-request/v1` 兼容的二维非负代价数组 |
+| `passable_mask` | 与 `cost` 同 shape 的二维 bool 硬约束掩膜 |
+| `terrain_layers` | 可选坡度、崎岖度、光照、可信度、障碍、通行性等诊断层 |
+| `metadata` | 场景 ID、地图来源、平台 key、passable ratio 等 |
+
+`model-explorer` manifest 中可配置：
+
+```json
+{
+  "planner": {
+    "backend": "path_planner_route",
+    "path_planner_sidecar": "outputs/path_planner_sidecars/npz_shadow_corridor.path-planner-sidecar.json"
+  }
+}
+```
+
+`model_explorer.policy.planning.evaluate_candidate_paths(...)` 支持对 Top-K reachable goals 批量调用 `PathPlanningAdapter`，并通过 `path_feedback_summary(...)` 汇总不可达、路径代价、失败原因、重规划需求、postprocess fallback、tracking safety、trajectory optimization 和 region graph 诊断。
+
+`model_explorer.policy.path_feedback` 提供半真实实验 summary 入口。Manifest 示例：
+
+```json
+{
+  "schema_version": "path-feedback-manifest/v1",
+  "top_k": 3,
+  "planner": {
+    "backend": "path_planner_route"
+  },
+  "scenarios": [
+    {
+      "scenario_id": "npz_shadow_corridor",
+      "contract": "../dev-platform-constraints/outputs/path_planner_sidecars/npz_shadow_corridor.contract.json",
+      "sidecar": "../dev-platform-constraints/outputs/path_planner_sidecars/npz_shadow_corridor.path-planner-sidecar.json",
+      "current_cell": [0, 0]
+    }
+  ],
+  "outputs": {
+    "summary": "outputs/path-feedback-summary.json",
+    "report": "outputs/path-feedback-summary.md"
+  }
+}
+```
+
+运行：
+
+```bash
+PYTHONPATH=src python -m model_explorer path-feedback validate path-feedback.json
+PYTHONPATH=src python -m model_explorer path-feedback dry-run path-feedback.json
+PYTHONPATH=src python -m model_explorer path-feedback run path-feedback.json
+```
+
+Summary 输出包含：
+
+- `selected_cell_before_path_feedback`：原始 `top_goals` 中第一个 reachable 目标。
+- `selected_cell_after_path_feedback`：路径反馈后按可达、非 replan、低 `path_cost`、低 `risk`、高 `utility` 重排得到的目标。
+- `selection_changed_by_path_feedback`：路径反馈是否改变目标。
+- `open_grid_fallback_used`：是否使用了 open-grid fallback；半真实可信实验应为 `false`。
+- `path_planning_failure_count`、`replan_count`、`tracking_safety_violation_count`、`trajectory_optimization_fallback_count`、`region_graph_disconnected_count`。
+- `coverage_per_path_cost`：覆盖率增量与路径代价的比值，用于比较“单位路径代价覆盖收益”。
+
+执行证据与诊断特征应分开解释：
+
+- 可作为执行评估证据：`reachable`、`path_cost`、`failure_reason`、`diagnostics.search_mode`、`postprocess.tracking_safety_report`、`trajectory_optimization_report.fallback_status`。
+- 仅作为诊断特征：`region_graph_report`、`iris_region_report`、IRIS region count、region fallback ratio。只有当这些指标稳定解释路径失败或高风险暴露后，才应推进完整 GCS/Drake 替换当前 fallback 链。

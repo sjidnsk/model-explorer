@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -17,9 +18,11 @@ if str(SRC) not in sys.path:
 DEV_PLATFORM_CONTRACT_EXAMPLE = (
     ROOT.parent / "dev-platform-constraints" / "docs" / "model-explorer-contract-example.json"
 )
+DEV_PLATFORM_ROOT = ROOT.parent / "dev-platform-constraints"
 SYNTHETIC_EXPERIMENT_FIXTURE = ROOT / "tests" / "fixtures" / "synthetic_experiment"
 
 from model_explorer.core.interfaces import ContractValidationError
+from model_explorer.core.interfaces import GridSummary
 from model_explorer.decision.selector import select_goal
 from model_explorer.io.scenario import load_scenario
 from model_explorer.orchestration.loop import run_exploration_loop
@@ -72,6 +75,20 @@ def minimal_contract(
         if observation_update is not None
         else {"delta_c": 0.25, "visible_cell_count": 3, "updated_cell_count": 3},
     }
+
+
+def replace_contract_grid(contract, *, width, height, resolution):
+    return replace(
+        contract,
+        grid=GridSummary(
+            width=width,
+            height=height,
+            resolution=resolution,
+            frame_id=contract.grid.frame_id,
+            origin=contract.grid.origin,
+            layers=contract.grid.layers,
+        ),
+    )
 
 
 class ScenarioLoadingTests(unittest.TestCase):
@@ -1209,28 +1226,366 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertFalse(blocked_result.feasible)
         self.assertEqual(blocked_result.failure_reason, "path_blocked")
 
-    def test_future_gcs_planner_is_explicitly_unavailable_without_importing_gcs(self):
-        from model_explorer.policy.planning import FutureGcsPlannerAdapter, PathPlanRequest
+    def test_path_planner_route_adapter_is_explicitly_unavailable_without_direct_imports(self):
+        from model_explorer.policy.planning import (
+            PathPlanRequest,
+            build_path_planner_request_dict,
+            evaluate_candidate_paths,
+            path_plan_result_from_route_dict,
+            path_feedback_summary,
+            planner_from_config,
+        )
+
+        contract = load_contract_from_dict(
+            minimal_contract(goals=[{"cell": [1, 1], "utility": 0.4, "reachable": True, "risk": 0.2}])
+        )
+        selected_goal = contract.top_goals[0]
+        request = PathPlanRequest(
+            contract=contract,
+            step_index=0,
+            action_index=0,
+            selected_goal=selected_goal,
+            current_cell=(0, 0),
+        )
+
+        planner_request = build_path_planner_request_dict(request)
+
+        self.assertEqual(planner_request["schema_version"], "path-planner-request/v1")
+        self.assertEqual(planner_request["start"], [0, 0])
+        self.assertEqual(planner_request["goal"], [1, 1])
+        self.assertEqual(planner_request["metadata"]["cost_source"], "open_grid_fallback")
+
+        route_payload = {
+            "schema_version": "path-planner-route/v1",
+            "reachable": True,
+            "path_cost": 2.5,
+            "failure_reason": None,
+            "geometric_path": {
+                "cells": [[0, 0], [1, 1]],
+                "world": [[1.0, 2.0], [1.5, 2.5]],
+            },
+            "diagnostics": {"path_length_m": 0.75, "search_mode": "platform_aware_astar"},
+            "postprocess": {"fallback_status": "ok"},
+        }
+        mapped = path_plan_result_from_route_dict(route_payload, request=request)
+
+        self.assertTrue(mapped.feasible)
+        self.assertEqual(mapped.path_cost, 2.5)
+        self.assertEqual(mapped.path_length, 0.75)
+        self.assertEqual(mapped.risk, 0.2)
+        self.assertEqual(mapped.metadata["diagnostics"]["search_mode"], "platform_aware_astar")
+
+        disconnected = dict(route_payload)
+        disconnected["region_graph_report"] = {
+            "status": "ok",
+            "quality_metrics": {"start_goal_connected": False},
+        }
+        disconnected_result = path_plan_result_from_route_dict(disconnected, request=request)
+        self.assertTrue(disconnected_result.replan_required)
+        self.assertFalse(disconnected_result.metadata["region_graph_report"]["quality_metrics"]["start_goal_connected"])
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            route_path = Path(tmpdir) / "route.json"
+            route_path.write_text(json.dumps(route_payload), encoding="utf-8")
+            sidecar_path = Path(tmpdir) / "sidecar.json"
+            sidecar_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "path-planner-sidecar/v1",
+                        "grid": planner_request["grid"],
+                        "cost": [[1.0, 2.0, 1.0, 1.0] for _ in range(3)],
+                        "passable_mask": [[True, True, True, True] for _ in range(3)],
+                        "metadata": {"scenario_id": "unit-sidecar"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = planner_from_config(
+                {
+                    "backend": "path_planner_route",
+                    "route_json": str(route_path),
+                    "path_planner_sidecar": str(sidecar_path),
+                }
+            ).plan(request)
+
+        self.assertTrue(result.feasible)
+        self.assertEqual(result.path_cost, 2.5)
+        self.assertEqual(result.metadata["planner"], "path_planner_route")
+        self.assertEqual(result.metadata["mode"], "route_json")
+        self.assertEqual(result.metadata["request_payload"]["schema_version"], "path-planner-request/v1")
+        self.assertEqual(result.metadata["request_payload"]["metadata"]["cost_source"], "configured")
+        self.assertEqual(result.metadata["request_payload"]["metadata"]["sidecar"]["scenario_id"], "unit-sidecar")
+        self.assertNotIn("a_gcs_ws", sys.modules)
+
+        batch_contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [1, 1], "utility": 0.4, "reachable": True},
+                    {"cell": [2, 1], "utility": 0.3, "reachable": True},
+                    {"cell": [3, 1], "utility": 9.0, "reachable": False},
+                ]
+            )
+        )
+
+        class FixedPlanner:
+            def plan(self, plan_request):
+                route = (
+                    {
+                        "schema_version": "path-planner-route/v1",
+                        "reachable": False,
+                        "path_cost": None,
+                        "failure_reason": "goal_blocked",
+                        "geometric_path": {"cells": [], "world": []},
+                        "diagnostics": {"search_mode": "platform_aware_astar"},
+                    }
+                    if plan_request.action_index == 0
+                    else {
+                        "schema_version": "path-planner-route/v1",
+                        "reachable": True,
+                        "path_cost": 1.5,
+                        "failure_reason": None,
+                        "geometric_path": {"cells": [[0, 0], [2, 1]], "world": [[0.0, 0.0], [2.0, 1.0]]},
+                        "diagnostics": {"path_length_m": 2.2, "search_mode": "platform_aware_astar"},
+                    }
+                )
+                return path_plan_result_from_route_dict(route, request=plan_request)
+
+        evaluations = evaluate_candidate_paths(batch_contract, current_cell=(0, 0), top_k=2, planner=FixedPlanner())
+        summary = path_feedback_summary(evaluations)
+
+        self.assertEqual(summary["candidate_count"], 2)
+        self.assertEqual(summary["reachable_count"], 1)
+        self.assertEqual(summary["failure_reasons"], ["goal_blocked"])
+        self.assertEqual(summary["candidates"][0]["diagnostics"]["search_mode"], "platform_aware_astar")
+        self.assertEqual(summary["best_by_path_cost"]["cell"], [2, 1])
+
+    def test_path_planner_sidecar_validation_and_route_replan_signals(self):
+        from model_explorer.policy.planning import (
+            PathPlanRequest,
+            load_path_planner_sidecar,
+            path_plan_result_from_route_dict,
+            planner_from_config,
+        )
 
         contract = load_contract_from_dict(
             minimal_contract(goals=[{"cell": [1, 1], "utility": 0.4, "reachable": True}])
         )
+        request = PathPlanRequest(
+            contract=contract,
+            step_index=0,
+            action_index=0,
+            selected_goal=contract.top_goals[0],
+            current_cell=(0, 0),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            bad_schema = root / "bad-schema.json"
+            bad_schema.write_text(json.dumps({"schema_version": "wrong", "cost": [], "passable_mask": []}), encoding="utf-8")
+            missing_mask = root / "missing-mask.json"
+            missing_mask.write_text(json.dumps({"schema_version": "path-planner-sidecar/v1", "cost": []}), encoding="utf-8")
+            mismatched = root / "mismatched.json"
+            mismatched.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "path-planner-sidecar/v1",
+                        "cost": [[1.0]],
+                        "passable_mask": [[True]],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            route_path = root / "route.json"
+            route_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "path-planner-route/v1",
+                        "reachable": True,
+                        "path_cost": 1.0,
+                        "failure_reason": None,
+                        "geometric_path": {"cells": [[0, 0], [1, 1]], "world": [[0.0, 0.0], [1.0, 1.0]]},
+                        "diagnostics": {"path_length_m": 1.4},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "schema_version"):
+                load_path_planner_sidecar(bad_schema)
+            with self.assertRaisesRegex(ValueError, "cost and passable_mask"):
+                load_path_planner_sidecar(missing_mask)
+            with self.assertRaisesRegex(ValueError, "height=3, width=4"):
+                planner_from_config(
+                    {
+                        "backend": "path_planner_route",
+                        "path_planner_sidecar": str(mismatched),
+                        "route_json": str(route_path),
+                    }
+                ).plan(request)
+
+        base_route = {
+            "schema_version": "path-planner-route/v1",
+            "reachable": True,
+            "path_cost": 1.0,
+            "failure_reason": None,
+            "geometric_path": {"cells": [[0, 0], [1, 1]], "world": [[0.0, 0.0], [1.0, 1.0]]},
+            "diagnostics": {"path_length_m": 1.4},
+        }
+        postprocess_fallback = dict(base_route, postprocess={"fallback_status": "smoothed_path_failed"})
+        tracking_violation = dict(
+            base_route,
+            postprocess={"fallback_status": "ok", "tracking_safety_report": {"violation_count": 2}},
+        )
+        optimization_fallback = dict(base_route, trajectory_optimization_report={"fallback_status": "solver_failed"})
+
+        self.assertTrue(path_plan_result_from_route_dict(postprocess_fallback, request=request).replan_required)
+        self.assertTrue(path_plan_result_from_route_dict(tracking_violation, request=request).replan_required)
+        self.assertTrue(path_plan_result_from_route_dict(optimization_fallback, request=request).replan_required)
+
+    def test_path_feedback_manifest_summarizes_three_generated_npz_scenarios(self):
+        from model_explorer.policy.path_feedback import run_path_feedback_manifest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            scenario_config = root / "npz_validation_scenarios.json"
+            maps_dir = root / "maps"
+            exports_dir = root / "exports"
+            generator = subprocess.run(
+                [
+                    sys.executable,
+                    str(DEV_PLATFORM_ROOT / "scripts" / "generate_npz_validation_maps.py"),
+                    "--output-dir",
+                    str(maps_dir),
+                    "--scenario-config",
+                    str(scenario_config),
+                ],
+                cwd=DEV_PLATFORM_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(generator.returncode, 0, generator.stdout + generator.stderr)
+            exporter = subprocess.run(
+                [
+                    sys.executable,
+                    str(DEV_PLATFORM_ROOT / "scripts" / "export_path_planner_sidecars.py"),
+                    "--scenario-config",
+                    str(scenario_config),
+                    "--output-dir",
+                    str(exports_dir),
+                ],
+                cwd=DEV_PLATFORM_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            self.assertEqual(exporter.returncode, 0, exporter.stdout + exporter.stderr)
+
+            manifest_scenarios = []
+            for index, scenario_id in enumerate(
+                ("npz_shadow_corridor", "npz_rock_field_multi_pose", "npz_low_confidence_risk_band")
+            ):
+                route_0 = root / f"{scenario_id}-route-0.json"
+                route_1 = root / f"{scenario_id}-route-1.json"
+                route_0.write_text(json.dumps(_route_fixture(index, action_index=0)), encoding="utf-8")
+                route_1.write_text(json.dumps(_route_fixture(index, action_index=1)), encoding="utf-8")
+                manifest_scenarios.append(
+                    {
+                        "scenario_id": scenario_id,
+                        "contract": str(exports_dir / f"{scenario_id}.contract.json"),
+                        "sidecar": str(exports_dir / f"{scenario_id}.path-planner-sidecar.json"),
+                        "route_fixtures": {"0": str(route_0), "1": str(route_1)},
+                    }
+                )
+            manifest_path = root / "path-feedback.json"
+            summary_path = root / "summary.json"
+            report_path = root / "summary.md"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "path-feedback-manifest/v1",
+                        "top_k": 2,
+                        "planner": {"backend": "path_planner_route"},
+                        "scenarios": manifest_scenarios,
+                        "outputs": {"summary": str(summary_path), "report": str(report_path)},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = run_path_feedback_manifest(manifest_path)
+            self.assertTrue(summary_path.exists())
+            self.assertTrue(report_path.exists())
+            report = report_path.read_text(encoding="utf-8")
+
+        self.assertEqual(summary["schema_version"], "path-feedback-summary/v1")
+        self.assertEqual(summary["scenario_count"], 3)
+        self.assertGreaterEqual(summary["candidate_count"], 6)
+        self.assertFalse(summary["open_grid_fallback_used"])
+        self.assertIn("total_path_cost", summary)
+        self.assertIn("path_planning_failure_count", summary)
+        self.assertIn("coverage_per_path_cost", summary)
+        self.assertGreaterEqual(summary["replan_count"], 1)
+        self.assertGreaterEqual(summary["region_graph_disconnected_count"], 1)
+        self.assertTrue(any(item["selection_changed_by_path_feedback"] for item in summary["scenarios"]))
+        self.assertIn("npz_shadow_corridor", report)
+        self.assertIn("npz_rock_field_multi_pose", report)
+        self.assertIn("npz_low_confidence_risk_band", report)
+        json.dumps(summary)
+
+    def test_path_planner_route_adapter_runs_cli_without_importing_path_planner(self):
+        from model_explorer.policy.planning import PathPlannerRouteAdapter, PathPlanRequest
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[{"cell": [5, 5], "utility": 0.4, "reachable": True}],
+            )
+        )
+        contract = replace_contract_grid(contract, width=6, height=6, resolution=1.0)
         selected_goal = contract.top_goals[0]
 
-        result = FutureGcsPlannerAdapter().plan(
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = PathPlannerRouteAdapter(
+                path_planner_root=ROOT.parent / "path-planner",
+                output_dir=Path(tmpdir) / "planner-output",
+            ).plan(
+                PathPlanRequest(
+                    contract=contract,
+                    step_index=0,
+                    action_index=0,
+                    selected_goal=selected_goal,
+                    current_cell=(0, 0),
+                )
+            )
+
+        self.assertTrue(result.feasible, result.metadata)
+        self.assertGreater(result.path_cost, 0.0)
+        self.assertEqual(result.metadata["mode"], "cli")
+        self.assertIn("platform_aware_astar", result.metadata["diagnostics"]["search_mode"])
+        self.assertNotIn("path_planner", sys.modules)
+
+    def test_dev_platform_contract_example_can_emit_path_planner_request(self):
+        from model_explorer.policy.planning import PathPlanRequest, build_path_planner_request_dict
+
+        contract = load_contract_from_dict(json.loads(DEV_PLATFORM_CONTRACT_EXAMPLE.read_text(encoding="utf-8")))
+        decision = select_goal(contract)
+
+        planner_request = build_path_planner_request_dict(
             PathPlanRequest(
                 contract=contract,
                 step_index=0,
                 action_index=0,
-                selected_goal=selected_goal,
+                selected_goal=decision.selected_goal,
                 current_cell=(0, 0),
             )
         )
 
-        self.assertFalse(result.feasible)
-        self.assertEqual(result.failure_reason, "gcs_adapter_unavailable")
-        self.assertTrue(result.replan_required)
-        self.assertNotIn("a_gcs_ws", sys.modules)
+        self.assertEqual(planner_request["schema_version"], "path-planner-request/v1")
+        self.assertEqual(planner_request["grid"]["width"], 32)
+        self.assertEqual(planner_request["goal"], [24, 10])
+        self.assertEqual(len(planner_request["cost"]), 20)
+        self.assertEqual(planner_request["metadata"]["passable_mask_source"], "open_grid_fallback")
 
     def test_collector_uses_planning_result_for_reward_and_failure_metrics(self):
         from model_explorer.policy.collector import collect_dynamic_rollout_episode
@@ -2571,6 +2926,40 @@ def load_contract_from_dict(payload):
         path = Path(tmpdir) / "contract.json"
         path.write_text(json.dumps(payload), encoding="utf-8")
         return load_scenario(path).snapshots[0]
+
+
+def _route_fixture(scenario_index, *, action_index):
+    base = {
+        "schema_version": "path-planner-route/v1",
+        "geometric_path": {
+            "cells": [[0, 0], [action_index + 1, scenario_index + 1]],
+            "world": [[0.0, 0.0], [float(action_index + 1), float(scenario_index + 1)]],
+        },
+        "diagnostics": {
+            "path_length_m": float(action_index + scenario_index + 1),
+            "search_mode": "platform_aware_astar",
+        },
+    }
+    if scenario_index == 0 and action_index == 0:
+        return {
+            **base,
+            "reachable": False,
+            "path_cost": None,
+            "failure_reason": "goal_blocked",
+        }
+    route = {
+        **base,
+        "reachable": True,
+        "path_cost": float(8 - action_index - scenario_index),
+        "failure_reason": None,
+        "postprocess": {"fallback_status": "ok", "tracking_safety_report": {"violation_count": 0}},
+    }
+    if scenario_index == 2 and action_index == 0:
+        route["region_graph_report"] = {
+            "status": "ok",
+            "quality_metrics": {"start_goal_connected": False},
+        }
+    return route
 
 
 if __name__ == "__main__":

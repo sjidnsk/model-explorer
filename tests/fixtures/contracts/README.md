@@ -11,5 +11,6 @@ Rules for future intake:
   exported real samples; use `curated-synthetic-*` for hand-built fixtures.
 - redact mission identifiers, operator names, private paths, and precise source
   metadata before adding a file.
-- do not import `dev-platform-constraints`, `a_gcs_ws-2.0.1`, or any external
-  project from these tests; consume fixtures only through the public JSON loader.
+- do not import external projects from these tests; consume fixtures only
+  through the public JSON loader. The live execution-layer integration target is
+  `path-planner`, connected through JSON boundaries rather than fixture imports.
