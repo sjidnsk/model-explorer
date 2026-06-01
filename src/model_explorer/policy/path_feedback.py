@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ class PathFeedbackScenario:
     scenario_id: str
     contract_path: Path
     sidecar_path: Path
+    scenario_group: str = "unknown"
     current_cell: tuple[int, int] = (0, 0)
     route_fixtures: dict[int, Path] = field(default_factory=dict)
 
@@ -75,6 +77,7 @@ def dry_run_path_feedback_manifest(path: str | Path) -> dict[str, Any]:
         "scenarios": [
             {
                 "scenario_id": scenario.scenario_id,
+                "scenario_group": scenario.scenario_group,
                 "contract": str(scenario.contract_path),
                 "sidecar": str(scenario.sidecar_path),
                 "route_fixture_count": len(scenario.route_fixtures),
@@ -145,6 +148,14 @@ def compact_path_feedback_summary(
         "region_graph_disconnected_count": summary.get("region_graph_disconnected_count"),
         "open_grid_fallback_used": summary.get("open_grid_fallback_used"),
         "failure_reasons": summary.get("failure_reasons", []),
+        "iris_requested_count": summary.get("iris_requested_count"),
+        "iris_report_count": summary.get("iris_report_count"),
+        "iris_status_counts": summary.get("iris_status_counts", {}),
+        "iris_fallback_count": summary.get("iris_fallback_count"),
+        "iris_failure_count": summary.get("iris_failure_count"),
+        "region_graph_source_counts": summary.get("region_graph_source_counts", {}),
+        "region_graph_fallback_count": summary.get("region_graph_fallback_count"),
+        "region_graph_start_goal_disconnected_count": summary.get("region_graph_start_goal_disconnected_count"),
     }
     if summary_output is not None:
         payload["summary_output"] = str(summary_output)
@@ -168,6 +179,7 @@ def run_path_feedback(manifest: PathFeedbackManifest) -> dict[str, Any]:
     selection_changed_count = sum(
         1 for item in scenario_summaries if item["selection_changed_by_path_feedback"]
     )
+    diagnostic_summary = _diagnostic_aggregate(scenario_summaries)
     return {
         "schema_version": "path-feedback-summary/v1",
         "scenario_count": len(scenario_summaries),
@@ -208,6 +220,7 @@ def run_path_feedback(manifest: PathFeedbackManifest) -> dict[str, Any]:
             for item in scenario_summaries
             for reason in item["path_feedback"]["failure_reasons"]
         ],
+        **diagnostic_summary,
         "scenarios": scenario_summaries,
     }
 
@@ -276,7 +289,64 @@ def render_path_feedback_markdown(summary: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## IRIS Diagnostics",
+            "",
+            "| scenario | group | iris_status_counts | iris_fallback_reasons | iris_region_count |",
+            "|---|---|---|---|---:|",
+        ]
+    )
+    for item in summary["scenarios"]:
+        iris = item["iris_diagnostics"]
+        lines.append(
+            "| {scenario_id} | {group} | {statuses} | {reasons} | {count} |".format(
+                scenario_id=item["scenario_id"],
+                group=item["scenario_group"],
+                statuses=iris["status_counts"],
+                reasons=iris["fallback_reasons"],
+                count=iris["region_count_total"],
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Region Graph Diagnostics",
+            "",
+            "| scenario | group | graph_source_counts | fallback_reasons | disconnected |",
+            "|---|---|---|---|---:|",
+        ]
+    )
+    for item in summary["scenarios"]:
+        graph = item["region_graph_diagnostics"]
+        lines.append(
+            "| {scenario_id} | {group} | {sources} | {reasons} | {disconnected} |".format(
+                scenario_id=item["scenario_id"],
+                group=item["scenario_group"],
+                sources=graph["source_counts"],
+                reasons=graph["fallback_reasons"],
+                disconnected=graph["start_goal_disconnected_count"],
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Scenario Groups",
+            "",
+            "| group | scenarios | candidates | reachable | failures | replans | changed | iris_reports | graph_fallbacks | disconnected |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for group, payload in summary["scenario_group_summary"].items():
+        lines.append(
+            "| {group} | {scenario_count} | {candidate_count} | {reachable_count} | {failure_count} | {replan_count} | {selection_changed_count} | {iris_report_count} | {region_graph_fallback_count} | {region_graph_start_goal_disconnected_count} |".format(
+                group=group,
+                **payload,
+            )
+        )
+    lines.extend(
+        [
+            "",
             "IRIS / region graph fields are diagnostic features only. They should not replace the current reliable fallback chain until they consistently explain path failure or high-risk exposure.",
+            "They are not a GCS trajectory or an Ackermann/skid-steer feasibility proof, and IRIS fallback must not change a successful A* route to unreachable.",
             "",
         ]
     )
@@ -309,6 +379,7 @@ def _run_feedback_scenario(
     after_cell = _cell_to_list(selected_after.cell if selected_after is not None else None)
     return {
         "scenario_id": scenario.scenario_id,
+        "scenario_group": scenario.scenario_group,
         "selected_cell_before_path_feedback": before_cell,
         "selected_cell_after_path_feedback": after_cell,
         "selection_changed_by_path_feedback": before_cell != after_cell,
@@ -320,6 +391,8 @@ def _run_feedback_scenario(
         "tracking_safety_violation_count": _tracking_safety_violation_count(evaluations),
         "trajectory_optimization_fallback_count": _trajectory_optimization_fallback_count(evaluations),
         "region_graph_disconnected_count": _region_graph_disconnected_count(evaluations),
+        "iris_diagnostics": _iris_diagnostics(evaluations),
+        "region_graph_diagnostics": _region_graph_diagnostics(evaluations),
         "baseline_vs_feedback": {
             "before_cell": before_cell,
             "after_cell": after_cell,
@@ -386,6 +459,147 @@ def _path_cost_delta(before: float | None, after: float | None) -> float | None:
     return float(after - before)
 
 
+def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
+    iris_status_counts: Counter[str] = Counter()
+    iris_fallback_reasons: Counter[str] = Counter()
+    region_graph_source_counts: Counter[str] = Counter()
+    region_graph_fallback_reasons: Counter[str] = Counter()
+    group_summary: dict[str, dict[str, Any]] = defaultdict(_empty_group_summary)
+    iris_report_count = 0
+    iris_fallback_count = 0
+    iris_failure_count = 0
+    iris_region_count_total = 0
+    region_graph_fallback_count = 0
+    region_graph_start_goal_disconnected_count = 0
+
+    for scenario in scenarios:
+        group = str(scenario.get("scenario_group") or "unknown")
+        group_payload = group_summary[group]
+        group_payload["scenario_count"] += 1
+        group_payload["candidate_count"] += int(scenario["path_feedback"]["candidate_count"])
+        group_payload["reachable_count"] += int(scenario["path_feedback"]["reachable_count"])
+        group_payload["failure_count"] += int(scenario["path_feedback"]["failure_count"])
+        group_payload["replan_count"] += int(scenario["path_feedback"]["replan_count"])
+        group_payload["selection_changed_count"] += int(bool(scenario["selection_changed_by_path_feedback"]))
+
+        iris = scenario["iris_diagnostics"]
+        graph = scenario["region_graph_diagnostics"]
+        group_payload["iris_report_count"] += int(iris["report_count"])
+        group_payload["iris_fallback_count"] += int(iris["fallback_count"])
+        group_payload["region_graph_fallback_count"] += int(graph["fallback_count"])
+        group_payload["region_graph_start_goal_disconnected_count"] += int(graph["start_goal_disconnected_count"])
+
+        iris_report_count += int(iris["report_count"])
+        iris_fallback_count += int(iris["fallback_count"])
+        iris_failure_count += int(iris["failure_count"])
+        iris_region_count_total += int(iris["region_count_total"])
+        region_graph_fallback_count += int(graph["fallback_count"])
+        region_graph_start_goal_disconnected_count += int(graph["start_goal_disconnected_count"])
+        iris_status_counts.update(iris["status_counts"])
+        iris_fallback_reasons.update(iris["fallback_reasons"])
+        region_graph_source_counts.update(graph["source_counts"])
+        region_graph_fallback_reasons.update(graph["fallback_reasons"])
+
+    return {
+        "iris_requested_count": iris_report_count,
+        "iris_report_count": iris_report_count,
+        "iris_status_counts": dict(sorted(iris_status_counts.items())),
+        "iris_fallback_count": iris_fallback_count,
+        "iris_failure_count": iris_failure_count,
+        "iris_region_count_total": iris_region_count_total,
+        "iris_fallback_reasons": dict(sorted(iris_fallback_reasons.items())),
+        "region_graph_source_counts": dict(sorted(region_graph_source_counts.items())),
+        "region_graph_fallback_count": region_graph_fallback_count,
+        "region_graph_fallback_reasons": dict(sorted(region_graph_fallback_reasons.items())),
+        "region_graph_start_goal_disconnected_count": region_graph_start_goal_disconnected_count,
+        "scenario_group_summary": {
+            group: dict(payload)
+            for group, payload in sorted(group_summary.items())
+        },
+    }
+
+
+def _empty_group_summary() -> dict[str, int]:
+    return {
+        "scenario_count": 0,
+        "candidate_count": 0,
+        "reachable_count": 0,
+        "failure_count": 0,
+        "replan_count": 0,
+        "selection_changed_count": 0,
+        "iris_report_count": 0,
+        "iris_fallback_count": 0,
+        "region_graph_fallback_count": 0,
+        "region_graph_start_goal_disconnected_count": 0,
+    }
+
+
+def _iris_diagnostics(evaluations) -> dict[str, Any]:
+    status_counts: Counter[str] = Counter()
+    fallback_reasons: Counter[str] = Counter()
+    report_count = 0
+    fallback_count = 0
+    failure_count = 0
+    region_count_total = 0
+    for item in evaluations:
+        iris = item.to_dict().get("iris_region")
+        if not isinstance(iris, dict):
+            continue
+        report_count += 1
+        status = str(iris.get("status") or "unknown")
+        status_counts[status] += 1
+        region_count_total += _int_value(iris.get("region_count"))
+        if bool(iris.get("fallback_used")):
+            fallback_count += 1
+        if status == "failed":
+            failure_count += 1
+        reason = iris.get("failure_reason")
+        if reason:
+            fallback_reasons[str(reason)] += 1
+    return {
+        "report_count": report_count,
+        "status_counts": dict(sorted(status_counts.items())),
+        "fallback_count": fallback_count,
+        "failure_count": failure_count,
+        "region_count_total": region_count_total,
+        "fallback_reasons": dict(sorted(fallback_reasons.items())),
+    }
+
+
+def _region_graph_diagnostics(evaluations) -> dict[str, Any]:
+    source_counts: Counter[str] = Counter()
+    fallback_reasons: Counter[str] = Counter()
+    fallback_count = 0
+    start_goal_disconnected_count = 0
+    for item in evaluations:
+        graph = item.to_dict().get("region_graph")
+        if not isinstance(graph, dict):
+            continue
+        source_counts[str(graph.get("graph_source") or graph.get("region_source") or "unknown")] += 1
+        if bool(graph.get("fallback_used")):
+            fallback_count += 1
+        if graph.get("start_goal_connected") is False:
+            start_goal_disconnected_count += 1
+        reason = graph.get("fallback_reason")
+        if reason:
+            fallback_reasons[str(reason)] += 1
+    return {
+        "source_counts": dict(sorted(source_counts.items())),
+        "fallback_count": fallback_count,
+        "fallback_reasons": dict(sorted(fallback_reasons.items())),
+        "start_goal_disconnected_count": start_goal_disconnected_count,
+    }
+
+
+def _int_value(value: Any) -> int:
+    if isinstance(value, bool) or value is None:
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _scenario_from_payload(payload: Any, *, base_dir: Path) -> PathFeedbackScenario:
     if not isinstance(payload, dict):
         raise ValueError("scenario entries must be objects")
@@ -396,6 +610,7 @@ def _scenario_from_payload(payload: Any, *, base_dir: Path) -> PathFeedbackScena
         scenario_id=scenario_id,
         contract_path=_required_path(payload, "contract", base_dir=base_dir),
         sidecar_path=_required_path(payload, "sidecar", base_dir=base_dir),
+        scenario_group=str(payload.get("scenario_group") or payload.get("group") or "unknown"),
         current_cell=_cell(payload.get("current_cell", [0, 0])),
         route_fixtures=_route_fixtures(payload.get("route_fixtures", {}), base_dir=base_dir),
     )

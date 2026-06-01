@@ -179,11 +179,14 @@ Summary 输出包含：
 - `selection_changed_count`、`selection_changed_rate`：用于实验级汇总路径反馈改变目标选择的频次和比例。
 - `open_grid_fallback_used`：是否使用了 open-grid fallback；半真实可信实验应为 `false`。
 - `path_planning_failure_count`、`replan_count`、`tracking_safety_violation_count`、`trajectory_optimization_fallback_count`、`region_graph_disconnected_count`。
+- `iris_requested_count`、`iris_report_count`、`iris_status_counts`、`iris_fallback_count`、`iris_failure_count`、`iris_region_count_total`、`iris_fallback_reasons`：汇总可选 workspace IRIS 诊断。
+- `region_graph_source_counts`、`region_graph_fallback_count`、`region_graph_fallback_reasons`、`region_graph_start_goal_disconnected_count`：汇总 `iris` vs `grid_box` graph source、fallback 和 start-goal 断连诊断。
+- `scenario_group_summary`：按 smoke、stress、mixed_stress 或 unknown 聚合 candidate、reachable、failure、replan、selection changed、IRIS 和 region graph 指标。
 - `coverage_per_path_cost`：覆盖率增量与路径代价的比值，用于比较“单位路径代价覆盖收益”。
 
-`path-feedback run` 的 stdout 默认是紧凑摘要；完整 `scenarios`、Top-K 候选明细和 baseline-vs-feedback 对比仍写入 manifest 指定的 JSON 与 Markdown 报告。
+`path-feedback run` 的 stdout 默认是紧凑摘要；完整 `scenarios`、Top-K 候选明细、baseline-vs-feedback、IRIS diagnostics、Region Graph diagnostics 和 scenario-group 对比仍写入 manifest 指定的 JSON 与 Markdown 报告。
 
 执行证据与诊断特征应分开解释：
 
 - 可作为执行评估证据：`reachable`、`path_cost`、`failure_reason`、`diagnostics.search_mode`、`postprocess.tracking_safety_report`、`trajectory_optimization_report.fallback_status`。
-- 仅作为诊断特征：`region_graph_report`、`iris_region_report`、IRIS region count、region fallback ratio。只有当这些指标稳定解释路径失败或高风险暴露后，才应推进完整 GCS/Drake 替换当前 fallback 链。
+- 仅作为诊断特征：`region_graph_report`、`iris_region_report`、IRIS region count、region fallback ratio、graph source 和 fallback reason。它们不是 GCS trajectory，也不是 Ackermann/skid-steer feasibility proof；IRIS fallback 不应把成功 A* 路径改成 unreachable。只有当这些指标稳定解释路径失败或高风险暴露后，才应推进完整 GCS/Drake 替换当前 fallback 链。

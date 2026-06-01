@@ -69,7 +69,7 @@ class PathCandidateEvaluation:
                 self.result.metadata.get("trajectory_optimization_report")
             ),
             "region_graph": _region_graph_summary(self.result.metadata.get("region_graph_report")),
-            "iris_region": _report_present(self.result.metadata.get("iris_region_report")),
+            "iris_region": _iris_region_summary(self.result.metadata.get("iris_region_report")),
         }
 
 
@@ -621,15 +621,32 @@ def _region_graph_summary(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
     quality = value.get("quality_metrics")
+    quality = quality if isinstance(quality, dict) else {}
     return {
         "status": value.get("status"),
         "region_source": value.get("region_source"),
         "vertex_count": value.get("vertex_count"),
         "edge_count": value.get("edge_count"),
-        "start_goal_connected": (
-            None if not isinstance(quality, dict) else quality.get("start_goal_connected")
-        ),
+        "requested_region_source": quality.get("requested_region_source"),
+        "graph_source": quality.get("graph_source", value.get("region_source")),
+        "fallback_ratio": quality.get("fallback_ratio"),
+        "connected_component_count": quality.get("connected_component_count"),
+        "start_goal_connected": quality.get("start_goal_connected"),
+        "fallback_reason": quality.get("fallback_reason") or value.get("failure_reason"),
         "fallback_used": value.get("fallback_used"),
+    }
+
+
+def _iris_region_summary(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        "backend": value.get("backend"),
+        "status": value.get("status"),
+        "region_count": value.get("region_count"),
+        "fallback_used": value.get("fallback_used"),
+        "failure_status": value.get("failure_status"),
+        "failure_reason": value.get("failure_reason"),
     }
 
 

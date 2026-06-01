@@ -1346,6 +1346,27 @@ class PathPlanningAdapterTests(unittest.TestCase):
                         "failure_reason": None,
                         "geometric_path": {"cells": [[0, 0], [2, 1]], "world": [[0.0, 0.0], [2.0, 1.0]]},
                         "diagnostics": {"path_length_m": 2.2, "search_mode": "platform_aware_astar"},
+                        "iris_region_report": {
+                            "backend": "workspace_iris",
+                            "status": "ok",
+                            "region_count": 2,
+                            "fallback_used": False,
+                            "failure_status": "none",
+                            "failure_reason": None,
+                        },
+                        "region_graph_report": {
+                            "status": "ok",
+                            "region_source": "iris",
+                            "fallback_used": False,
+                            "quality_metrics": {
+                                "requested_region_source": "iris",
+                                "graph_source": "iris",
+                                "fallback_ratio": 0.0,
+                                "connected_component_count": 1,
+                                "start_goal_connected": True,
+                                "fallback_reason": None,
+                            },
+                        },
                     }
                 )
                 return path_plan_result_from_route_dict(route, request=plan_request)
@@ -1358,6 +1379,15 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(summary["failure_reasons"], ["goal_blocked"])
         self.assertEqual(summary["candidates"][0]["diagnostics"]["search_mode"], "platform_aware_astar")
         self.assertEqual(summary["best_by_path_cost"]["cell"], [2, 1])
+        iris_candidate = summary["candidates"][1]
+        self.assertEqual(iris_candidate["iris_region"]["status"], "ok")
+        self.assertEqual(iris_candidate["iris_region"]["backend"], "workspace_iris")
+        self.assertEqual(iris_candidate["iris_region"]["region_count"], 2)
+        self.assertFalse(iris_candidate["iris_region"]["fallback_used"])
+        self.assertEqual(iris_candidate["region_graph"]["graph_source"], "iris")
+        self.assertEqual(iris_candidate["region_graph"]["requested_region_source"], "iris")
+        self.assertEqual(iris_candidate["region_graph"]["fallback_ratio"], 0.0)
+        self.assertEqual(iris_candidate["region_graph"]["connected_component_count"], 1)
 
     def test_path_planner_sidecar_validation_and_route_replan_signals(self):
         from model_explorer.policy.planning import (
@@ -1493,6 +1523,7 @@ class PathPlanningAdapterTests(unittest.TestCase):
                 manifest_scenarios.append(
                     {
                         "scenario_id": scenario_id,
+                        "scenario_group": "smoke",
                         "contract": str(exports_dir / f"{scenario_id}.contract.json"),
                         "sidecar": str(exports_dir / f"{scenario_id}.path-planner-sidecar.json"),
                         "route_fixtures": {"0": str(route_0), "1": str(route_1)},
@@ -1528,6 +1559,14 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertIn("coverage_per_path_cost", summary)
         self.assertIn("selection_changed_count", summary)
         self.assertIn("selection_changed_rate", summary)
+        self.assertIn("iris_requested_count", summary)
+        self.assertIn("iris_status_counts", summary)
+        self.assertIn("region_graph_source_counts", summary)
+        self.assertIn("scenario_group_summary", summary)
+        self.assertGreaterEqual(summary["iris_requested_count"], 1)
+        self.assertEqual(summary["iris_status_counts"]["ok"], 1)
+        self.assertEqual(summary["region_graph_source_counts"]["iris"], 1)
+        self.assertIn("smoke", summary["scenario_group_summary"])
         self.assertGreaterEqual(summary["selection_changed_count"], 1)
         self.assertGreater(summary["selection_changed_rate"], 0.0)
         self.assertGreaterEqual(summary["replan_count"], 1)
@@ -1546,6 +1585,9 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertIn("npz_low_confidence_risk_band", report)
         self.assertIn("## Baseline vs Feedback", report)
         self.assertIn("## Candidate Paths", report)
+        self.assertIn("## IRIS Diagnostics", report)
+        self.assertIn("## Region Graph Diagnostics", report)
+        self.assertIn("## Scenario Groups", report)
         self.assertIn("| scenario | action | cell | reachable | path_cost | risk | utility | replan | failure |", report)
         json.dumps(summary)
 
@@ -2972,7 +3014,38 @@ def _route_fixture(scenario_index, *, action_index):
     if scenario_index == 2 and action_index == 0:
         route["region_graph_report"] = {
             "status": "ok",
-            "quality_metrics": {"start_goal_connected": False},
+            "region_source": "grid_box",
+            "fallback_used": True,
+            "quality_metrics": {
+                "requested_region_source": "iris",
+                "graph_source": "grid_box",
+                "fallback_ratio": 1.0,
+                "connected_component_count": 2,
+                "start_goal_connected": False,
+                "fallback_reason": "iris_region_graph_fallback: start_goal_not_connected",
+            },
+        }
+    if scenario_index == 1 and action_index == 1:
+        route["iris_region_report"] = {
+            "backend": "workspace_iris",
+            "status": "ok",
+            "region_count": 2,
+            "fallback_used": False,
+            "failure_status": "none",
+            "failure_reason": None,
+        }
+        route["region_graph_report"] = {
+            "status": "ok",
+            "region_source": "iris",
+            "fallback_used": False,
+            "quality_metrics": {
+                "requested_region_source": "iris",
+                "graph_source": "iris",
+                "fallback_ratio": 0.0,
+                "connected_component_count": 1,
+                "start_goal_connected": True,
+                "fallback_reason": None,
+            },
         }
     return route
 
