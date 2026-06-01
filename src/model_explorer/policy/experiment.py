@@ -16,6 +16,12 @@ from .evaluation import evaluate_policy_baseline_scenarios, evaluate_policy_base
 from .planning import planner_from_config
 from .rollout import RolloutEpisode
 from .rollout_io import write_rollout_episodes_jsonl
+from .system_calibration import (
+    annotate_runs_with_path_feedback_gates,
+    build_system_calibration_summary,
+    load_path_feedback_summary_entries,
+    select_system_best_run,
+)
 
 
 EXPERIMENT_SCHEMA_VERSION = "model-explorer-experiment/v1"
@@ -450,6 +456,15 @@ def _optional_mapping(value: Any) -> dict[str, Any] | None:
         return None
     if not isinstance(value, dict):
         raise ValueError("reward config must be an object")
+    return dict(value)
+
+
+def _system_calibration_config(config: dict[str, Any]) -> dict[str, Any] | None:
+    value = config.get("system_calibration")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("train.system_calibration must be an object")
     return dict(value)
 
 
@@ -924,21 +939,57 @@ def _run_training(
 
     best_policy = str(config.get("best_policy", "torch_policy"))
     best_metric = str(config.get("best_metric", "final_coverage_rate"))
-    if "teacher_margin_curriculum_profiles" in config:
-        calibration_recommendation = _calibration_recommendation(
-            runs,
-            metric=best_metric,
-            policy=best_policy,
+    system_calibration_config = _system_calibration_config(config)
+    path_feedback_summary_entries: list[dict[str, Any]] = []
+    system_selection: dict[str, Any] | None = None
+    if system_calibration_config is not None:
+        path_feedback_summary_entries = load_path_feedback_summary_entries(
+            system_calibration_config,
+            base_dir=base_dir,
         )
-        best_run = _recommended_run(runs, calibration_recommendation)
-    else:
-        best_run = _select_best_training_run(runs, metric=best_metric, policy=best_policy)
-        calibration_recommendation = _calibration_recommendation(
-            runs,
-            metric=best_metric,
-            policy=best_policy,
-            selected_run=best_run,
-        )
+        if path_feedback_summary_entries:
+            annotate_runs_with_path_feedback_gates(
+                runs,
+                path_feedback_summaries=path_feedback_summary_entries,
+                gate_config=system_calibration_config.get("path_feedback_gate", {}),
+            )
+            system_selection = select_system_best_run(
+                runs,
+                policy=best_policy,
+                metric=best_metric,
+                system_gate_configured=True,
+            )
+            if system_selection.get("run") is None:
+                raise ValueError("system calibration found no run passing teacher and path-feedback gates")
+            best_run = system_selection["run"]
+            calibration_recommendation = _calibration_recommendation(
+                runs,
+                metric=best_metric,
+                policy=best_policy,
+                selected_run=best_run,
+            )
+            calibration_recommendation["mode"] = "system_gate_best_run"
+            calibration_recommendation["profile_selection_reason_codes"] = [
+                "system_gate_best_run_selection"
+            ]
+        elif "path_feedback_gate" in system_calibration_config:
+            raise ValueError("system_calibration.path_feedback_gate requires path feedback summaries")
+    if system_selection is None:
+        if "teacher_margin_curriculum_profiles" in config:
+            calibration_recommendation = _calibration_recommendation(
+                runs,
+                metric=best_metric,
+                policy=best_policy,
+            )
+            best_run = _recommended_run(runs, calibration_recommendation)
+        else:
+            best_run = _select_best_training_run(runs, metric=best_metric, policy=best_policy)
+            calibration_recommendation = _calibration_recommendation(
+                runs,
+                metric=best_metric,
+                policy=best_policy,
+                selected_run=best_run,
+            )
     selected = dict(best_run)
     selected["checkpoint"] = best_run["checkpoint"]
     selected["best_seed"] = int(best_run["seed"])
@@ -975,6 +1026,29 @@ def _run_training(
         policy=best_policy,
         metric=best_metric,
     )
+    if system_calibration_config is not None:
+        system_summary = build_system_calibration_summary(
+            {
+                "runs": runs,
+                "calibration_recommendation": calibration_recommendation,
+            },
+            path_feedback_summaries=path_feedback_summary_entries,
+            config=system_calibration_config,
+            policy=best_policy,
+            metric=best_metric,
+        )
+        selected["system_calibration_summary"] = system_summary
+        system_selection_record = system_summary["selection"]
+        selected["best_selection"]["mode"] = system_selection_record["mode"]
+        selected["best_selection"]["reason_codes"] = list(system_selection_record["reason_codes"])
+        selected["best_selection"]["excluded_run_count"] = system_selection_record["excluded_run_count"]
+        selected["best_selection"]["excluded_runs"] = list(system_selection_record["excluded_runs"])
+        selected["best_selection"]["system_gate_selection"] = dict(system_selection_record)
+        summary_output = system_calibration_config.get("summary_output")
+        if summary_output is not None:
+            summary_output_path = _resolve_path(base_dir, summary_output)
+            _write_json(summary_output_path, system_summary)
+            selected["system_calibration_summary_output"] = str(summary_output_path)
     return selected
 
 

@@ -40,6 +40,11 @@ It is intentionally file based so the runner does not import external projects.
   matrix. Entries may be built-in names `high_only`, `high_medium`, and
   `soft_all_valid`, or objects with `name` and `bucket_weights`. Profiles only
   weight the auxiliary teacher imitation loss; PPO remains the main path.
+- `train.system_calibration`: optional system-level calibration config that
+  reads one or more `path-feedback-summary/v1` JSON files through file paths,
+  evaluates a `path_feedback_gate`, and writes `system_calibration_summary`.
+  Without this config, best-run selection keeps the existing teacher-gate /
+  best-metric behavior.
 
 `train.architecture` and `train.architectures` are compatible with older
 single-architecture manifests. `train.architecture` keeps the previous default
@@ -101,6 +106,13 @@ baseline sections. The current benchmark hardening fields add:
   and seed. `distillation_matrix` records `teacher_margin_curriculum_profile`
   and per-run `confidence_calibration`; `distillation_stability_summary`
   includes the profile dimension when profiles are configured.
+- Semi-Real Closed-Loop Calibration v1 adds optional
+  `train.system_calibration` over v5 `calibration_recommendation` plus external
+  path feedback summary JSON. The `path_feedback_gate` treats
+  `open_grid_fallback_used`, path failures, replans, IRIS fallback, and
+  region-graph disconnect/fallback as calibration/exclusion signals only. A
+  default system-gated recommendation must pass both `teacher_quality_gates` and
+  `path_feedback_gate`; excluded runs keep machine-readable `reason_codes`.
 - `feedback_aware_confidence_calibration` records teacher action probability,
   teacher-label NLL, margin-bucket confidence-vs-agreement, and low-margin
   overconfidence warnings for trained policy evaluation.
@@ -108,4 +120,8 @@ baseline sections. The current benchmark hardening fields add:
 The JSON summary exposes matching machine-readable keys:
 `policy_ranking`, `baseline_deltas`, `per_group_winners`, `failure_scenarios`,
 `gate_summary`, `distillation_matrix`, `distillation_stability_summary`, and
-`calibration_recommendation`.
+`calibration_recommendation`. When `train.system_calibration` is present, it
+also exposes `system_calibration_summary` with `data_class`, `benchmark_scope`,
+`source_selection_strategy`, `teacher_imitation_weight`,
+`teacher_margin_curriculum_profile`, `seed`, teacher gate, path-feedback gate,
+stress/mixed-stress diagnostics, and selection/exclusion reason codes.

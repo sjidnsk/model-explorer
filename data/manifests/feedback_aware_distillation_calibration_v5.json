@@ -97,5 +97,29 @@
       "max_missing_teacher_signal_rate": 0.0,
       "max_low_margin_only_dataset_rate": 1.0
     }
+  },
+  "system_calibration": {
+    "name": "semi-real-closed-loop-calibration-v1",
+    "summary_schema_version": "system-calibration-summary/v1",
+    "data_class": "quasi_real",
+    "mask_stress_augmented": true,
+    "benchmark_scope": "not real-world generalization benchmark",
+    "quality_signal_scope": "calibration_only",
+    "acceptance_gate": {
+      "scenario_set": "all",
+      "diagnostic_profile": "all",
+      "top_k": 3,
+      "require_open_grid_fallback_used": false
+    },
+    "path_feedback_gate": {
+      "require_open_grid_fallback_used_false": true
+    },
+    "non_goals": [
+      "no new network architecture",
+      "no full-map action-space expansion",
+      "no GCS trajectory backend",
+      "no Ackermann/skid-steer/differential feasibility solver",
+      "no real-world generalization claim"
+    ]
   }
 }

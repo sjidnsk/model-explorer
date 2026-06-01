@@ -750,13 +750,20 @@ class BenchmarkDocumentationTests(unittest.TestCase):
             "`calibration_recommendation`",
             "`feedback_aware_confidence_calibration`",
             "`teacher_margin_curriculum_profile`",
+            "`train.system_calibration`",
+            "`system_calibration_summary`",
+            "`path_feedback_gate`",
+            "`open_grid_fallback_used`",
         ):
             self.assertIn(text, manifest_doc)
         self.assertIn("Distillation Calibration v5", progress_doc)
+        self.assertIn("Semi-Real Closed-Loop Calibration v1", progress_doc)
         self.assertEqual(train["source_selection_strategies"], ["coverage_heuristic", "feedback_aware"])
         self.assertIn("high_only", train["teacher_margin_curriculum_profiles"])
         self.assertIn("soft_all_valid", train["teacher_margin_curriculum_profiles"])
         self.assertEqual(manifest["metadata"]["benchmark_scope"], "not real-world generalization benchmark")
+        self.assertEqual(manifest["system_calibration"]["summary_schema_version"], "system-calibration-summary/v1")
+        self.assertEqual(manifest["system_calibration"]["quality_signal_scope"], "calibration_only")
 
     def test_benchmark_and_manifest_docs_define_current_synthetic_scope(self):
         benchmark_doc = (ROOT / "docs" / "benchmark-readiness.md").read_text(encoding="utf-8")
