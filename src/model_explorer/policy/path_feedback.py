@@ -264,6 +264,27 @@ def compact_path_feedback_summary(
         "sampled_region_path_fallback_reasons": summary.get("sampled_region_path_fallback_reasons", {}),
         "sampled_region_path_sample_attempt_count": summary.get("sampled_region_path_sample_attempt_count"),
         "sampled_region_path_candidate_ranking_count": summary.get("sampled_region_path_candidate_ranking_count"),
+        "sampled_region_path_anchor_region_added_count": summary.get(
+            "sampled_region_path_anchor_region_added_count"
+        ),
+        "sampled_region_path_anchor_region_connected_count": summary.get(
+            "sampled_region_path_anchor_region_connected_count"
+        ),
+        "sampled_region_path_start_classification_counts": summary.get(
+            "sampled_region_path_start_classification_counts",
+            {},
+        ),
+        "sampled_region_path_goal_classification_counts": summary.get(
+            "sampled_region_path_goal_classification_counts",
+            {},
+        ),
+        "sampled_region_path_connector_attempt_count": summary.get(
+            "sampled_region_path_connector_attempt_count"
+        ),
+        "sampled_region_path_connector_strategy_counts": summary.get(
+            "sampled_region_path_connector_strategy_counts",
+            {},
+        ),
         "sampled_region_path_candidate_audit": summary.get("sampled_region_path_candidate_audit", []),
         "diagnostic_interpretation": summary.get("diagnostic_interpretation", {}),
     }
@@ -706,6 +727,9 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
     sampled_status_counts: Counter[str] = Counter()
     sampled_source_counts: Counter[str] = Counter()
     sampled_fallback_reasons: Counter[str] = Counter()
+    sampled_start_classification_counts: Counter[str] = Counter()
+    sampled_goal_classification_counts: Counter[str] = Counter()
+    sampled_connector_strategy_counts: Counter[str] = Counter()
     sampled_candidate_audit: list[dict[str, Any]] = []
     group_summary: dict[str, dict[str, Any]] = defaultdict(_empty_group_summary)
     iris_report_count = 0
@@ -718,6 +742,9 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
     sampled_fallback_count = 0
     sampled_sample_attempt_count = 0
     sampled_candidate_ranking_count = 0
+    sampled_anchor_region_added_count = 0
+    sampled_anchor_region_connected_count = 0
+    sampled_connector_attempt_count = 0
 
     for scenario in scenarios:
         group = str(scenario.get("scenario_group") or "unknown")
@@ -740,6 +767,11 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         group_payload["sampled_region_path_fallback_count"] += int(sampled["fallback_count"])
         group_payload["sampled_region_path_sample_attempt_count"] += int(sampled["sample_attempt_count"])
         group_payload["sampled_region_path_candidate_ranking_count"] += int(sampled["candidate_ranking_count"])
+        group_payload["sampled_region_path_anchor_region_added_count"] += int(sampled["anchor_region_added_count"])
+        group_payload["sampled_region_path_anchor_region_connected_count"] += int(
+            sampled["anchor_region_connected_count"]
+        )
+        group_payload["sampled_region_path_connector_attempt_count"] += int(sampled["connector_attempt_count"])
 
         iris_report_count += int(iris["report_count"])
         iris_fallback_count += int(iris["fallback_count"])
@@ -751,6 +783,9 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         sampled_fallback_count += int(sampled["fallback_count"])
         sampled_sample_attempt_count += int(sampled["sample_attempt_count"])
         sampled_candidate_ranking_count += int(sampled["candidate_ranking_count"])
+        sampled_anchor_region_added_count += int(sampled["anchor_region_added_count"])
+        sampled_anchor_region_connected_count += int(sampled["anchor_region_connected_count"])
+        sampled_connector_attempt_count += int(sampled["connector_attempt_count"])
         sampled_candidate_audit.extend(scenario.get("sampled_region_path_candidate_audit", []))
         iris_status_counts.update(iris["status_counts"])
         iris_fallback_reasons.update(iris["fallback_reasons"])
@@ -759,6 +794,9 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         sampled_status_counts.update(sampled["status_counts"])
         sampled_source_counts.update(sampled["source_counts"])
         sampled_fallback_reasons.update(sampled["fallback_reasons"])
+        sampled_start_classification_counts.update(sampled["start_classification_counts"])
+        sampled_goal_classification_counts.update(sampled["goal_classification_counts"])
+        sampled_connector_strategy_counts.update(sampled["connector_strategy_counts"])
 
     return {
         "iris_requested_count": iris_report_count,
@@ -779,6 +817,12 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         "sampled_region_path_fallback_reasons": dict(sorted(sampled_fallback_reasons.items())),
         "sampled_region_path_sample_attempt_count": sampled_sample_attempt_count,
         "sampled_region_path_candidate_ranking_count": sampled_candidate_ranking_count,
+        "sampled_region_path_anchor_region_added_count": sampled_anchor_region_added_count,
+        "sampled_region_path_anchor_region_connected_count": sampled_anchor_region_connected_count,
+        "sampled_region_path_start_classification_counts": dict(sorted(sampled_start_classification_counts.items())),
+        "sampled_region_path_goal_classification_counts": dict(sorted(sampled_goal_classification_counts.items())),
+        "sampled_region_path_connector_attempt_count": sampled_connector_attempt_count,
+        "sampled_region_path_connector_strategy_counts": dict(sorted(sampled_connector_strategy_counts.items())),
         "sampled_region_path_candidate_audit": sampled_candidate_audit,
         "scenario_group_summary": {
             group: dict(payload)
@@ -969,6 +1013,9 @@ def _empty_group_summary() -> dict[str, int]:
         "sampled_region_path_fallback_count": 0,
         "sampled_region_path_sample_attempt_count": 0,
         "sampled_region_path_candidate_ranking_count": 0,
+        "sampled_region_path_anchor_region_added_count": 0,
+        "sampled_region_path_anchor_region_connected_count": 0,
+        "sampled_region_path_connector_attempt_count": 0,
     }
 
 
@@ -1033,10 +1080,16 @@ def _sampled_region_path_diagnostics(evaluations) -> dict[str, Any]:
     status_counts: Counter[str] = Counter()
     source_counts: Counter[str] = Counter()
     fallback_reasons: Counter[str] = Counter()
+    start_classification_counts: Counter[str] = Counter()
+    goal_classification_counts: Counter[str] = Counter()
+    connector_strategy_counts: Counter[str] = Counter()
     selected_count = 0
     fallback_count = 0
     sample_attempt_count = 0
     candidate_ranking_count = 0
+    anchor_region_added_count = 0
+    anchor_region_connected_count = 0
+    connector_attempt_count = 0
     for item in evaluations:
         candidate = item.to_dict()
         planning_backend = candidate.get("planning_backend")
@@ -1055,6 +1108,30 @@ def _sampled_region_path_diagnostics(evaluations) -> dict[str, Any]:
         if reason:
             fallback_reasons[str(reason)] += 1
         sample_attempt_count += _int_value(sampled.get("sample_attempt_count"))
+        anchoring = sampled.get("start_goal_anchoring")
+        anchoring = anchoring if isinstance(anchoring, dict) else {}
+        start_classification = anchoring.get("start_classification")
+        goal_classification = anchoring.get("goal_classification")
+        if start_classification:
+            start_classification_counts[str(start_classification)] += 1
+        if goal_classification:
+            goal_classification_counts[str(goal_classification)] += 1
+        for endpoint in ("start", "goal"):
+            if anchoring.get(f"{endpoint}_anchor_region_added") is True:
+                anchor_region_added_count += 1
+            if anchoring.get(f"{endpoint}_anchor_region_connected") is True:
+                anchor_region_connected_count += 1
+        sample_attempts = sampled.get("sample_attempts")
+        if isinstance(sample_attempts, list):
+            for attempt in sample_attempts:
+                if not isinstance(attempt, dict):
+                    continue
+                if attempt.get("kind") != "connector_attempt":
+                    continue
+                connector_attempt_count += 1
+                strategy = attempt.get("strategy")
+                if strategy:
+                    connector_strategy_counts[str(strategy)] += 1
         rankings = sampled.get("candidate_rankings")
         if isinstance(rankings, list):
             candidate_ranking_count += len(rankings)
@@ -1071,6 +1148,12 @@ def _sampled_region_path_diagnostics(evaluations) -> dict[str, Any]:
         "fallback_reasons": dict(sorted(fallback_reasons.items())),
         "sample_attempt_count": sample_attempt_count,
         "candidate_ranking_count": candidate_ranking_count,
+        "anchor_region_added_count": anchor_region_added_count,
+        "anchor_region_connected_count": anchor_region_connected_count,
+        "start_classification_counts": dict(sorted(start_classification_counts.items())),
+        "goal_classification_counts": dict(sorted(goal_classification_counts.items())),
+        "connector_attempt_count": connector_attempt_count,
+        "connector_strategy_counts": dict(sorted(connector_strategy_counts.items())),
     }
 
 

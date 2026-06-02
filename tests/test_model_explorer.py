@@ -1977,8 +1977,20 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(summary["sampled_region_path_fallback_count"], 1)
         self.assertEqual(summary["sampled_region_path_source_counts"]["iris"], 1)
         self.assertEqual(summary["sampled_region_path_fallback_reasons"]["sampled_path_collision"], 1)
-        self.assertEqual(summary["sampled_region_path_sample_attempt_count"], 7)
+        self.assertEqual(summary["sampled_region_path_sample_attempt_count"], 8)
         self.assertEqual(summary["sampled_region_path_candidate_ranking_count"], 2)
+        self.assertEqual(summary["sampled_region_path_anchor_region_added_count"], 1)
+        self.assertEqual(summary["sampled_region_path_anchor_region_connected_count"], 1)
+        self.assertEqual(
+            summary["sampled_region_path_goal_classification_counts"]["goal_outside_region_coverage"],
+            1,
+        )
+        self.assertEqual(summary["sampled_region_path_goal_classification_counts"]["covered"], 1)
+        self.assertEqual(summary["sampled_region_path_connector_attempt_count"], 2)
+        self.assertEqual(
+            summary["sampled_region_path_connector_strategy_counts"]["cost_aware_constrained_astar"],
+            2,
+        )
         self.assertEqual(len(summary["sampled_region_path_candidate_audit"]), 2)
         fallback_audit = next(
             item
@@ -3850,6 +3862,14 @@ def _route_fixture(scenario_index, *, action_index):
                     "start_region_candidates": [0],
                     "goal_region_candidates": [1],
                     "region_sequence_found": True,
+                    "start_classification": "covered",
+                    "goal_classification": "covered",
+                    "start_anchor_region_added": False,
+                    "goal_anchor_region_added": False,
+                    "start_anchor_region_connected": False,
+                    "goal_anchor_region_connected": False,
+                    "start_anchor_failure_reason": None,
+                    "goal_anchor_failure_reason": None,
                 },
                 "sample_attempt_count": 3,
                 "sample_attempts": [
@@ -3859,6 +3879,11 @@ def _route_fixture(scenario_index, *, action_index):
                         "kind": "edge_transition",
                         "from_region_id": 0,
                         "to_region_id": 1,
+                        "status": "unavailable",
+                    },
+                    {
+                        "kind": "connector_attempt",
+                        "strategy": "cost_aware_constrained_astar",
                         "status": "unavailable",
                     },
                 ],
@@ -3906,18 +3931,31 @@ def _route_fixture(scenario_index, *, action_index):
                     "start_region_candidates": [0],
                     "goal_region_candidates": [1],
                     "region_sequence_found": True,
+                    "start_classification": "covered",
+                    "goal_classification": "goal_outside_region_coverage",
+                    "start_anchor_region_added": False,
+                    "goal_anchor_region_added": True,
+                    "start_anchor_region_connected": False,
+                    "goal_anchor_region_connected": True,
+                    "start_anchor_failure_reason": None,
+                    "goal_anchor_failure_reason": None,
                 },
-                "sample_attempt_count": 4,
+                "sample_attempt_count": 5,
                 "sample_attempts": [
                     {"kind": "region_sample", "region_id": 0, "cell": [0, 0], "strategy": "preferred"},
                     {"kind": "region_sample", "region_id": 0, "cell": [0, 1], "strategy": "low_cost"},
                     {"kind": "region_sample", "region_id": 1, "cell": [1, 1], "strategy": "preferred"},
                     {"kind": "edge_transition", "from_region_id": 0, "to_region_id": 1, "status": "available"},
+                    {
+                        "kind": "connector_attempt",
+                        "strategy": "cost_aware_constrained_astar",
+                        "status": "available",
+                    },
                 ],
                 "candidate_rankings": [
                     {
                         "rank": 1,
-                        "strategy": "edge_adjacent",
+                        "strategy": "cost_aware_constrained_astar",
                         "status": "selected",
                         "fallback_reason": None,
                         "sample_count": 2,
