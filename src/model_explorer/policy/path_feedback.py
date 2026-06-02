@@ -90,6 +90,7 @@ class PathFeedbackManifest:
     scenario_set: str | None = None
     diagnostic_profile: str | None = None
     acceptance_gate: str | None = None
+    python_executable: str | None = None
     planner_extra_args: tuple[str, ...] = ()
     summary_output: Path | None = None
     report_output: Path | None = None
@@ -122,6 +123,7 @@ def load_path_feedback_manifest(path: str | Path) -> PathFeedbackManifest:
             payload.get("diagnostic_profile", validation_parameters.get("diagnostic_profile"))
         ),
         acceptance_gate=_optional_str(payload.get("acceptance_gate", validation_parameters.get("acceptance_gate"))),
+        python_executable=_optional_str(planner_config.get("python_executable")),
         planner_extra_args=_string_tuple(planner_extra_args),
         summary_output=_optional_path(outputs.get("summary"), base_dir=manifest_path.parent),
         report_output=_optional_path(outputs.get("report"), base_dir=manifest_path.parent),
@@ -138,6 +140,7 @@ def dry_run_path_feedback_manifest(path: str | Path) -> dict[str, Any]:
         "diagnostic_profile": manifest.diagnostic_profile,
         "acceptance_gate": manifest.acceptance_gate,
         "top_k": manifest.top_k,
+        "python_executable": manifest.python_executable,
         "planner_extra_args": list(manifest.planner_extra_args),
         "planner": str(manifest.planner_config.get("backend", "path_planner_route")),
         "scenarios": [
@@ -965,6 +968,7 @@ def _acceptance_metadata(
         "diagnostic_profile": manifest.diagnostic_profile,
         "acceptance_gate": manifest.acceptance_gate,
         "top_k": int(manifest.top_k),
+        "python_executable": manifest.python_executable,
         "planner_extra_args": list(manifest.planner_extra_args),
         "open_grid_fallback_used": bool(open_grid_fallback_used),
         "open_grid_fallback_used_gate": {
