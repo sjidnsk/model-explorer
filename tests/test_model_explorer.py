@@ -1991,6 +1991,21 @@ class PathPlanningAdapterTests(unittest.TestCase):
             summary["sampled_region_path_connector_strategy_counts"]["cost_aware_constrained_astar"],
             2,
         )
+        self.assertEqual(summary["sampled_region_path_terminal_adjusted_count"], 1)
+        self.assertEqual(summary["sampled_region_path_terminal_adjustment_candidate_count"], 3)
+        self.assertEqual(summary["sampled_region_path_terminal_adjustment_status_counts"]["selected"], 1)
+        self.assertEqual(
+            summary["sampled_region_path_terminal_adjustment_reason_counts"]["terminal_adjustment_selected"],
+            1,
+        )
+        self.assertEqual(
+            summary["sampled_region_path_execution_tie_break_reason_counts"]["execution_tie_break_improved"],
+            1,
+        )
+        self.assertEqual(
+            summary["sampled_region_path_execution_tie_break_reason_counts"]["execution_tie_break_no_alternative"],
+            1,
+        )
         self.assertEqual(len(summary["sampled_region_path_candidate_audit"]), 2)
         fallback_audit = next(
             item
@@ -2005,6 +2020,20 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(fallback_audit["sample_attempt_count"], 3)
         self.assertEqual(fallback_audit["candidate_ranking_count"], 1)
         self.assertIn("candidate_metrics", fallback_audit)
+        self.assertEqual(
+            fallback_audit["execution_tie_break"]["reason"],
+            "execution_tie_break_no_alternative",
+        )
+        selected_audit = next(
+            item
+            for item in summary["sampled_region_path_candidate_audit"]
+            if item["status"] == "selected"
+        )
+        self.assertEqual(
+            selected_audit["terminal_adjustment_report"]["reason_code"],
+            "terminal_adjustment_selected",
+        )
+        self.assertEqual(selected_audit["execution_tie_break"]["reason"], "execution_tie_break_improved")
         self.assertIn("smoke", summary["scenario_group_summary"])
         self.assertIn("smoke", summary["diagnostic_interpretation"]["scenario_group_interpretation"])
         self.assertGreaterEqual(summary["selection_changed_count"], 1)
@@ -3898,6 +3927,17 @@ def _route_fixture(scenario_index, *, action_index):
                 ],
                 "safety_checks": {"collision_free": False},
                 "candidate_comparison": {"candidate_cost_delta": None},
+                "terminal_adjustment_report": {
+                    "schema_version": "terminal_adjustment_report/v1",
+                    "status": "not_required",
+                    "reason_code": "terminal_adjustment_not_required",
+                    "target_adjusted": False,
+                    "candidate_count": 0,
+                },
+                "execution_tie_break": {
+                    "status": "fallback",
+                    "reason": "execution_tie_break_no_alternative",
+                },
             },
         }
         route["region_graph_report"] = {
@@ -3958,12 +3998,27 @@ def _route_fixture(scenario_index, *, action_index):
                         "strategy": "cost_aware_constrained_astar",
                         "status": "selected",
                         "fallback_reason": None,
+                        "selection_reason": "execution_tie_break_improved",
+                        "execution_tie_break_reason": "execution_tie_break_improved",
                         "sample_count": 2,
                         "candidate_cost_delta": -0.5,
                     }
                 ],
                 "safety_checks": {"collision_free": True},
                 "candidate_comparison": {"candidate_cost_delta": -0.5},
+                "terminal_adjustment_report": {
+                    "schema_version": "terminal_adjustment_report/v1",
+                    "status": "selected",
+                    "reason_code": "terminal_adjustment_selected",
+                    "target_adjusted": True,
+                    "original_goal_cell": [3, 2],
+                    "adjusted_goal_cell": [2, 2],
+                    "candidate_count": 3,
+                },
+                "execution_tie_break": {
+                    "status": "selected",
+                    "reason": "execution_tie_break_improved",
+                },
             },
         }
         route["iris_region_report"] = {

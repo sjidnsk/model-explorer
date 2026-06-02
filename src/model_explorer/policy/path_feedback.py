@@ -285,6 +285,28 @@ def compact_path_feedback_summary(
             "sampled_region_path_connector_strategy_counts",
             {},
         ),
+        "sampled_region_path_terminal_adjusted_count": summary.get(
+            "sampled_region_path_terminal_adjusted_count"
+        ),
+        "sampled_region_path_terminal_adjustment_candidate_count": summary.get(
+            "sampled_region_path_terminal_adjustment_candidate_count"
+        ),
+        "sampled_region_path_terminal_adjustment_status_counts": summary.get(
+            "sampled_region_path_terminal_adjustment_status_counts",
+            {},
+        ),
+        "sampled_region_path_terminal_adjustment_reason_counts": summary.get(
+            "sampled_region_path_terminal_adjustment_reason_counts",
+            {},
+        ),
+        "sampled_region_path_execution_tie_break_status_counts": summary.get(
+            "sampled_region_path_execution_tie_break_status_counts",
+            {},
+        ),
+        "sampled_region_path_execution_tie_break_reason_counts": summary.get(
+            "sampled_region_path_execution_tie_break_reason_counts",
+            {},
+        ),
         "sampled_region_path_candidate_audit": summary.get("sampled_region_path_candidate_audit", []),
         "diagnostic_interpretation": summary.get("diagnostic_interpretation", {}),
     }
@@ -730,6 +752,10 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
     sampled_start_classification_counts: Counter[str] = Counter()
     sampled_goal_classification_counts: Counter[str] = Counter()
     sampled_connector_strategy_counts: Counter[str] = Counter()
+    sampled_terminal_adjustment_status_counts: Counter[str] = Counter()
+    sampled_terminal_adjustment_reason_counts: Counter[str] = Counter()
+    sampled_execution_tie_break_status_counts: Counter[str] = Counter()
+    sampled_execution_tie_break_reason_counts: Counter[str] = Counter()
     sampled_candidate_audit: list[dict[str, Any]] = []
     group_summary: dict[str, dict[str, Any]] = defaultdict(_empty_group_summary)
     iris_report_count = 0
@@ -745,6 +771,8 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
     sampled_anchor_region_added_count = 0
     sampled_anchor_region_connected_count = 0
     sampled_connector_attempt_count = 0
+    sampled_terminal_adjusted_count = 0
+    sampled_terminal_adjustment_candidate_count = 0
 
     for scenario in scenarios:
         group = str(scenario.get("scenario_group") or "unknown")
@@ -772,6 +800,10 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
             sampled["anchor_region_connected_count"]
         )
         group_payload["sampled_region_path_connector_attempt_count"] += int(sampled["connector_attempt_count"])
+        group_payload["sampled_region_path_terminal_adjusted_count"] += int(sampled["terminal_adjusted_count"])
+        group_payload["sampled_region_path_terminal_adjustment_candidate_count"] += int(
+            sampled["terminal_adjustment_candidate_count"]
+        )
 
         iris_report_count += int(iris["report_count"])
         iris_fallback_count += int(iris["fallback_count"])
@@ -786,6 +818,8 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         sampled_anchor_region_added_count += int(sampled["anchor_region_added_count"])
         sampled_anchor_region_connected_count += int(sampled["anchor_region_connected_count"])
         sampled_connector_attempt_count += int(sampled["connector_attempt_count"])
+        sampled_terminal_adjusted_count += int(sampled["terminal_adjusted_count"])
+        sampled_terminal_adjustment_candidate_count += int(sampled["terminal_adjustment_candidate_count"])
         sampled_candidate_audit.extend(scenario.get("sampled_region_path_candidate_audit", []))
         iris_status_counts.update(iris["status_counts"])
         iris_fallback_reasons.update(iris["fallback_reasons"])
@@ -797,6 +831,10 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         sampled_start_classification_counts.update(sampled["start_classification_counts"])
         sampled_goal_classification_counts.update(sampled["goal_classification_counts"])
         sampled_connector_strategy_counts.update(sampled["connector_strategy_counts"])
+        sampled_terminal_adjustment_status_counts.update(sampled["terminal_adjustment_status_counts"])
+        sampled_terminal_adjustment_reason_counts.update(sampled["terminal_adjustment_reason_counts"])
+        sampled_execution_tie_break_status_counts.update(sampled["execution_tie_break_status_counts"])
+        sampled_execution_tie_break_reason_counts.update(sampled["execution_tie_break_reason_counts"])
 
     return {
         "iris_requested_count": iris_report_count,
@@ -823,6 +861,20 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         "sampled_region_path_goal_classification_counts": dict(sorted(sampled_goal_classification_counts.items())),
         "sampled_region_path_connector_attempt_count": sampled_connector_attempt_count,
         "sampled_region_path_connector_strategy_counts": dict(sorted(sampled_connector_strategy_counts.items())),
+        "sampled_region_path_terminal_adjusted_count": sampled_terminal_adjusted_count,
+        "sampled_region_path_terminal_adjustment_candidate_count": sampled_terminal_adjustment_candidate_count,
+        "sampled_region_path_terminal_adjustment_status_counts": dict(
+            sorted(sampled_terminal_adjustment_status_counts.items())
+        ),
+        "sampled_region_path_terminal_adjustment_reason_counts": dict(
+            sorted(sampled_terminal_adjustment_reason_counts.items())
+        ),
+        "sampled_region_path_execution_tie_break_status_counts": dict(
+            sorted(sampled_execution_tie_break_status_counts.items())
+        ),
+        "sampled_region_path_execution_tie_break_reason_counts": dict(
+            sorted(sampled_execution_tie_break_reason_counts.items())
+        ),
         "sampled_region_path_candidate_audit": sampled_candidate_audit,
         "scenario_group_summary": {
             group: dict(payload)
@@ -1016,6 +1068,8 @@ def _empty_group_summary() -> dict[str, int]:
         "sampled_region_path_anchor_region_added_count": 0,
         "sampled_region_path_anchor_region_connected_count": 0,
         "sampled_region_path_connector_attempt_count": 0,
+        "sampled_region_path_terminal_adjusted_count": 0,
+        "sampled_region_path_terminal_adjustment_candidate_count": 0,
     }
 
 
@@ -1083,6 +1137,10 @@ def _sampled_region_path_diagnostics(evaluations) -> dict[str, Any]:
     start_classification_counts: Counter[str] = Counter()
     goal_classification_counts: Counter[str] = Counter()
     connector_strategy_counts: Counter[str] = Counter()
+    terminal_adjustment_status_counts: Counter[str] = Counter()
+    terminal_adjustment_reason_counts: Counter[str] = Counter()
+    execution_tie_break_status_counts: Counter[str] = Counter()
+    execution_tie_break_reason_counts: Counter[str] = Counter()
     selected_count = 0
     fallback_count = 0
     sample_attempt_count = 0
@@ -1090,6 +1148,8 @@ def _sampled_region_path_diagnostics(evaluations) -> dict[str, Any]:
     anchor_region_added_count = 0
     anchor_region_connected_count = 0
     connector_attempt_count = 0
+    terminal_adjusted_count = 0
+    terminal_adjustment_candidate_count = 0
     for item in evaluations:
         candidate = item.to_dict()
         planning_backend = candidate.get("planning_backend")
@@ -1135,6 +1195,25 @@ def _sampled_region_path_diagnostics(evaluations) -> dict[str, Any]:
         rankings = sampled.get("candidate_rankings")
         if isinstance(rankings, list):
             candidate_ranking_count += len(rankings)
+        terminal = sampled.get("terminal_adjustment_report")
+        terminal = terminal if isinstance(terminal, dict) else {}
+        terminal_status = terminal.get("status")
+        if terminal_status:
+            terminal_adjustment_status_counts[str(terminal_status)] += 1
+        terminal_reason = terminal.get("reason_code") or terminal.get("reason")
+        if terminal_reason:
+            terminal_adjustment_reason_counts[str(terminal_reason)] += 1
+        if terminal.get("target_adjusted") is True:
+            terminal_adjusted_count += 1
+        terminal_adjustment_candidate_count += _int_value(terminal.get("candidate_count"))
+        tie_break = sampled.get("execution_tie_break")
+        tie_break = tie_break if isinstance(tie_break, dict) else {}
+        tie_break_status = tie_break.get("status")
+        if tie_break_status:
+            execution_tie_break_status_counts[str(tie_break_status)] += 1
+        tie_break_reason = tie_break.get("reason")
+        if tie_break_reason:
+            execution_tie_break_reason_counts[str(tie_break_reason)] += 1
         graph = candidate.get("region_graph")
         if isinstance(graph, dict):
             source_counts[str(graph.get("graph_source") or graph.get("region_source") or "unknown")] += 1
@@ -1154,6 +1233,12 @@ def _sampled_region_path_diagnostics(evaluations) -> dict[str, Any]:
         "goal_classification_counts": dict(sorted(goal_classification_counts.items())),
         "connector_attempt_count": connector_attempt_count,
         "connector_strategy_counts": dict(sorted(connector_strategy_counts.items())),
+        "terminal_adjusted_count": terminal_adjusted_count,
+        "terminal_adjustment_candidate_count": terminal_adjustment_candidate_count,
+        "terminal_adjustment_status_counts": dict(sorted(terminal_adjustment_status_counts.items())),
+        "terminal_adjustment_reason_counts": dict(sorted(terminal_adjustment_reason_counts.items())),
+        "execution_tie_break_status_counts": dict(sorted(execution_tie_break_status_counts.items())),
+        "execution_tie_break_reason_counts": dict(sorted(execution_tie_break_reason_counts.items())),
     }
 
 
@@ -1190,6 +1275,8 @@ def _sampled_region_path_candidate_audit(evaluations, *, scenario_id: str) -> li
                 "sample_attempt_count": _int_value(sampled.get("sample_attempt_count")),
                 "candidate_ranking_count": len(rankings),
                 "candidate_metrics": metrics,
+                "terminal_adjustment_report": sampled.get("terminal_adjustment_report", {}),
+                "execution_tie_break": sampled.get("execution_tie_break", {}),
                 "best_candidate_ranking": rankings[0] if rankings else {},
             }
         )
