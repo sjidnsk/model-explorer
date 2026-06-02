@@ -69,6 +69,7 @@ class PathCandidateEvaluation:
             "trajectory_optimization": _optimization_summary(
                 self.result.metadata.get("trajectory_optimization_report")
             ),
+            "planning_backend": _planning_backend_summary(self.result.metadata.get("planning_backend_report")),
             "region_graph": _region_graph_summary(self.result.metadata.get("region_graph_report")),
             "iris_region": _iris_region_summary(self.result.metadata.get("iris_region_report")),
             "input_sources": input_sources,
@@ -417,6 +418,7 @@ def path_plan_result_from_route_dict(
             "postprocess": route.get("postprocess"),
             "tracking_simulation_report": route.get("tracking_simulation_report"),
             "trajectory_optimization_report": route.get("trajectory_optimization_report"),
+            "planning_backend_report": route.get("planning_backend_report"),
             "region_graph_report": route.get("region_graph_report"),
             "iris_region_report": route.get("iris_region_report"),
         },
@@ -622,6 +624,22 @@ def _optimization_summary(value: Any) -> dict[str, Any] | None:
         "solver_status": value.get("solver_status"),
         "fallback_status": value.get("fallback_status"),
         "has_optimized_path": bool(value.get("optimized_path")),
+    }
+
+
+def _planning_backend_summary(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    return {
+        "requested_backend": value.get("requested_backend"),
+        "selected_backend": value.get("selected_backend"),
+        "status": value.get("status"),
+        "fallback_reason": value.get("fallback_reason"),
+        "segment_count": value.get("segment_count"),
+        "comparison": value.get("comparison") if isinstance(value.get("comparison"), dict) else {},
+        "region_graph_candidate": (
+            value.get("region_graph_candidate") if isinstance(value.get("region_graph_candidate"), dict) else {}
+        ),
     }
 
 

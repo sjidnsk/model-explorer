@@ -1557,6 +1557,7 @@ class PathPlanningAdapterTests(unittest.TestCase):
 
     def test_path_planner_route_adapter_is_explicitly_unavailable_without_direct_imports(self):
         from model_explorer.policy.planning import (
+            PathCandidateEvaluation,
             PathPlanRequest,
             build_path_planner_request_dict,
             evaluate_candidate_paths,
@@ -1594,6 +1595,15 @@ class PathPlanningAdapterTests(unittest.TestCase):
                 "world": [[1.0, 2.0], [1.5, 2.5]],
             },
             "diagnostics": {"path_length_m": 0.75, "search_mode": "platform_aware_astar"},
+            "planning_backend_report": {
+                "requested_backend": "region_graph_guided",
+                "selected_backend": "astar",
+                "status": "fallback",
+                "fallback_reason": "region_graph_candidate_not_better",
+                "segment_count": 1,
+                "comparison": {"path_changed": False},
+                "region_graph_candidate": {"status": "fallback"},
+            },
             "postprocess": {"fallback_status": "ok"},
         }
         mapped = path_plan_result_from_route_dict(route_payload, request=request)
@@ -1603,6 +1613,24 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(mapped.path_length, 0.75)
         self.assertEqual(mapped.risk, 0.2)
         self.assertEqual(mapped.metadata["diagnostics"]["search_mode"], "platform_aware_astar")
+        self.assertEqual(
+            mapped.metadata["planning_backend_report"]["fallback_reason"],
+            "region_graph_candidate_not_better",
+        )
+        summary = path_feedback_summary(
+            [
+                PathCandidateEvaluation(
+                    action_index=0,
+                    cell=selected_goal.cell,
+                    utility=selected_goal.utility,
+                    result=mapped,
+                )
+            ]
+        )
+        self.assertEqual(
+            summary["candidates"][0]["planning_backend"]["fallback_reason"],
+            "region_graph_candidate_not_better",
+        )
 
         disconnected = dict(route_payload)
         disconnected["region_graph_report"] = {
