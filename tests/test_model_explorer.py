@@ -1597,12 +1597,21 @@ class PathPlanningAdapterTests(unittest.TestCase):
             "diagnostics": {"path_length_m": 0.75, "search_mode": "platform_aware_astar"},
             "planning_backend_report": {
                 "requested_backend": "region_graph_guided",
-                "selected_backend": "astar",
-                "status": "fallback",
-                "fallback_reason": "region_graph_candidate_not_better",
-                "segment_count": 1,
-                "comparison": {"path_changed": False},
-                "region_graph_candidate": {"status": "fallback"},
+                "selected_backend": "sampled_region_path",
+                "status": "selected",
+                "fallback_reason": None,
+                "segment_count": 2,
+                "comparison": {"path_changed": True},
+                "region_graph_candidate": {"status": "selected"},
+                "sampled_region_path_report": {
+                    "schema_version": "sampled_region_path_report/v1",
+                    "status": "selected",
+                    "fallback_reason": None,
+                    "region_sequence": [0, 1],
+                    "sample_count": 2,
+                    "safety_checks": {"collision_free": True},
+                    "candidate_comparison": {"candidate_cost_delta": -1.0},
+                },
             },
             "postprocess": {"fallback_status": "ok"},
         }
@@ -1614,8 +1623,8 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(mapped.risk, 0.2)
         self.assertEqual(mapped.metadata["diagnostics"]["search_mode"], "platform_aware_astar")
         self.assertEqual(
-            mapped.metadata["planning_backend_report"]["fallback_reason"],
-            "region_graph_candidate_not_better",
+            mapped.metadata["planning_backend_report"]["selected_backend"],
+            "sampled_region_path",
         )
         summary = path_feedback_summary(
             [
@@ -1628,8 +1637,12 @@ class PathPlanningAdapterTests(unittest.TestCase):
             ]
         )
         self.assertEqual(
-            summary["candidates"][0]["planning_backend"]["fallback_reason"],
-            "region_graph_candidate_not_better",
+            summary["candidates"][0]["planning_backend"]["sampled_region_path"]["status"],
+            "selected",
+        )
+        self.assertEqual(
+            summary["candidates"][0]["diagnostic_interpretation"]["sampled_region_path_status"],
+            "selected",
         )
 
         disconnected = dict(route_payload)
@@ -1951,12 +1964,19 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertIn("iris_requested_count", summary)
         self.assertIn("iris_status_counts", summary)
         self.assertIn("region_graph_source_counts", summary)
+        self.assertIn("sampled_region_path_selected_count", summary)
+        self.assertIn("sampled_region_path_fallback_count", summary)
+        self.assertIn("sampled_region_path_source_counts", summary)
         self.assertIn("scenario_group_summary", summary)
         self.assertIn("diagnostic_interpretation", summary)
         self.assertIn("scenario_group_interpretation", summary["diagnostic_interpretation"])
         self.assertGreaterEqual(summary["iris_requested_count"], 1)
         self.assertEqual(summary["iris_status_counts"]["ok"], 1)
         self.assertEqual(summary["region_graph_source_counts"]["iris"], 1)
+        self.assertEqual(summary["sampled_region_path_selected_count"], 1)
+        self.assertEqual(summary["sampled_region_path_fallback_count"], 1)
+        self.assertEqual(summary["sampled_region_path_source_counts"]["iris"], 1)
+        self.assertEqual(summary["sampled_region_path_fallback_reasons"]["sampled_path_collision"], 1)
         self.assertIn("smoke", summary["scenario_group_summary"])
         self.assertIn("smoke", summary["diagnostic_interpretation"]["scenario_group_interpretation"])
         self.assertGreaterEqual(summary["selection_changed_count"], 1)
@@ -1990,6 +2010,7 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertIn("## Candidate Diagnostics", report)
         self.assertIn("## IRIS Diagnostics", report)
         self.assertIn("## Region Graph Diagnostics", report)
+        self.assertIn("## Sampled Region Path Diagnostics", report)
         self.assertIn("## Scenario Groups", report)
         self.assertIn(
             "| scenario | group | replacement_reason | failure_sources | primary_failure_reason | iris_region_graph_signal | open_grid_fallback |",
@@ -2009,6 +2030,10 @@ class PathPlanningAdapterTests(unittest.TestCase):
         )
         self.assertIn(
             "| scenario | group | before | after | failures | replans | graph_source_counts | fallback_reasons | disconnected |",
+            report,
+        )
+        self.assertIn(
+            "| scenario | group | selected | fallback | status_counts | source_counts | fallback_reasons |",
             report,
         )
         self.assertIn("| scenario | action | cell | reachable | path_cost | risk | utility | replan | failure |", report)
@@ -3786,6 +3811,21 @@ def _route_fixture(scenario_index, *, action_index):
         "postprocess": {"fallback_status": "ok", "tracking_safety_report": {"violation_count": 0}},
     }
     if scenario_index == 2 and action_index == 0:
+        route["planning_backend_report"] = {
+            "requested_backend": "region_graph_guided",
+            "selected_backend": "astar",
+            "status": "fallback",
+            "fallback_reason": "sampled_path_collision",
+            "sampled_region_path_report": {
+                "schema_version": "sampled_region_path_report/v1",
+                "status": "fallback",
+                "fallback_reason": "sampled_path_collision",
+                "region_sequence": [0, 1],
+                "sample_count": 2,
+                "safety_checks": {"collision_free": False},
+                "candidate_comparison": {"candidate_cost_delta": None},
+            },
+        }
         route["region_graph_report"] = {
             "status": "ok",
             "region_source": "grid_box",
@@ -3800,6 +3840,21 @@ def _route_fixture(scenario_index, *, action_index):
             },
         }
     if scenario_index == 1 and action_index == 1:
+        route["planning_backend_report"] = {
+            "requested_backend": "region_graph_guided",
+            "selected_backend": "sampled_region_path",
+            "status": "selected",
+            "fallback_reason": None,
+            "sampled_region_path_report": {
+                "schema_version": "sampled_region_path_report/v1",
+                "status": "selected",
+                "fallback_reason": None,
+                "region_sequence": [0, 1],
+                "sample_count": 2,
+                "safety_checks": {"collision_free": True},
+                "candidate_comparison": {"candidate_cost_delta": -0.5},
+            },
+        }
         route["iris_region_report"] = {
             "backend": "workspace_iris",
             "status": "ok",

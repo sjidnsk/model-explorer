@@ -630,6 +630,7 @@ def _optimization_summary(value: Any) -> dict[str, Any] | None:
 def _planning_backend_summary(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
+    sampled = value.get("sampled_region_path_report")
     return {
         "requested_backend": value.get("requested_backend"),
         "selected_backend": value.get("selected_backend"),
@@ -640,6 +641,7 @@ def _planning_backend_summary(value: Any) -> dict[str, Any] | None:
         "region_graph_candidate": (
             value.get("region_graph_candidate") if isinstance(value.get("region_graph_candidate"), dict) else {}
         ),
+        "sampled_region_path": sampled if isinstance(sampled, dict) else {},
     }
 
 
@@ -738,6 +740,17 @@ def _candidate_diagnostic_interpretation(item: dict[str, Any]) -> dict[str, Any]
         if graph_connected is False:
             flags.append("region_graph_disconnected")
 
+    sampled_status = None
+    sampled_fallback_reason = None
+    planning_backend = item.get("planning_backend")
+    if isinstance(planning_backend, dict):
+        sampled = planning_backend.get("sampled_region_path")
+        if isinstance(sampled, dict) and sampled:
+            sampled_status = sampled.get("status")
+            sampled_fallback_reason = sampled.get("fallback_reason")
+            if sampled_status == "fallback" or sampled_fallback_reason:
+                flags.append("sampled_region_path_fallback")
+
     ordered_flags = _dedupe(flags)
     return {
         "primary_source": _primary_diagnostic_source(ordered_flags),
@@ -747,6 +760,8 @@ def _candidate_diagnostic_interpretation(item: dict[str, Any]) -> dict[str, Any]
         "region_graph_source": graph_source,
         "region_graph_fallback_used": graph_fallback_used,
         "region_graph_start_goal_connected": graph_connected,
+        "sampled_region_path_status": sampled_status,
+        "sampled_region_path_fallback_reason": sampled_fallback_reason,
         "open_grid_fallback_used": bool(item.get("open_grid_fallback_used")),
     }
 
@@ -758,6 +773,7 @@ def _primary_diagnostic_source(flags: Sequence[str]) -> str:
         "region_graph_fallback",
         "iris_failure",
         "iris_fallback",
+        "sampled_region_path_fallback",
         "tracking_safety_violation",
         "trajectory_optimization_fallback",
         "open_grid_fallback",
