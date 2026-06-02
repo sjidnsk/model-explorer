@@ -262,6 +262,9 @@ def compact_path_feedback_summary(
         "sampled_region_path_status_counts": summary.get("sampled_region_path_status_counts", {}),
         "sampled_region_path_source_counts": summary.get("sampled_region_path_source_counts", {}),
         "sampled_region_path_fallback_reasons": summary.get("sampled_region_path_fallback_reasons", {}),
+        "sampled_region_path_sample_attempt_count": summary.get("sampled_region_path_sample_attempt_count"),
+        "sampled_region_path_candidate_ranking_count": summary.get("sampled_region_path_candidate_ranking_count"),
+        "sampled_region_path_candidate_audit": summary.get("sampled_region_path_candidate_audit", []),
         "diagnostic_interpretation": summary.get("diagnostic_interpretation", {}),
     }
     if summary_output is not None:
@@ -532,6 +535,32 @@ def render_path_feedback_markdown(summary: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Sampled Region Path Candidate Audit",
+            "",
+            "| scenario | action | source | status | fallback | sequence | attempts | rankings | edge_transitions | cost_delta |",
+            "|---|---:|---|---|---|---|---:|---:|---:|---:|",
+        ]
+    )
+    for item in summary["scenarios"]:
+        for audit in item.get("sampled_region_path_candidate_audit", []):
+            metrics = audit.get("candidate_metrics", {})
+            lines.append(
+                "| {scenario_id} | {action} | {source} | {status} | {fallback} | {sequence} | {attempts} | {rankings} | {edges} | {delta} |".format(
+                    scenario_id=audit["scenario_id"],
+                    action=audit["action_index"],
+                    source=audit["region_source"],
+                    status=audit["status"],
+                    fallback=audit["fallback_reason"],
+                    sequence=audit["region_sequence"],
+                    attempts=audit["sample_attempt_count"],
+                    rankings=audit["candidate_ranking_count"],
+                    edges=audit["edge_transition_count"],
+                    delta=metrics.get("candidate_cost_delta"),
+                )
+            )
+    lines.extend(
+        [
+            "",
             "## Scenario Groups",
             "",
             "| group | scenarios | candidates | reachable | failures | replans | changed | iris_reports | graph_fallbacks | disconnected |",
@@ -597,6 +626,10 @@ def _run_feedback_scenario(
         "iris_diagnostics": _iris_diagnostics(evaluations),
         "region_graph_diagnostics": _region_graph_diagnostics(evaluations),
         "sampled_region_path_diagnostics": _sampled_region_path_diagnostics(evaluations),
+        "sampled_region_path_candidate_audit": _sampled_region_path_candidate_audit(
+            evaluations,
+            scenario_id=scenario.scenario_id,
+        ),
         "baseline_vs_feedback": {
             "before_cell": before_cell,
             "after_cell": after_cell,
@@ -673,6 +706,7 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
     sampled_status_counts: Counter[str] = Counter()
     sampled_source_counts: Counter[str] = Counter()
     sampled_fallback_reasons: Counter[str] = Counter()
+    sampled_candidate_audit: list[dict[str, Any]] = []
     group_summary: dict[str, dict[str, Any]] = defaultdict(_empty_group_summary)
     iris_report_count = 0
     iris_fallback_count = 0
@@ -682,6 +716,8 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
     region_graph_start_goal_disconnected_count = 0
     sampled_selected_count = 0
     sampled_fallback_count = 0
+    sampled_sample_attempt_count = 0
+    sampled_candidate_ranking_count = 0
 
     for scenario in scenarios:
         group = str(scenario.get("scenario_group") or "unknown")
@@ -702,6 +738,8 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         group_payload["region_graph_start_goal_disconnected_count"] += int(graph["start_goal_disconnected_count"])
         group_payload["sampled_region_path_selected_count"] += int(sampled["selected_count"])
         group_payload["sampled_region_path_fallback_count"] += int(sampled["fallback_count"])
+        group_payload["sampled_region_path_sample_attempt_count"] += int(sampled["sample_attempt_count"])
+        group_payload["sampled_region_path_candidate_ranking_count"] += int(sampled["candidate_ranking_count"])
 
         iris_report_count += int(iris["report_count"])
         iris_fallback_count += int(iris["fallback_count"])
@@ -711,6 +749,9 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         region_graph_start_goal_disconnected_count += int(graph["start_goal_disconnected_count"])
         sampled_selected_count += int(sampled["selected_count"])
         sampled_fallback_count += int(sampled["fallback_count"])
+        sampled_sample_attempt_count += int(sampled["sample_attempt_count"])
+        sampled_candidate_ranking_count += int(sampled["candidate_ranking_count"])
+        sampled_candidate_audit.extend(scenario.get("sampled_region_path_candidate_audit", []))
         iris_status_counts.update(iris["status_counts"])
         iris_fallback_reasons.update(iris["fallback_reasons"])
         region_graph_source_counts.update(graph["source_counts"])
@@ -736,6 +777,9 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         "sampled_region_path_status_counts": dict(sorted(sampled_status_counts.items())),
         "sampled_region_path_source_counts": dict(sorted(sampled_source_counts.items())),
         "sampled_region_path_fallback_reasons": dict(sorted(sampled_fallback_reasons.items())),
+        "sampled_region_path_sample_attempt_count": sampled_sample_attempt_count,
+        "sampled_region_path_candidate_ranking_count": sampled_candidate_ranking_count,
+        "sampled_region_path_candidate_audit": sampled_candidate_audit,
         "scenario_group_summary": {
             group: dict(payload)
             for group, payload in sorted(group_summary.items())
@@ -923,6 +967,8 @@ def _empty_group_summary() -> dict[str, int]:
         "region_graph_start_goal_disconnected_count": 0,
         "sampled_region_path_selected_count": 0,
         "sampled_region_path_fallback_count": 0,
+        "sampled_region_path_sample_attempt_count": 0,
+        "sampled_region_path_candidate_ranking_count": 0,
     }
 
 
@@ -989,6 +1035,8 @@ def _sampled_region_path_diagnostics(evaluations) -> dict[str, Any]:
     fallback_reasons: Counter[str] = Counter()
     selected_count = 0
     fallback_count = 0
+    sample_attempt_count = 0
+    candidate_ranking_count = 0
     for item in evaluations:
         candidate = item.to_dict()
         planning_backend = candidate.get("planning_backend")
@@ -1006,6 +1054,10 @@ def _sampled_region_path_diagnostics(evaluations) -> dict[str, Any]:
         reason = sampled.get("fallback_reason")
         if reason:
             fallback_reasons[str(reason)] += 1
+        sample_attempt_count += _int_value(sampled.get("sample_attempt_count"))
+        rankings = sampled.get("candidate_rankings")
+        if isinstance(rankings, list):
+            candidate_ranking_count += len(rankings)
         graph = candidate.get("region_graph")
         if isinstance(graph, dict):
             source_counts[str(graph.get("graph_source") or graph.get("region_source") or "unknown")] += 1
@@ -1017,7 +1069,48 @@ def _sampled_region_path_diagnostics(evaluations) -> dict[str, Any]:
         "status_counts": dict(sorted(status_counts.items())),
         "source_counts": dict(sorted(source_counts.items())),
         "fallback_reasons": dict(sorted(fallback_reasons.items())),
+        "sample_attempt_count": sample_attempt_count,
+        "candidate_ranking_count": candidate_ranking_count,
     }
+
+
+def _sampled_region_path_candidate_audit(evaluations, *, scenario_id: str) -> list[dict[str, Any]]:
+    audit: list[dict[str, Any]] = []
+    for item in evaluations:
+        candidate = item.to_dict()
+        planning_backend = candidate.get("planning_backend")
+        if not isinstance(planning_backend, dict):
+            continue
+        sampled = planning_backend.get("sampled_region_path")
+        if not isinstance(sampled, dict) or not sampled:
+            continue
+        graph = candidate.get("region_graph")
+        region_source = "unknown"
+        if isinstance(graph, dict):
+            region_source = str(graph.get("graph_source") or graph.get("region_source") or "unknown")
+        rankings = sampled.get("candidate_rankings")
+        rankings = rankings if isinstance(rankings, list) else []
+        metrics = sampled.get("candidate_comparison")
+        metrics = metrics if isinstance(metrics, dict) else {}
+        audit.append(
+            {
+                "scenario_id": scenario_id,
+                "action_index": candidate["action_index"],
+                "cell": candidate["cell"],
+                "region_source": region_source,
+                "selected_backend": planning_backend.get("selected_backend"),
+                "status": sampled.get("status") or planning_backend.get("status") or "unknown",
+                "fallback_reason": sampled.get("fallback_reason"),
+                "region_sequence": sampled.get("region_sequence", []),
+                "start_goal_anchoring": sampled.get("start_goal_anchoring", {}),
+                "edge_transition_count": _int_value(sampled.get("edge_transition_count")),
+                "sample_attempt_count": _int_value(sampled.get("sample_attempt_count")),
+                "candidate_ranking_count": len(rankings),
+                "candidate_metrics": metrics,
+                "best_candidate_ranking": rankings[0] if rankings else {},
+            }
+        )
+    return audit
 
 
 def _int_value(value: Any) -> int:

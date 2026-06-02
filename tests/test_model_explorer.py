@@ -1977,6 +1977,22 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(summary["sampled_region_path_fallback_count"], 1)
         self.assertEqual(summary["sampled_region_path_source_counts"]["iris"], 1)
         self.assertEqual(summary["sampled_region_path_fallback_reasons"]["sampled_path_collision"], 1)
+        self.assertEqual(summary["sampled_region_path_sample_attempt_count"], 7)
+        self.assertEqual(summary["sampled_region_path_candidate_ranking_count"], 2)
+        self.assertEqual(len(summary["sampled_region_path_candidate_audit"]), 2)
+        fallback_audit = next(
+            item
+            for item in summary["sampled_region_path_candidate_audit"]
+            if item["fallback_reason"] == "sampled_path_collision"
+        )
+        self.assertEqual(fallback_audit["scenario_id"], "npz_low_confidence_risk_band")
+        self.assertEqual(fallback_audit["action_index"], 0)
+        self.assertEqual(fallback_audit["region_source"], "grid_box")
+        self.assertEqual(fallback_audit["region_sequence"], [0, 1])
+        self.assertEqual(fallback_audit["start_goal_anchoring"]["start_region_id"], 0)
+        self.assertEqual(fallback_audit["sample_attempt_count"], 3)
+        self.assertEqual(fallback_audit["candidate_ranking_count"], 1)
+        self.assertIn("candidate_metrics", fallback_audit)
         self.assertIn("smoke", summary["scenario_group_summary"])
         self.assertIn("smoke", summary["diagnostic_interpretation"]["scenario_group_interpretation"])
         self.assertGreaterEqual(summary["selection_changed_count"], 1)
@@ -1988,6 +2004,7 @@ class PathPlanningAdapterTests(unittest.TestCase):
             self.assertIn("selected_path_cost_before_feedback", item)
             self.assertIn("path_cost_delta_after_feedback", item)
             self.assertIn("baseline_vs_feedback", item)
+            self.assertIn("sampled_region_path_candidate_audit", item)
             self.assertIn("diagnostic_interpretation", item)
             self.assertIn("target_replacement_reason", item["diagnostic_interpretation"])
             self.assertIn("failure_sources", item["diagnostic_interpretation"])
@@ -2011,6 +2028,7 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertIn("## IRIS Diagnostics", report)
         self.assertIn("## Region Graph Diagnostics", report)
         self.assertIn("## Sampled Region Path Diagnostics", report)
+        self.assertIn("## Sampled Region Path Candidate Audit", report)
         self.assertIn("## Scenario Groups", report)
         self.assertIn(
             "| scenario | group | replacement_reason | failure_sources | primary_failure_reason | iris_region_graph_signal | open_grid_fallback |",
@@ -2034,6 +2052,10 @@ class PathPlanningAdapterTests(unittest.TestCase):
         )
         self.assertIn(
             "| scenario | group | selected | fallback | status_counts | source_counts | fallback_reasons |",
+            report,
+        )
+        self.assertIn(
+            "| scenario | action | source | status | fallback | sequence | attempts | rankings | edge_transitions | cost_delta |",
             report,
         )
         self.assertIn("| scenario | action | cell | reachable | path_cost | risk | utility | replan | failure |", report)
@@ -3822,6 +3844,33 @@ def _route_fixture(scenario_index, *, action_index):
                 "fallback_reason": "sampled_path_collision",
                 "region_sequence": [0, 1],
                 "sample_count": 2,
+                "start_goal_anchoring": {
+                    "start_region_id": 0,
+                    "goal_region_id": 1,
+                    "start_region_candidates": [0],
+                    "goal_region_candidates": [1],
+                    "region_sequence_found": True,
+                },
+                "sample_attempt_count": 3,
+                "sample_attempts": [
+                    {"kind": "region_sample", "region_id": 0, "cell": [0, 0], "strategy": "preferred"},
+                    {"kind": "region_sample", "region_id": 1, "cell": [1, 1], "strategy": "preferred"},
+                    {
+                        "kind": "edge_transition",
+                        "from_region_id": 0,
+                        "to_region_id": 1,
+                        "status": "unavailable",
+                    },
+                ],
+                "candidate_rankings": [
+                    {
+                        "rank": None,
+                        "strategy": "preferred_low_cost",
+                        "status": "rejected",
+                        "fallback_reason": "sampled_path_collision",
+                        "sample_count": 2,
+                    }
+                ],
                 "safety_checks": {"collision_free": False},
                 "candidate_comparison": {"candidate_cost_delta": None},
             },
@@ -3851,6 +3900,30 @@ def _route_fixture(scenario_index, *, action_index):
                 "fallback_reason": None,
                 "region_sequence": [0, 1],
                 "sample_count": 2,
+                "start_goal_anchoring": {
+                    "start_region_id": 0,
+                    "goal_region_id": 1,
+                    "start_region_candidates": [0],
+                    "goal_region_candidates": [1],
+                    "region_sequence_found": True,
+                },
+                "sample_attempt_count": 4,
+                "sample_attempts": [
+                    {"kind": "region_sample", "region_id": 0, "cell": [0, 0], "strategy": "preferred"},
+                    {"kind": "region_sample", "region_id": 0, "cell": [0, 1], "strategy": "low_cost"},
+                    {"kind": "region_sample", "region_id": 1, "cell": [1, 1], "strategy": "preferred"},
+                    {"kind": "edge_transition", "from_region_id": 0, "to_region_id": 1, "status": "available"},
+                ],
+                "candidate_rankings": [
+                    {
+                        "rank": 1,
+                        "strategy": "edge_adjacent",
+                        "status": "selected",
+                        "fallback_reason": None,
+                        "sample_count": 2,
+                        "candidate_cost_delta": -0.5,
+                    }
+                ],
                 "safety_checks": {"collision_free": True},
                 "candidate_comparison": {"candidate_cost_delta": -0.5},
             },
