@@ -1615,6 +1615,35 @@ class PathPlanningAdapterTests(unittest.TestCase):
             },
             "postprocess": {"fallback_status": "ok"},
         }
+        route_payload.update(
+            _gcs_candidate_route_fields(
+                available=True,
+                selected=True,
+                selection_reason="gcs_candidate_quality_improved",
+                fallback_reason=None,
+                collision_count=0,
+                cost_delta=-0.75,
+                overlap_ratio=0.25,
+            )
+        )
+        route_payload.update(
+            _gcs_motion_feasibility_route_fields(
+                evaluated=True,
+                feasibility_status="feasible",
+                fallback_reason=None,
+            )
+        )
+        route_payload.update(
+            _gcs_curvature_constrained_candidate_route_fields(
+                available=True,
+                selected=True,
+                repair_success=False,
+                repair_strategy="none_required",
+                status_before="feasible",
+                status_after="feasible",
+                fallback_reason=None,
+            )
+        )
         mapped = path_plan_result_from_route_dict(route_payload, request=request)
 
         self.assertTrue(mapped.feasible)
@@ -1625,6 +1654,14 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(
             mapped.metadata["planning_backend_report"]["selected_backend"],
             "sampled_region_path",
+        )
+        self.assertEqual(mapped.metadata["gcs_candidate_report"]["selected"], True)
+        self.assertEqual(mapped.metadata["gcs_candidate_report"]["selection_reason"], "gcs_candidate_quality_improved")
+        self.assertEqual(mapped.metadata["gcs_motion_feasibility_report"]["feasibility_status"], "feasible")
+        self.assertEqual(mapped.metadata["gcs_curvature_constrained_candidate_report"]["selected"], True)
+        self.assertEqual(
+            mapped.metadata["gcs_curvature_constrained_candidate_report"]["repair_strategy"],
+            "none_required",
         )
         summary = path_feedback_summary(
             [
@@ -1644,6 +1681,13 @@ class PathPlanningAdapterTests(unittest.TestCase):
             summary["candidates"][0]["diagnostic_interpretation"]["sampled_region_path_status"],
             "selected",
         )
+        self.assertEqual(summary["candidates"][0]["gcs_candidate"]["selected"], True)
+        self.assertEqual(
+            summary["candidates"][0]["gcs_candidate"]["cost_delta_vs_baseline"],
+            -0.75,
+        )
+        self.assertEqual(summary["candidates"][0]["gcs_motion_feasibility"]["feasibility_status"], "feasible")
+        self.assertEqual(summary["candidates"][0]["gcs_curvature_constrained_candidate"]["selected"], True)
 
         disconnected = dict(route_payload)
         disconnected["region_graph_report"] = {
@@ -1973,29 +2017,165 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertGreaterEqual(summary["iris_requested_count"], 1)
         self.assertEqual(summary["iris_status_counts"]["ok"], 1)
         self.assertEqual(summary["region_graph_source_counts"]["iris"], 1)
+        self.assertEqual(summary["convex_region_report_count"], 5)
+        self.assertEqual(summary["convex_region_count_total"], 10)
+        self.assertEqual(summary["convex_region_backend_counts"]["fallback_box"], 4)
+        self.assertEqual(summary["convex_region_backend_counts"]["workspace_iris"], 1)
+        self.assertEqual(summary["convex_region_fallback_used_count"], 4)
+        self.assertEqual(summary["convex_region_gcs_ready_count"], 5)
+        self.assertEqual(summary["convex_region_blocked_cell_violation_count"], 0)
+        self.assertEqual(summary["convex_region_coverage_status_counts"]["covered"], 5)
+        self.assertEqual(summary["convex_region_gcs_ready_reason_counts"]["convex_region_sequence_ready"], 5)
+        self.assertEqual(len(summary["convex_region_candidate_audit"]), 5)
+        self.assertEqual(summary["gcs_trajectory_report_count"], 5)
+        self.assertEqual(summary["gcs_trajectory_attempted_count"], 5)
+        self.assertEqual(summary["gcs_trajectory_success_count"], 4)
+        self.assertEqual(summary["gcs_trajectory_collision_count"], 1)
+        self.assertEqual(summary["gcs_trajectory_region_count_total"], 10)
+        self.assertEqual(summary["gcs_trajectory_sample_count_total"], 25)
+        self.assertEqual(summary["gcs_trajectory_backend_counts"]["pydrake_gcs"], 5)
+        self.assertEqual(summary["gcs_trajectory_reason_counts"]["gcs_trajectory_solution_found"], 4)
+        self.assertEqual(summary["gcs_trajectory_reason_counts"]["sampled_trajectory_collision"], 1)
+        self.assertEqual(len(summary["gcs_trajectory_candidate_audit"]), 5)
+        self.assertEqual(summary["gcs_candidate_report_count"], 5)
+        self.assertEqual(summary["gcs_candidate_attempted_count"], 5)
+        self.assertEqual(summary["gcs_candidate_available_count"], 4)
+        self.assertEqual(summary["gcs_candidate_selected_count"], 2)
+        self.assertEqual(summary["gcs_candidate_collision_count"], 1)
+        self.assertEqual(summary["gcs_candidate_fallback_reason_counts"]["cost_dominated"], 1)
+        self.assertEqual(summary["gcs_candidate_fallback_reason_counts"]["path_duplicate_with_baseline"], 1)
+        self.assertEqual(summary["gcs_candidate_fallback_reason_counts"]["sampled_trajectory_collision"], 1)
+        self.assertEqual(summary["gcs_candidate_selection_reason_counts"]["gcs_candidate_quality_improved"], 2)
+        self.assertEqual(summary["gcs_candidate_cost_delta_vs_baseline_negative_count"], 2)
+        self.assertEqual(summary["gcs_candidate_cost_delta_vs_baseline_positive_count"], 1)
+        self.assertEqual(summary["gcs_candidate_cost_delta_vs_baseline_zero_count"], 1)
+        self.assertEqual(len(summary["gcs_candidate_audit"]), 5)
+        self.assertEqual(summary["gcs_motion_feasibility_report_count"], 5)
+        self.assertEqual(summary["gcs_motion_feasibility_evaluated_count"], 4)
+        self.assertEqual(summary["gcs_motion_feasibility_feasible_count"], 3)
+        self.assertEqual(summary["gcs_motion_feasibility_infeasible_count"], 1)
+        self.assertEqual(summary["gcs_motion_feasibility_diagnostic_only_count"], 1)
+        self.assertEqual(summary["gcs_motion_feasibility_curvature_violation_count"], 1)
+        self.assertEqual(summary["gcs_motion_feasibility_heading_violation_count"], 1)
+        self.assertEqual(summary["gcs_motion_feasibility_status_counts"]["feasible"], 3)
+        self.assertEqual(summary["gcs_motion_feasibility_status_counts"]["infeasible"], 1)
+        self.assertEqual(summary["gcs_motion_feasibility_status_counts"]["diagnostic_only"], 1)
+        self.assertEqual(summary["gcs_motion_feasibility_fallback_reason_counts"]["motion_constraint_violation"], 1)
+        self.assertEqual(summary["gcs_motion_feasibility_fallback_reason_counts"]["gcs_trajectory_failed"], 1)
+        self.assertEqual(summary["gcs_motion_feasibility_motion_model_counts"]["curvature_bounded"], 5)
+        self.assertEqual(len(summary["gcs_motion_feasibility_audit"]), 5)
+        self.assertEqual(summary["gcs_curvature_constrained_report_count"], 5)
+        self.assertEqual(summary["gcs_curvature_constrained_attempted_count"], 5)
+        self.assertEqual(summary["gcs_curvature_constrained_available_count"], 4)
+        self.assertEqual(summary["gcs_curvature_constrained_selected_count"], 4)
+        self.assertEqual(summary["gcs_curvature_constrained_repair_success_count"], 1)
+        self.assertEqual(summary["gcs_curvature_constrained_infeasible_count"], 0)
+        self.assertEqual(summary["gcs_curvature_constrained_curvature_violation_count_before"], 1)
+        self.assertEqual(summary["gcs_curvature_constrained_curvature_violation_count_after"], 0)
+        self.assertEqual(summary["gcs_curvature_constrained_heading_violation_count_before"], 1)
+        self.assertEqual(summary["gcs_curvature_constrained_heading_violation_count_after"], 0)
+        self.assertEqual(summary["gcs_curvature_constrained_status_after_counts"]["feasible"], 4)
+        self.assertEqual(summary["gcs_curvature_constrained_status_after_counts"]["diagnostic_only"], 1)
+        self.assertEqual(summary["gcs_curvature_constrained_repair_strategy_counts"]["none_required"], 3)
+        self.assertEqual(summary["gcs_curvature_constrained_repair_strategy_counts"]["moving_average_smoothing"], 1)
+        self.assertEqual(summary["gcs_curvature_constrained_repair_strategy_counts"]["not_attempted"], 1)
+        self.assertEqual(summary["gcs_curvature_constrained_fallback_reason_counts"]["gcs_trajectory_failed"], 1)
+        self.assertEqual(len(summary["gcs_curvature_constrained_audit"]), 5)
         self.assertEqual(summary["sampled_region_path_selected_count"], 1)
         self.assertEqual(summary["sampled_region_path_fallback_count"], 1)
         self.assertEqual(summary["sampled_region_path_source_counts"]["iris"], 1)
-        self.assertEqual(summary["sampled_region_path_fallback_reasons"]["sampled_path_collision"], 1)
-        self.assertEqual(summary["sampled_region_path_sample_attempt_count"], 8)
-        self.assertEqual(summary["sampled_region_path_candidate_ranking_count"], 2)
+        self.assertEqual(summary["sampled_region_path_fallback_reasons"]["target_component_disconnected"], 1)
+        self.assertEqual(summary["sampled_region_path_sample_attempt_count"], 10)
+        self.assertEqual(summary["sampled_region_path_candidate_ranking_count"], 3)
         self.assertEqual(summary["sampled_region_path_anchor_region_added_count"], 1)
         self.assertEqual(summary["sampled_region_path_anchor_region_connected_count"], 1)
+        self.assertEqual(summary["sampled_region_path_anchor_closure_attempt_count"], 3)
+        self.assertEqual(summary["sampled_region_path_anchor_closure_connected_count"], 1)
+        self.assertEqual(summary["sampled_region_path_anchor_closure_status_counts"]["connected"], 1)
+        self.assertEqual(summary["sampled_region_path_anchor_closure_status_counts"]["unavailable"], 2)
+        self.assertEqual(summary["sampled_region_path_anchor_closure_reason_counts"]["safe_bridge_found"], 1)
+        self.assertEqual(
+            summary["sampled_region_path_anchor_closure_reason_counts"]["safe_bridge_path_unavailable"],
+            2,
+        )
+        self.assertEqual(
+            summary["sampled_region_path_anchor_closure_connection_kind_counts"]["anchor_region_safe_bridge"],
+            1,
+        )
         self.assertEqual(
             summary["sampled_region_path_goal_classification_counts"]["goal_outside_region_coverage"],
             1,
         )
         self.assertEqual(summary["sampled_region_path_goal_classification_counts"]["covered"], 1)
-        self.assertEqual(summary["sampled_region_path_connector_attempt_count"], 2)
+        self.assertEqual(summary["sampled_region_path_connector_attempt_count"], 4)
         self.assertEqual(
             summary["sampled_region_path_connector_strategy_counts"]["cost_aware_constrained_astar"],
             2,
         )
+        self.assertEqual(
+            summary["sampled_region_path_connector_strategy_counts"]["bridge_aware_constrained_astar"],
+            1,
+        )
+        self.assertEqual(
+            summary["sampled_region_path_connector_strategy_counts"]["bridge_corridor_constrained_astar"],
+            1,
+        )
+        self.assertEqual(summary["sampled_region_path_bridge_aware_connector_attempt_count"], 1)
+        self.assertEqual(summary["sampled_region_path_bridge_aware_connector_available_count"], 0)
+        self.assertEqual(summary["sampled_region_path_bridge_aware_connector_selected_count"], 0)
+        self.assertEqual(summary["sampled_region_path_bridge_aware_connector_rejected_count"], 1)
+        self.assertEqual(summary["sampled_region_path_bridge_aware_connector_status_counts"]["unavailable"], 1)
+        self.assertEqual(
+            summary["sampled_region_path_bridge_aware_fallback_reasons"][
+                "bridge_aware_connector_path_unavailable"
+            ],
+            1,
+        )
+        self.assertEqual(summary["sampled_region_path_bridge_aware_bridge_cell_count"], 3)
+        self.assertEqual(summary["sampled_region_path_bridge_aware_mask_added_cell_count"], 1)
+        self.assertEqual(summary["sampled_region_path_bridge_corridor_connector_attempt_count"], 1)
+        self.assertEqual(summary["sampled_region_path_bridge_corridor_connector_available_count"], 1)
+        self.assertEqual(summary["sampled_region_path_bridge_corridor_connector_selected_count"], 1)
+        self.assertEqual(summary["sampled_region_path_bridge_corridor_connector_rejected_count"], 0)
+        self.assertEqual(summary["sampled_region_path_bridge_corridor_status_counts"]["available"], 1)
+        self.assertEqual(summary["sampled_region_path_bridge_corridor_added_cell_count"], 4)
+        self.assertEqual(summary["sampled_region_path_bridge_corridor_radius_counts"]["1"], 1)
         self.assertEqual(summary["sampled_region_path_terminal_adjusted_count"], 1)
         self.assertEqual(summary["sampled_region_path_terminal_adjustment_candidate_count"], 3)
         self.assertEqual(summary["sampled_region_path_terminal_adjustment_status_counts"]["selected"], 1)
+        self.assertEqual(summary["sampled_region_path_reachable_component_status_counts"]["adjusted_connected"], 1)
+        self.assertEqual(summary["sampled_region_path_reachable_component_status_counts"]["disconnected"], 1)
         self.assertEqual(
-            summary["sampled_region_path_terminal_adjustment_reason_counts"]["terminal_adjustment_selected"],
+            summary["sampled_region_path_reachable_component_reason_counts"][
+                "reachable_component_replacement_selected"
+            ],
+            1,
+        )
+        self.assertEqual(
+            summary["sampled_region_path_reachable_component_reason_counts"]["target_component_disconnected"],
+            1,
+        )
+        self.assertEqual(summary["sampled_region_path_reachable_component_disconnected_count"], 1)
+        self.assertEqual(summary["sampled_region_path_reachable_component_replacement_selected_count"], 1)
+        self.assertEqual(summary["sampled_region_path_reachable_component_terminal_candidate_count"], 1)
+        self.assertEqual(summary["sampled_region_path_reachable_terminal_rescue_count"], 1)
+        self.assertEqual(summary["sampled_region_path_proxy_goal_anchor_selected_count"], 0)
+        self.assertEqual(summary["sampled_region_path_goal_rescue_candidate_count"], 2)
+        self.assertEqual(summary["sampled_region_path_benefit_surface_present_count"], 1)
+        self.assertEqual(summary["sampled_region_path_path_duplicate_with_baseline_count"], 0)
+        self.assertEqual(summary["sampled_region_path_candidate_missing_metrics_count"], 1)
+        self.assertEqual(
+            summary["sampled_region_path_complexity_reason_counts"]["sampled_candidate_has_quality_gain"],
+            1,
+        )
+        self.assertEqual(
+            summary["sampled_region_path_complexity_reason_counts"]["candidate_missing_metrics"],
+            1,
+        )
+        self.assertEqual(
+            summary["sampled_region_path_terminal_adjustment_reason_counts"][
+                "reachable_terminal_selected_by_component_projection"
+            ],
             1,
         )
         self.assertEqual(
@@ -2010,7 +2190,7 @@ class PathPlanningAdapterTests(unittest.TestCase):
         fallback_audit = next(
             item
             for item in summary["sampled_region_path_candidate_audit"]
-            if item["fallback_reason"] == "sampled_path_collision"
+            if item["fallback_reason"] == "target_component_disconnected"
         )
         self.assertEqual(fallback_audit["scenario_id"], "npz_low_confidence_risk_band")
         self.assertEqual(fallback_audit["action_index"], 0)
@@ -2031,7 +2211,7 @@ class PathPlanningAdapterTests(unittest.TestCase):
         )
         self.assertEqual(
             selected_audit["terminal_adjustment_report"]["reason_code"],
-            "terminal_adjustment_selected",
+            "reachable_terminal_selected_by_component_projection",
         )
         self.assertEqual(selected_audit["execution_tie_break"]["reason"], "execution_tie_break_improved")
         self.assertIn("smoke", summary["scenario_group_summary"])
@@ -3873,16 +4053,137 @@ def _route_fixture(scenario_index, *, action_index):
         "failure_reason": None,
         "postprocess": {"fallback_status": "ok", "tracking_safety_report": {"violation_count": 0}},
     }
+    route.update(_convex_region_route_fields("fallback_box", fallback_used=True))
+    route.update(
+        _gcs_trajectory_route_fields(
+            success=not (scenario_index == 2 and action_index == 0),
+            collision_count=1 if scenario_index == 2 and action_index == 0 else 0,
+        )
+    )
+    if scenario_index == 2 and action_index == 0:
+        route.update(
+            _gcs_motion_feasibility_route_fields(
+                evaluated=False,
+                feasibility_status="diagnostic_only",
+                fallback_reason="gcs_trajectory_failed",
+            )
+        )
+    elif scenario_index == 1 and action_index == 0:
+        route.update(
+            _gcs_motion_feasibility_route_fields(
+                evaluated=True,
+                feasibility_status="infeasible",
+                fallback_reason="motion_constraint_violation",
+                curvature_violation_count=1,
+                heading_violation_count=1,
+                violation_indices=[1],
+            )
+        )
+    else:
+        route.update(
+            _gcs_motion_feasibility_route_fields(
+                evaluated=True,
+                feasibility_status="feasible",
+                fallback_reason=None,
+            )
+        )
+    if scenario_index == 2 and action_index == 0:
+        route.update(
+            _gcs_curvature_constrained_candidate_route_fields(
+                available=False,
+                selected=False,
+                repair_success=False,
+                repair_strategy="not_attempted",
+                status_before="diagnostic_only",
+                status_after="diagnostic_only",
+                fallback_reason="gcs_trajectory_failed",
+            )
+        )
+    elif scenario_index == 1 and action_index == 0:
+        route.update(
+            _gcs_curvature_constrained_candidate_route_fields(
+                available=True,
+                selected=True,
+                repair_success=True,
+                repair_strategy="moving_average_smoothing",
+                status_before="infeasible",
+                status_after="feasible",
+                fallback_reason=None,
+                curvature_violation_count_before=1,
+                heading_violation_count_before=1,
+                violation_indices_before=[1],
+            )
+        )
+    else:
+        route.update(
+            _gcs_curvature_constrained_candidate_route_fields(
+                available=True,
+                selected=True,
+                repair_success=False,
+                repair_strategy="none_required",
+                status_before="feasible",
+                status_after="feasible",
+                fallback_reason=None,
+            )
+        )
+    if scenario_index == 2 and action_index == 0:
+        route.update(
+            _gcs_candidate_route_fields(
+                available=False,
+                selected=False,
+                selection_reason=None,
+                fallback_reason="sampled_trajectory_collision",
+                collision_count=1,
+                cost_delta=None,
+                overlap_ratio=None,
+            )
+        )
+    elif scenario_index == 1 and action_index == 0:
+        route.update(
+            _gcs_candidate_route_fields(
+                available=True,
+                selected=False,
+                selection_reason=None,
+                fallback_reason="cost_dominated",
+                collision_count=0,
+                cost_delta=2.0,
+                overlap_ratio=0.25,
+            )
+        )
+    elif scenario_index == 2 and action_index == 1:
+        route.update(
+            _gcs_candidate_route_fields(
+                available=True,
+                selected=False,
+                selection_reason=None,
+                fallback_reason="path_duplicate_with_baseline",
+                collision_count=0,
+                cost_delta=0.0,
+                overlap_ratio=1.0,
+            )
+        )
+    else:
+        route.update(
+            _gcs_candidate_route_fields(
+                available=True,
+                selected=True,
+                selection_reason="gcs_candidate_quality_improved",
+                fallback_reason=None,
+                collision_count=0,
+                cost_delta=-1.0,
+                overlap_ratio=0.25,
+            )
+        )
     if scenario_index == 2 and action_index == 0:
         route["planning_backend_report"] = {
             "requested_backend": "region_graph_guided",
             "selected_backend": "astar",
             "status": "fallback",
-            "fallback_reason": "sampled_path_collision",
+            "fallback_reason": "target_component_disconnected",
             "sampled_region_path_report": {
                 "schema_version": "sampled_region_path_report/v1",
                 "status": "fallback",
-                "fallback_reason": "sampled_path_collision",
+                "fallback_reason": "target_component_disconnected",
                 "region_sequence": [0, 1],
                 "sample_count": 2,
                 "start_goal_anchoring": {
@@ -3899,6 +4200,26 @@ def _route_fixture(scenario_index, *, action_index):
                     "goal_anchor_region_connected": False,
                     "start_anchor_failure_reason": None,
                     "goal_anchor_failure_reason": None,
+                    "reachable_component_report": {
+                        "schema_version": "reachable_component_report/v1",
+                        "status": "disconnected",
+                        "reason": "target_component_disconnected",
+                        "passable_source": "inflated_passable_mask",
+                        "component_count": 2,
+                        "start_component_id": 0,
+                        "raw_goal_component_id": 1,
+                        "adjusted_goal_component_id": 1,
+                        "start_goal_same_component": False,
+                        "adjusted_goal_start_component": False,
+                    },
+                    "anchor_connectivity_closure": {
+                        "schema_version": "anchor-connectivity-closure/v1",
+                        "attempt_count": 1,
+                        "connected_count": 0,
+                        "status_counts": {"unavailable": 1},
+                        "reason_counts": {"safe_bridge_path_unavailable": 1},
+                        "connection_kind_counts": {},
+                    },
                 },
                 "sample_attempt_count": 3,
                 "sample_attempts": [
@@ -3919,20 +4240,40 @@ def _route_fixture(scenario_index, *, action_index):
                 "candidate_rankings": [
                     {
                         "rank": None,
-                        "strategy": "preferred_low_cost",
+                        "strategy": "reachable_component_filter",
                         "status": "rejected",
-                        "fallback_reason": "sampled_path_collision",
-                        "sample_count": 2,
+                        "fallback_reason": "target_component_disconnected",
+                        "sample_count": 0,
                     }
                 ],
                 "safety_checks": {"collision_free": False},
-                "candidate_comparison": {"candidate_cost_delta": None},
+                "candidate_comparison": {
+                    "candidate_cost_delta": None,
+                    "baseline_path_overlap_ratio": None,
+                    "path_duplicate_with_baseline": None,
+                    "benefit_surface_present": False,
+                    "complexity_reason": "candidate_missing_metrics",
+                },
                 "terminal_adjustment_report": {
                     "schema_version": "terminal_adjustment_report/v1",
                     "status": "not_required",
                     "reason_code": "terminal_adjustment_not_required",
                     "target_adjusted": False,
                     "candidate_count": 0,
+                    "reachable_candidate_count": 0,
+                    "reachable_component_replacement_selected": False,
+                    "reachable_component_report": {
+                        "schema_version": "reachable_component_report/v1",
+                        "status": "disconnected",
+                        "reason": "target_component_disconnected",
+                        "passable_source": "inflated_passable_mask",
+                        "component_count": 2,
+                        "start_component_id": 0,
+                        "raw_goal_component_id": 1,
+                        "adjusted_goal_component_id": 1,
+                        "start_goal_same_component": False,
+                        "adjusted_goal_start_component": False,
+                    },
                 },
                 "execution_tie_break": {
                     "status": "fallback",
@@ -3979,13 +4320,57 @@ def _route_fixture(scenario_index, *, action_index):
                     "goal_anchor_region_connected": True,
                     "start_anchor_failure_reason": None,
                     "goal_anchor_failure_reason": None,
+                    "reachable_component_report": {
+                        "schema_version": "reachable_component_report/v1",
+                        "status": "adjusted_connected",
+                        "reason": "reachable_component_replacement_selected",
+                        "passable_source": "inflated_passable_mask",
+                        "component_count": 2,
+                        "start_component_id": 0,
+                        "raw_goal_component_id": None,
+                        "adjusted_goal_component_id": 0,
+                        "start_goal_same_component": None,
+                        "adjusted_goal_start_component": True,
+                    },
+                    "anchor_connectivity_closure": {
+                        "schema_version": "anchor-connectivity-closure/v1",
+                        "attempt_count": 2,
+                        "connected_count": 1,
+                        "status_counts": {"connected": 1, "unavailable": 1},
+                        "reason_counts": {
+                            "safe_bridge_found": 1,
+                            "safe_bridge_path_unavailable": 1,
+                        },
+                        "connection_kind_counts": {"anchor_region_safe_bridge": 1},
+                    },
                 },
-                "sample_attempt_count": 5,
+                "sample_attempt_count": 7,
                 "sample_attempts": [
                     {"kind": "region_sample", "region_id": 0, "cell": [0, 0], "strategy": "preferred"},
                     {"kind": "region_sample", "region_id": 0, "cell": [0, 1], "strategy": "low_cost"},
                     {"kind": "region_sample", "region_id": 1, "cell": [1, 1], "strategy": "preferred"},
                     {"kind": "edge_transition", "from_region_id": 0, "to_region_id": 1, "status": "available"},
+                    {
+                        "kind": "connector_attempt",
+                        "strategy": "bridge_aware_constrained_astar",
+                        "status": "unavailable",
+                        "fallback_reason": "bridge_aware_connector_path_unavailable",
+                        "bridge_aware": True,
+                        "bridge_connection_count": 1,
+                        "bridge_cell_count": 3,
+                        "bridge_mask_added_cell_count": 1,
+                        "bridge_cells": [[1, 1], [2, 1], [2, 2]],
+                    },
+                    {
+                        "kind": "connector_attempt",
+                        "strategy": "bridge_corridor_constrained_astar",
+                        "status": "available",
+                        "bridge_corridor_expanded": True,
+                        "bridge_corridor_radius_cells": 1,
+                        "bridge_corridor_added_cell_count": 4,
+                        "bridge_corridor_start_goal_connected": True,
+                        "bridge_corridor_failure_reason": None,
+                    },
                     {
                         "kind": "connector_attempt",
                         "strategy": "cost_aware_constrained_astar",
@@ -3994,26 +4379,70 @@ def _route_fixture(scenario_index, *, action_index):
                 ],
                 "candidate_rankings": [
                     {
+                        "strategy": "bridge_aware_constrained_astar",
+                        "status": "rejected",
+                        "fallback_reason": "bridge_aware_connector_path_unavailable",
+                        "sample_count": 0,
+                        "bridge_aware": True,
+                        "bridge_connection_count": 1,
+                        "bridge_cell_count": 3,
+                        "bridge_mask_added_cell_count": 1,
+                        "bridge_cells": [[1, 1], [2, 1], [2, 2]],
+                    },
+                    {
                         "rank": 1,
-                        "strategy": "cost_aware_constrained_astar",
+                        "strategy": "bridge_corridor_constrained_astar",
                         "status": "selected",
                         "fallback_reason": None,
                         "selection_reason": "execution_tie_break_improved",
                         "execution_tie_break_reason": "execution_tie_break_improved",
                         "sample_count": 2,
                         "candidate_cost_delta": -0.5,
+                        "bridge_aware": True,
+                        "bridge_connection_count": 1,
+                        "bridge_cell_count": 3,
+                        "bridge_mask_added_cell_count": 1,
+                        "bridge_cells": [[1, 1], [2, 1], [2, 2]],
+                        "bridge_corridor_expanded": True,
+                        "bridge_corridor_radius_cells": 1,
+                        "bridge_corridor_added_cell_count": 4,
+                        "bridge_corridor_start_goal_connected": True,
+                        "bridge_corridor_failure_reason": None,
                     }
                 ],
                 "safety_checks": {"collision_free": True},
-                "candidate_comparison": {"candidate_cost_delta": -0.5},
+                "candidate_comparison": {
+                    "candidate_cost_delta": -0.5,
+                    "baseline_path_overlap_ratio": 0.5,
+                    "path_duplicate_with_baseline": False,
+                    "benefit_surface_present": True,
+                    "complexity_reason": "sampled_candidate_has_quality_gain",
+                },
                 "terminal_adjustment_report": {
                     "schema_version": "terminal_adjustment_report/v1",
                     "status": "selected",
-                    "reason_code": "terminal_adjustment_selected",
+                    "reason_code": "reachable_terminal_selected_by_component_projection",
                     "target_adjusted": True,
                     "original_goal_cell": [3, 2],
                     "adjusted_goal_cell": [2, 2],
                     "candidate_count": 3,
+                    "reachable_candidate_count": 1,
+                    "rescue_candidate_count": 2,
+                    "reachable_terminal_rescue_used": True,
+                    "proxy_goal_anchor_selected": False,
+                    "reachable_component_replacement_selected": True,
+                    "reachable_component_report": {
+                        "schema_version": "reachable_component_report/v1",
+                        "status": "adjusted_connected",
+                        "reason": "reachable_component_replacement_selected",
+                        "passable_source": "inflated_passable_mask",
+                        "component_count": 2,
+                        "start_component_id": 0,
+                        "raw_goal_component_id": None,
+                        "adjusted_goal_component_id": 0,
+                        "start_goal_same_component": None,
+                        "adjusted_goal_start_component": True,
+                    },
                 },
                 "execution_tie_break": {
                     "status": "selected",
@@ -4029,6 +4458,26 @@ def _route_fixture(scenario_index, *, action_index):
             "failure_status": "none",
             "failure_reason": None,
         }
+        route.update(_convex_region_route_fields("workspace_iris", fallback_used=False))
+        route.update(_gcs_trajectory_route_fields(success=True, collision_count=0))
+        route.update(
+            _gcs_motion_feasibility_route_fields(
+                evaluated=True,
+                feasibility_status="feasible",
+                fallback_reason=None,
+            )
+        )
+        route.update(
+            _gcs_candidate_route_fields(
+                available=True,
+                selected=True,
+                selection_reason="gcs_candidate_quality_improved",
+                fallback_reason=None,
+                collision_count=0,
+                cost_delta=-1.0,
+                overlap_ratio=0.25,
+            )
+        )
         route["region_graph_report"] = {
             "status": "ok",
             "region_source": "iris",
@@ -4043,6 +4492,193 @@ def _route_fixture(scenario_index, *, action_index):
             },
         }
     return route
+
+
+def _convex_region_route_fields(backend, *, fallback_used):
+    source = "iris" if backend == "workspace_iris" else "fallback_box"
+    sequence = [
+        {
+            "id": 0,
+            "backend": backend,
+            "source": source,
+            "seed_cell": [0, 0],
+            "seed_world": [0.5, 0.5],
+            "bounds": {"min": [0, 0], "max": [1, 1]},
+            "world_bounds": {"min": [0.0, 0.0], "max": [2.0, 2.0]},
+            "hpolyhedron": {
+                "A": [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]],
+                "b": [2.0, -0.0, 2.0, -0.0],
+            },
+            "covered_path_indices": [0],
+            "validation_status": "valid",
+            "fallback_reason": "fallback_box_not_drake_iris" if fallback_used else None,
+        },
+        {
+            "id": 1,
+            "backend": backend,
+            "source": source,
+            "seed_cell": [1, 1],
+            "seed_world": [1.5, 1.5],
+            "bounds": {"min": [1, 1], "max": [2, 2]},
+            "world_bounds": {"min": [1.0, 1.0], "max": [3.0, 3.0]},
+            "hpolyhedron": {
+                "A": [[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]],
+                "b": [3.0, -1.0, 3.0, -1.0],
+            },
+            "covered_path_indices": [1],
+            "validation_status": "valid",
+            "fallback_reason": "fallback_box_not_drake_iris" if fallback_used else None,
+        },
+    ]
+    return {
+        "convex_region_sequence_schema_version": "convex_region_sequence_report/v1",
+        "convex_region_sequence": sequence,
+        "convex_region_count": len(sequence),
+        "convex_region_backend": backend,
+        "convex_region_fallback_used": fallback_used,
+        "convex_region_coverage_status": "covered",
+        "convex_region_start_contained": True,
+        "convex_region_goal_contained": True,
+        "convex_region_adjacent_overlap_count": 1,
+        "convex_region_portal_count": 0,
+        "convex_region_blocked_cell_violation_count": 0,
+        "convex_region_pydrake_available": True,
+        "gcs_ready": True,
+        "gcs_ready_reason": "convex_region_sequence_ready",
+    }
+
+
+def _gcs_trajectory_route_fields(*, success, collision_count):
+    reason = "gcs_trajectory_solution_found" if success else "sampled_trajectory_collision"
+    return {
+        "gcs_trajectory_report_schema_version": "gcs_trajectory_report/v1",
+        "gcs_trajectory_attempted": True,
+        "gcs_trajectory_success": success,
+        "gcs_trajectory_backend": "pydrake_gcs",
+        "gcs_trajectory_result_status": (
+            "SolutionResult.kSolutionFound" if success else "sampled_trajectory_collision"
+        ),
+        "gcs_trajectory_reason": reason,
+        "gcs_trajectory_sample_count": 5,
+        "gcs_trajectory_collision_count": collision_count,
+        "gcs_trajectory_path_length": 2.0,
+        "gcs_trajectory_region_count": 2,
+        "gcs_trajectory_sampled_points": [[0.5, 0.5], [1.5, 1.5]],
+    }
+
+
+def _gcs_candidate_route_fields(
+    *,
+    available,
+    selected,
+    selection_reason,
+    fallback_reason,
+    collision_count,
+    cost_delta,
+    overlap_ratio,
+):
+    return {
+        "gcs_candidate_report_schema_version": "gcs_geometric_candidate_report/v1",
+        "gcs_candidate_attempted": True,
+        "gcs_candidate_available": available,
+        "gcs_candidate_selected": selected,
+        "gcs_candidate_selection_reason": selection_reason,
+        "gcs_candidate_fallback_reason": fallback_reason,
+        "gcs_candidate_path_length": 2.0 if available else 0.0,
+        "gcs_candidate_path_cost": None if cost_delta is None else 5.0 + cost_delta,
+        "gcs_candidate_collision_count": collision_count,
+        "gcs_candidate_high_cost_exposure": 0.0,
+        "gcs_candidate_baseline_overlap_ratio": overlap_ratio,
+        "gcs_candidate_cost_delta_vs_baseline": cost_delta,
+        "gcs_candidate_cost_delta_vs_postprocess": cost_delta,
+    }
+
+
+def _gcs_motion_feasibility_route_fields(
+    *,
+    evaluated,
+    feasibility_status,
+    fallback_reason,
+    curvature_violation_count=0,
+    heading_violation_count=0,
+    violation_indices=None,
+):
+    return {
+        "gcs_motion_feasibility_report_schema_version": "gcs_motion_feasibility_report/v1",
+        "gcs_motion_feasibility_evaluated": evaluated,
+        "gcs_motion_feasibility_trajectory_source": "gcs_trajectory_sampled_points",
+        "gcs_motion_feasibility_motion_model": "curvature_bounded",
+        "gcs_motion_feasibility_feasibility_status": feasibility_status,
+        "gcs_motion_feasibility_fallback_reason": fallback_reason,
+        "gcs_motion_feasibility_min_turning_radius_m": 0.5,
+        "gcs_motion_feasibility_max_heading_change_deg": 120.0,
+        "gcs_motion_feasibility_curvature_violation_count": curvature_violation_count,
+        "gcs_motion_feasibility_heading_violation_count": heading_violation_count,
+        "gcs_motion_feasibility_violation_indices": list(violation_indices or []),
+        "gcs_motion_feasibility_sample_count": 5 if evaluated else 0,
+        "gcs_motion_feasibility_path_length": 2.0 if evaluated else 0.0,
+        "gcs_motion_feasibility_constraint_summary": {
+            "motion_model": "curvature_bounded",
+            "max_curvature": 2.0,
+            "min_turning_radius_m": 0.5,
+            "max_heading_change_deg": 120.0,
+            "max_observed_curvature": 1.0 if curvature_violation_count else 0.0,
+            "max_observed_heading_change_deg": 90.0 if heading_violation_count else 0.0,
+        },
+    }
+
+
+def _gcs_curvature_constrained_candidate_route_fields(
+    *,
+    available,
+    selected,
+    repair_success,
+    repair_strategy,
+    status_before,
+    status_after,
+    fallback_reason,
+    curvature_violation_count_before=0,
+    curvature_violation_count_after=0,
+    heading_violation_count_before=0,
+    heading_violation_count_after=0,
+    violation_indices_before=None,
+    violation_indices_after=None,
+    collision_count=0,
+    region_containment_violation_count=0,
+):
+    return {
+        "gcs_curvature_constrained_report_schema_version": (
+            "gcs_curvature_constrained_candidate_report/v1"
+        ),
+        "gcs_curvature_constrained_attempted": True,
+        "gcs_curvature_constrained_available": available,
+        "gcs_curvature_constrained_selected": selected,
+        "gcs_curvature_constrained_repair_success": repair_success,
+        "gcs_curvature_constrained_source": "gcs_trajectory_sampled_points",
+        "gcs_curvature_constrained_repair_strategy": repair_strategy,
+        "gcs_curvature_constrained_status_before": status_before,
+        "gcs_curvature_constrained_status_after": status_after,
+        "gcs_curvature_constrained_fallback_reason": fallback_reason,
+        "gcs_curvature_constrained_curvature_violation_count_before": curvature_violation_count_before,
+        "gcs_curvature_constrained_curvature_violation_count_after": curvature_violation_count_after,
+        "gcs_curvature_constrained_heading_violation_count_before": heading_violation_count_before,
+        "gcs_curvature_constrained_heading_violation_count_after": heading_violation_count_after,
+        "gcs_curvature_constrained_violation_indices_before": list(violation_indices_before or []),
+        "gcs_curvature_constrained_violation_indices_after": list(violation_indices_after or []),
+        "gcs_curvature_constrained_region_containment_violation_count": (
+            region_containment_violation_count
+        ),
+        "gcs_curvature_constrained_collision_count": collision_count,
+        "gcs_curvature_constrained_path_length": 2.0 if available else 0.0,
+        "gcs_curvature_constrained_path_cost": 5.0 if available else None,
+        "gcs_curvature_constrained_cost_delta_vs_baseline": -1.0 if selected else None,
+        "gcs_curvature_constrained_constraint_summary": {
+            "max_curvature": 2.0,
+            "min_turning_radius_m": 0.5,
+            "max_heading_change_deg": 120.0,
+            "repair_passes": 4 if repair_strategy == "moving_average_smoothing" else 0,
+        },
+    }
 
 
 if __name__ == "__main__":
