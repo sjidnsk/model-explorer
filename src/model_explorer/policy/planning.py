@@ -756,6 +756,11 @@ def _gcs_trajectory_route_report(route: dict[str, Any]) -> dict[str, Any] | None
             if isinstance(route.get("gcs_trajectory_sampled_points"), list)
             else []
         ),
+        "cost_summary": (
+            route.get("gcs_trajectory_cost_summary")
+            if isinstance(route.get("gcs_trajectory_cost_summary"), dict)
+            else {}
+        ),
     }
 
 
@@ -773,6 +778,7 @@ def _gcs_trajectory_summary(value: Any) -> dict[str, Any] | None:
         "collision_count": value.get("collision_count"),
         "path_length": value.get("path_length"),
         "region_count": value.get("region_count"),
+        "cost_summary": value.get("cost_summary") if isinstance(value.get("cost_summary"), dict) else {},
     }
 
 
@@ -793,6 +799,11 @@ def _gcs_candidate_route_report(route: dict[str, Any]) -> dict[str, Any] | None:
         "baseline_overlap_ratio": route.get("gcs_candidate_baseline_overlap_ratio"),
         "cost_delta_vs_baseline": route.get("gcs_candidate_cost_delta_vs_baseline"),
         "cost_delta_vs_postprocess": route.get("gcs_candidate_cost_delta_vs_postprocess"),
+        "cost_summary": (
+            route.get("gcs_candidate_cost_summary")
+            if isinstance(route.get("gcs_candidate_cost_summary"), dict)
+            else {}
+        ),
     }
 
 
@@ -813,6 +824,7 @@ def _gcs_candidate_summary(value: Any) -> dict[str, Any] | None:
         "baseline_overlap_ratio": value.get("baseline_overlap_ratio"),
         "cost_delta_vs_baseline": value.get("cost_delta_vs_baseline"),
         "cost_delta_vs_postprocess": value.get("cost_delta_vs_postprocess"),
+        "cost_summary": value.get("cost_summary") if isinstance(value.get("cost_summary"), dict) else {},
     }
 
 

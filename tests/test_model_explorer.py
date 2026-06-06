@@ -2033,8 +2033,16 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(summary["gcs_trajectory_collision_count"], 1)
         self.assertEqual(summary["gcs_trajectory_region_count_total"], 10)
         self.assertEqual(summary["gcs_trajectory_sample_count_total"], 25)
-        self.assertEqual(summary["gcs_trajectory_backend_counts"]["pydrake_gcs"], 5)
-        self.assertEqual(summary["gcs_trajectory_reason_counts"]["gcs_trajectory_solution_found"], 4)
+        self.assertEqual(summary["gcs_trajectory_backend_counts"]["pydrake_gcs"], 4)
+        self.assertEqual(
+            summary["gcs_trajectory_backend_counts"]["pydrake_control_point_direction_cone_program"],
+            1,
+        )
+        self.assertEqual(summary["gcs_trajectory_reason_counts"]["gcs_trajectory_solution_found"], 3)
+        self.assertEqual(
+            summary["gcs_trajectory_reason_counts"]["control_point_direction_cone_solution_found"],
+            1,
+        )
         self.assertEqual(summary["gcs_trajectory_reason_counts"]["sampled_trajectory_collision"], 1)
         self.assertEqual(len(summary["gcs_trajectory_candidate_audit"]), 5)
         self.assertEqual(summary["gcs_candidate_report_count"], 5)
@@ -2081,6 +2089,34 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(summary["gcs_curvature_constrained_repair_strategy_counts"]["not_attempted"], 1)
         self.assertEqual(summary["gcs_curvature_constrained_fallback_reason_counts"]["gcs_trajectory_failed"], 1)
         self.assertEqual(len(summary["gcs_curvature_constrained_audit"]), 5)
+        self.assertEqual(summary["gcs_control_point_report_count"], 1)
+        self.assertEqual(summary["gcs_control_point_attempted_count"], 1)
+        self.assertEqual(summary["gcs_control_point_success_count"], 1)
+        self.assertEqual(
+            summary["gcs_control_point_backend_counts"]["pydrake_control_point_direction_cone_program"],
+            1,
+        )
+        self.assertEqual(summary["gcs_control_point_candidate_selected_count"], 1)
+        self.assertEqual(summary["gcs_control_point_candidate_fallback_reason_counts"], {})
+        self.assertEqual(
+            summary["gcs_control_point_terrain_objective_source_counts"][
+                "region_inverse_cost_weighted_passable_cell_centroid"
+            ],
+            1,
+        )
+        self.assertEqual(summary["gcs_control_point_sampled_terrain_cost_count"], 1)
+        self.assertEqual(summary["gcs_control_point_sampled_terrain_cost_min"], 6.0)
+        self.assertEqual(summary["gcs_control_point_sampled_terrain_cost_max"], 6.0)
+        self.assertEqual(summary["gcs_control_point_sampled_terrain_cost_mean"], 6.0)
+        self.assertEqual(summary["gcs_control_point_high_cost_exposure_delta_count"], 1)
+        self.assertEqual(summary["gcs_control_point_high_cost_exposure_delta_min"], -1.0)
+        self.assertEqual(summary["gcs_control_point_high_cost_exposure_delta_max"], -1.0)
+        self.assertEqual(summary["gcs_control_point_high_cost_exposure_delta_mean"], -1.0)
+        self.assertEqual(len(summary["gcs_control_point_candidate_audit"]), 1)
+        self.assertEqual(
+            summary["gcs_control_point_candidate_audit"][0]["terrain_objective_source"],
+            "region_inverse_cost_weighted_passable_cell_centroid",
+        )
         self.assertEqual(summary["sampled_region_path_selected_count"], 1)
         self.assertEqual(summary["sampled_region_path_fallback_count"], 1)
         self.assertEqual(summary["sampled_region_path_source_counts"]["iris"], 1)
@@ -4054,10 +4090,22 @@ def _route_fixture(scenario_index, *, action_index):
         "postprocess": {"fallback_status": "ok", "tracking_safety_report": {"violation_count": 0}},
     }
     route.update(_convex_region_route_fields("fallback_box", fallback_used=True))
+    control_point_route = scenario_index == 0 and action_index == 1
     route.update(
         _gcs_trajectory_route_fields(
             success=not (scenario_index == 2 and action_index == 0),
             collision_count=1 if scenario_index == 2 and action_index == 0 else 0,
+            backend=(
+                "pydrake_control_point_direction_cone_program"
+                if control_point_route
+                else "pydrake_gcs"
+            ),
+            reason=(
+                "control_point_direction_cone_solution_found"
+                if control_point_route
+                else None
+            ),
+            cost_summary=_control_point_cost_summary() if control_point_route else None,
         )
     )
     if scenario_index == 2 and action_index == 0:
@@ -4172,6 +4220,7 @@ def _route_fixture(scenario_index, *, action_index):
                 collision_count=0,
                 cost_delta=-1.0,
                 overlap_ratio=0.25,
+                cost_summary=_control_point_candidate_cost_summary() if control_point_route else None,
             )
         )
     if scenario_index == 2 and action_index == 0:
@@ -4548,13 +4597,20 @@ def _convex_region_route_fields(backend, *, fallback_used):
     }
 
 
-def _gcs_trajectory_route_fields(*, success, collision_count):
-    reason = "gcs_trajectory_solution_found" if success else "sampled_trajectory_collision"
-    return {
+def _gcs_trajectory_route_fields(
+    *,
+    success,
+    collision_count,
+    backend="pydrake_gcs",
+    reason=None,
+    cost_summary=None,
+):
+    reason = reason or ("gcs_trajectory_solution_found" if success else "sampled_trajectory_collision")
+    fields = {
         "gcs_trajectory_report_schema_version": "gcs_trajectory_report/v1",
         "gcs_trajectory_attempted": True,
         "gcs_trajectory_success": success,
-        "gcs_trajectory_backend": "pydrake_gcs",
+        "gcs_trajectory_backend": backend,
         "gcs_trajectory_result_status": (
             "SolutionResult.kSolutionFound" if success else "sampled_trajectory_collision"
         ),
@@ -4565,6 +4621,9 @@ def _gcs_trajectory_route_fields(*, success, collision_count):
         "gcs_trajectory_region_count": 2,
         "gcs_trajectory_sampled_points": [[0.5, 0.5], [1.5, 1.5]],
     }
+    if cost_summary is not None:
+        fields["gcs_trajectory_cost_summary"] = cost_summary
+    return fields
 
 
 def _gcs_candidate_route_fields(
@@ -4576,8 +4635,9 @@ def _gcs_candidate_route_fields(
     collision_count,
     cost_delta,
     overlap_ratio,
+    cost_summary=None,
 ):
-    return {
+    fields = {
         "gcs_candidate_report_schema_version": "gcs_geometric_candidate_report/v1",
         "gcs_candidate_attempted": True,
         "gcs_candidate_available": available,
@@ -4592,6 +4652,34 @@ def _gcs_candidate_route_fields(
         "gcs_candidate_cost_delta_vs_baseline": cost_delta,
         "gcs_candidate_cost_delta_vs_postprocess": cost_delta,
     }
+    if cost_summary is not None:
+        fields["gcs_candidate_cost_summary"] = cost_summary
+    return fields
+
+
+def _control_point_cost_summary():
+    return {
+        "high_cost_exposure": 0.0,
+        "terrain_path_cost": 6.0,
+        "sampled_terrain_cost": 6.0,
+        "terrain_objective_source": "region_inverse_cost_weighted_passable_cell_centroid",
+        "terrain_objective_weight": 0.05,
+        "terrain_objective_boundary": "proxy_not_continuous_field_integral",
+        "control_point_terrain_cost": 6.0,
+    }
+
+
+def _control_point_candidate_cost_summary():
+    summary = dict(_control_point_cost_summary())
+    summary.update(
+        {
+            "baseline_high_cost_exposure": 1.0,
+            "postprocess_high_cost_exposure": 1.0,
+            "high_cost_exposure_delta_vs_baseline": -1.0,
+            "high_cost_exposure_delta_vs_postprocess": -1.0,
+        }
+    )
+    return summary
 
 
 def _gcs_motion_feasibility_route_fields(

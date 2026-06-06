@@ -69,6 +69,7 @@ PATH_FEEDBACK_SUMMARY_REQUIRED_KEYS = (
     "scenario_group_summary",
     "scenarios",
 )
+GCS_CONTROL_POINT_BACKEND = "pydrake_control_point_direction_cone_program"
 
 
 @dataclass(frozen=True)
@@ -299,6 +300,46 @@ def compact_path_feedback_summary(
             "gcs_candidate_cost_delta_vs_baseline_zero_count"
         ),
         "gcs_candidate_audit": summary.get("gcs_candidate_audit", []),
+        "gcs_control_point_report_count": summary.get("gcs_control_point_report_count"),
+        "gcs_control_point_attempted_count": summary.get("gcs_control_point_attempted_count"),
+        "gcs_control_point_success_count": summary.get("gcs_control_point_success_count"),
+        "gcs_control_point_backend_counts": summary.get("gcs_control_point_backend_counts", {}),
+        "gcs_control_point_candidate_selected_count": summary.get(
+            "gcs_control_point_candidate_selected_count"
+        ),
+        "gcs_control_point_candidate_fallback_reason_counts": summary.get(
+            "gcs_control_point_candidate_fallback_reason_counts",
+            {},
+        ),
+        "gcs_control_point_terrain_objective_source_counts": summary.get(
+            "gcs_control_point_terrain_objective_source_counts",
+            {},
+        ),
+        "gcs_control_point_sampled_terrain_cost_count": summary.get(
+            "gcs_control_point_sampled_terrain_cost_count"
+        ),
+        "gcs_control_point_sampled_terrain_cost_min": summary.get(
+            "gcs_control_point_sampled_terrain_cost_min"
+        ),
+        "gcs_control_point_sampled_terrain_cost_max": summary.get(
+            "gcs_control_point_sampled_terrain_cost_max"
+        ),
+        "gcs_control_point_sampled_terrain_cost_mean": summary.get(
+            "gcs_control_point_sampled_terrain_cost_mean"
+        ),
+        "gcs_control_point_high_cost_exposure_delta_count": summary.get(
+            "gcs_control_point_high_cost_exposure_delta_count"
+        ),
+        "gcs_control_point_high_cost_exposure_delta_min": summary.get(
+            "gcs_control_point_high_cost_exposure_delta_min"
+        ),
+        "gcs_control_point_high_cost_exposure_delta_max": summary.get(
+            "gcs_control_point_high_cost_exposure_delta_max"
+        ),
+        "gcs_control_point_high_cost_exposure_delta_mean": summary.get(
+            "gcs_control_point_high_cost_exposure_delta_mean"
+        ),
+        "gcs_control_point_candidate_audit": summary.get("gcs_control_point_candidate_audit", []),
         "gcs_motion_feasibility_report_count": summary.get("gcs_motion_feasibility_report_count"),
         "gcs_motion_feasibility_evaluated_count": summary.get("gcs_motion_feasibility_evaluated_count"),
         "gcs_motion_feasibility_feasible_count": summary.get("gcs_motion_feasibility_feasible_count"),
@@ -914,6 +955,11 @@ def _run_feedback_scenario(
             evaluations,
             scenario_id=scenario.scenario_id,
         ),
+        "gcs_control_point_diagnostics": _gcs_control_point_diagnostics(evaluations),
+        "gcs_control_point_candidate_audit": _gcs_control_point_candidate_audit(
+            evaluations,
+            scenario_id=scenario.scenario_id,
+        ),
         "gcs_motion_feasibility_diagnostics": _gcs_motion_feasibility_diagnostics(evaluations),
         "gcs_motion_feasibility_audit": _gcs_motion_feasibility_audit(
             evaluations,
@@ -1010,6 +1056,9 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
     gcs_trajectory_result_status_counts: Counter[str] = Counter()
     gcs_candidate_fallback_reason_counts: Counter[str] = Counter()
     gcs_candidate_selection_reason_counts: Counter[str] = Counter()
+    gcs_control_point_backend_counts: Counter[str] = Counter()
+    gcs_control_point_candidate_fallback_reason_counts: Counter[str] = Counter()
+    gcs_control_point_terrain_objective_source_counts: Counter[str] = Counter()
     gcs_motion_status_counts: Counter[str] = Counter()
     gcs_motion_fallback_reason_counts: Counter[str] = Counter()
     gcs_motion_model_counts: Counter[str] = Counter()
@@ -1069,6 +1118,12 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
     gcs_candidate_cost_delta_negative_count = 0
     gcs_candidate_cost_delta_positive_count = 0
     gcs_candidate_cost_delta_zero_count = 0
+    gcs_control_point_report_count = 0
+    gcs_control_point_attempted_count = 0
+    gcs_control_point_success_count = 0
+    gcs_control_point_candidate_selected_count = 0
+    gcs_control_point_sampled_terrain_cost_stats: list[dict[str, Any]] = []
+    gcs_control_point_high_cost_exposure_delta_stats: list[dict[str, Any]] = []
     gcs_motion_report_count = 0
     gcs_motion_evaluated_count = 0
     gcs_motion_feasible_count = 0
@@ -1127,6 +1182,7 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
     convex_region_candidate_audit: list[dict[str, Any]] = []
     gcs_trajectory_candidate_audit: list[dict[str, Any]] = []
     gcs_candidate_audit: list[dict[str, Any]] = []
+    gcs_control_point_candidate_audit: list[dict[str, Any]] = []
     gcs_motion_feasibility_audit: list[dict[str, Any]] = []
     gcs_curvature_constrained_audit: list[dict[str, Any]] = []
 
@@ -1145,6 +1201,7 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         convex = scenario["convex_region_diagnostics"]
         gcs = scenario["gcs_trajectory_diagnostics"]
         gcs_candidate = scenario["gcs_candidate_diagnostics"]
+        gcs_control_point = scenario["gcs_control_point_diagnostics"]
         gcs_motion = scenario["gcs_motion_feasibility_diagnostics"]
         gcs_curvature = scenario["gcs_curvature_constrained_diagnostics"]
         sampled = scenario["sampled_region_path_diagnostics"]
@@ -1182,6 +1239,18 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         )
         group_payload["gcs_candidate_cost_delta_vs_baseline_zero_count"] += int(
             gcs_candidate["cost_delta_vs_baseline_zero_count"]
+        )
+        group_payload["gcs_control_point_report_count"] += int(gcs_control_point["report_count"])
+        group_payload["gcs_control_point_attempted_count"] += int(gcs_control_point["attempted_count"])
+        group_payload["gcs_control_point_success_count"] += int(gcs_control_point["success_count"])
+        group_payload["gcs_control_point_candidate_selected_count"] += int(
+            gcs_control_point["candidate_selected_count"]
+        )
+        group_payload["gcs_control_point_sampled_terrain_cost_count"] += int(
+            gcs_control_point["sampled_terrain_cost_count"]
+        )
+        group_payload["gcs_control_point_high_cost_exposure_delta_count"] += int(
+            gcs_control_point["high_cost_exposure_delta_count"]
         )
         group_payload["gcs_motion_feasibility_report_count"] += int(gcs_motion["report_count"])
         group_payload["gcs_motion_feasibility_evaluated_count"] += int(gcs_motion["evaluated_count"])
@@ -1342,6 +1411,26 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         gcs_candidate_cost_delta_negative_count += int(gcs_candidate["cost_delta_vs_baseline_negative_count"])
         gcs_candidate_cost_delta_positive_count += int(gcs_candidate["cost_delta_vs_baseline_positive_count"])
         gcs_candidate_cost_delta_zero_count += int(gcs_candidate["cost_delta_vs_baseline_zero_count"])
+        gcs_control_point_report_count += int(gcs_control_point["report_count"])
+        gcs_control_point_attempted_count += int(gcs_control_point["attempted_count"])
+        gcs_control_point_success_count += int(gcs_control_point["success_count"])
+        gcs_control_point_candidate_selected_count += int(gcs_control_point["candidate_selected_count"])
+        gcs_control_point_sampled_terrain_cost_stats.append(
+            {
+                "count": gcs_control_point["sampled_terrain_cost_count"],
+                "min": gcs_control_point["sampled_terrain_cost_min"],
+                "max": gcs_control_point["sampled_terrain_cost_max"],
+                "mean": gcs_control_point["sampled_terrain_cost_mean"],
+            }
+        )
+        gcs_control_point_high_cost_exposure_delta_stats.append(
+            {
+                "count": gcs_control_point["high_cost_exposure_delta_count"],
+                "min": gcs_control_point["high_cost_exposure_delta_min"],
+                "max": gcs_control_point["high_cost_exposure_delta_max"],
+                "mean": gcs_control_point["high_cost_exposure_delta_mean"],
+            }
+        )
         gcs_motion_report_count += int(gcs_motion["report_count"])
         gcs_motion_evaluated_count += int(gcs_motion["evaluated_count"])
         gcs_motion_feasible_count += int(gcs_motion["feasible_count"])
@@ -1417,6 +1506,7 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         convex_region_candidate_audit.extend(scenario.get("convex_region_candidate_audit", []))
         gcs_trajectory_candidate_audit.extend(scenario.get("gcs_trajectory_candidate_audit", []))
         gcs_candidate_audit.extend(scenario.get("gcs_candidate_audit", []))
+        gcs_control_point_candidate_audit.extend(scenario.get("gcs_control_point_candidate_audit", []))
         gcs_motion_feasibility_audit.extend(scenario.get("gcs_motion_feasibility_audit", []))
         gcs_curvature_constrained_audit.extend(scenario.get("gcs_curvature_constrained_audit", []))
         iris_status_counts.update(iris["status_counts"])
@@ -1431,6 +1521,13 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         gcs_trajectory_result_status_counts.update(gcs["result_status_counts"])
         gcs_candidate_fallback_reason_counts.update(gcs_candidate["fallback_reason_counts"])
         gcs_candidate_selection_reason_counts.update(gcs_candidate["selection_reason_counts"])
+        gcs_control_point_backend_counts.update(gcs_control_point["backend_counts"])
+        gcs_control_point_candidate_fallback_reason_counts.update(
+            gcs_control_point["candidate_fallback_reason_counts"]
+        )
+        gcs_control_point_terrain_objective_source_counts.update(
+            gcs_control_point["terrain_objective_source_counts"]
+        )
         gcs_motion_status_counts.update(gcs_motion["status_counts"])
         gcs_motion_fallback_reason_counts.update(gcs_motion["fallback_reason_counts"])
         gcs_motion_model_counts.update(gcs_motion["motion_model_counts"])
@@ -1460,6 +1557,8 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         sampled_execution_tie_break_reason_counts.update(sampled["execution_tie_break_reason_counts"])
         sampled_complexity_reason_counts.update(sampled["complexity_reason_counts"])
 
+    control_point_sampled_stats = _aggregate_metric_stats(gcs_control_point_sampled_terrain_cost_stats)
+    control_point_exposure_stats = _aggregate_metric_stats(gcs_control_point_high_cost_exposure_delta_stats)
     return {
         "iris_requested_count": iris_report_count,
         "iris_report_count": iris_report_count,
@@ -1506,6 +1605,26 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         "gcs_candidate_cost_delta_vs_baseline_positive_count": gcs_candidate_cost_delta_positive_count,
         "gcs_candidate_cost_delta_vs_baseline_zero_count": gcs_candidate_cost_delta_zero_count,
         "gcs_candidate_audit": gcs_candidate_audit,
+        "gcs_control_point_report_count": gcs_control_point_report_count,
+        "gcs_control_point_attempted_count": gcs_control_point_attempted_count,
+        "gcs_control_point_success_count": gcs_control_point_success_count,
+        "gcs_control_point_backend_counts": dict(sorted(gcs_control_point_backend_counts.items())),
+        "gcs_control_point_candidate_selected_count": gcs_control_point_candidate_selected_count,
+        "gcs_control_point_candidate_fallback_reason_counts": dict(
+            sorted(gcs_control_point_candidate_fallback_reason_counts.items())
+        ),
+        "gcs_control_point_terrain_objective_source_counts": dict(
+            sorted(gcs_control_point_terrain_objective_source_counts.items())
+        ),
+        "gcs_control_point_sampled_terrain_cost_count": control_point_sampled_stats["count"],
+        "gcs_control_point_sampled_terrain_cost_min": control_point_sampled_stats["min"],
+        "gcs_control_point_sampled_terrain_cost_max": control_point_sampled_stats["max"],
+        "gcs_control_point_sampled_terrain_cost_mean": control_point_sampled_stats["mean"],
+        "gcs_control_point_high_cost_exposure_delta_count": control_point_exposure_stats["count"],
+        "gcs_control_point_high_cost_exposure_delta_min": control_point_exposure_stats["min"],
+        "gcs_control_point_high_cost_exposure_delta_max": control_point_exposure_stats["max"],
+        "gcs_control_point_high_cost_exposure_delta_mean": control_point_exposure_stats["mean"],
+        "gcs_control_point_candidate_audit": gcs_control_point_candidate_audit,
         "gcs_motion_feasibility_report_count": gcs_motion_report_count,
         "gcs_motion_feasibility_evaluated_count": gcs_motion_evaluated_count,
         "gcs_motion_feasibility_feasible_count": gcs_motion_feasible_count,
@@ -1773,6 +1892,8 @@ def _scenario_failure_sources(scenario: dict[str, Any]) -> list[str]:
         sources.append("sampled_region_path_fallback")
     if scenario["gcs_curvature_constrained_diagnostics"].get("fallback_reason_counts"):
         sources.append("gcs_curvature_constrained_fallback")
+    if scenario["gcs_control_point_diagnostics"].get("candidate_fallback_reason_counts"):
+        sources.append("gcs_control_point_fallback")
     if int(scenario["iris_diagnostics"]["fallback_count"]) > 0:
         sources.append("iris_fallback")
     if bool(scenario["open_grid_fallback_used"]):
@@ -1867,6 +1988,12 @@ def _empty_group_summary() -> dict[str, int]:
         "gcs_candidate_cost_delta_vs_baseline_negative_count": 0,
         "gcs_candidate_cost_delta_vs_baseline_positive_count": 0,
         "gcs_candidate_cost_delta_vs_baseline_zero_count": 0,
+        "gcs_control_point_report_count": 0,
+        "gcs_control_point_attempted_count": 0,
+        "gcs_control_point_success_count": 0,
+        "gcs_control_point_candidate_selected_count": 0,
+        "gcs_control_point_sampled_terrain_cost_count": 0,
+        "gcs_control_point_high_cost_exposure_delta_count": 0,
         "gcs_motion_feasibility_report_count": 0,
         "gcs_motion_feasibility_evaluated_count": 0,
         "gcs_motion_feasibility_feasible_count": 0,
@@ -2130,6 +2257,82 @@ def _gcs_candidate_diagnostics(evaluations) -> dict[str, Any]:
         "cost_delta_vs_baseline_negative_count": delta_negative_count,
         "cost_delta_vs_baseline_positive_count": delta_positive_count,
         "cost_delta_vs_baseline_zero_count": delta_zero_count,
+    }
+
+
+def _gcs_control_point_diagnostics(evaluations) -> dict[str, Any]:
+    backend_counts: Counter[str] = Counter()
+    fallback_reason_counts: Counter[str] = Counter()
+    terrain_objective_source_counts: Counter[str] = Counter()
+    report_count = 0
+    attempted_count = 0
+    success_count = 0
+    candidate_selected_count = 0
+    sampled_terrain_costs: list[float] = []
+    high_cost_exposure_deltas: list[float] = []
+    for item in evaluations:
+        payload = item.to_dict()
+        gcs = payload.get("gcs_trajectory")
+        if not isinstance(gcs, dict) or gcs.get("backend") != GCS_CONTROL_POINT_BACKEND:
+            continue
+        report_count += 1
+        backend_counts[str(gcs.get("backend"))] += 1
+        if gcs.get("attempted") is True:
+            attempted_count += 1
+        if gcs.get("success") is True:
+            success_count += 1
+
+        candidate = payload.get("gcs_candidate")
+        candidate = candidate if isinstance(candidate, dict) else {}
+        if candidate.get("selected") is True:
+            candidate_selected_count += 1
+        fallback_reason = candidate.get("fallback_reason")
+        if fallback_reason:
+            fallback_reason_counts[str(fallback_reason)] += 1
+
+        trajectory_cost = gcs.get("cost_summary")
+        trajectory_cost = trajectory_cost if isinstance(trajectory_cost, dict) else {}
+        candidate_cost = candidate.get("cost_summary")
+        candidate_cost = candidate_cost if isinstance(candidate_cost, dict) else {}
+        terrain_source = _first_present(
+            trajectory_cost.get("terrain_objective_source"),
+            candidate_cost.get("terrain_objective_source"),
+        )
+        if terrain_source:
+            terrain_objective_source_counts[str(terrain_source)] += 1
+
+        sampled_terrain_cost = _first_float(
+            trajectory_cost.get("sampled_terrain_cost"),
+            candidate_cost.get("sampled_terrain_cost"),
+        )
+        if sampled_terrain_cost is not None:
+            sampled_terrain_costs.append(sampled_terrain_cost)
+
+        exposure_delta = _first_float(
+            candidate_cost.get("high_cost_exposure_delta_vs_baseline"),
+            trajectory_cost.get("high_cost_exposure_delta_vs_baseline"),
+        )
+        if exposure_delta is not None:
+            high_cost_exposure_deltas.append(exposure_delta)
+
+    sampled_stats = _numeric_metric_stats(sampled_terrain_costs)
+    exposure_stats = _numeric_metric_stats(high_cost_exposure_deltas)
+    return {
+        "report_count": report_count,
+        "attempted_count": attempted_count,
+        "success_count": success_count,
+        "backend_counts": dict(sorted(backend_counts.items())),
+        "candidate_selected_count": candidate_selected_count,
+        "candidate_fallback_reason_counts": dict(sorted(fallback_reason_counts.items())),
+        "terrain_objective_source_counts": dict(sorted(terrain_objective_source_counts.items())),
+        "sampled_terrain_cost_count": sampled_stats["count"],
+        "sampled_terrain_cost_min": sampled_stats["min"],
+        "sampled_terrain_cost_max": sampled_stats["max"],
+        "sampled_terrain_cost_mean": sampled_stats["mean"],
+        "high_cost_exposure_delta_count": exposure_stats["count"],
+        "high_cost_exposure_delta_min": exposure_stats["min"],
+        "high_cost_exposure_delta_max": exposure_stats["max"],
+        "high_cost_exposure_delta_mean": exposure_stats["mean"],
     }
 
 
@@ -2711,6 +2914,60 @@ def _gcs_candidate_audit(evaluations, *, scenario_id: str) -> list[dict[str, Any
     return audit
 
 
+def _gcs_control_point_candidate_audit(evaluations, *, scenario_id: str) -> list[dict[str, Any]]:
+    audit: list[dict[str, Any]] = []
+    for item in evaluations:
+        candidate = item.to_dict()
+        gcs = candidate.get("gcs_trajectory")
+        if not isinstance(gcs, dict) or gcs.get("backend") != GCS_CONTROL_POINT_BACKEND:
+            continue
+        gcs_candidate = candidate.get("gcs_candidate")
+        gcs_candidate = gcs_candidate if isinstance(gcs_candidate, dict) else {}
+        trajectory_cost = gcs.get("cost_summary")
+        trajectory_cost = trajectory_cost if isinstance(trajectory_cost, dict) else {}
+        candidate_cost = gcs_candidate.get("cost_summary")
+        candidate_cost = candidate_cost if isinstance(candidate_cost, dict) else {}
+        audit.append(
+            {
+                "scenario_id": scenario_id,
+                "action_index": candidate["action_index"],
+                "cell": candidate["cell"],
+                "backend": gcs.get("backend"),
+                "attempted": gcs.get("attempted"),
+                "success": gcs.get("success"),
+                "reason": gcs.get("reason"),
+                "candidate_selected": gcs_candidate.get("selected"),
+                "candidate_fallback_reason": gcs_candidate.get("fallback_reason"),
+                "terrain_objective_source": _first_present(
+                    trajectory_cost.get("terrain_objective_source"),
+                    candidate_cost.get("terrain_objective_source"),
+                ),
+                "terrain_objective_weight": _first_present(
+                    trajectory_cost.get("terrain_objective_weight"),
+                    candidate_cost.get("terrain_objective_weight"),
+                ),
+                "sampled_terrain_cost": _first_present(
+                    trajectory_cost.get("sampled_terrain_cost"),
+                    candidate_cost.get("sampled_terrain_cost"),
+                ),
+                "control_point_terrain_cost": _first_present(
+                    trajectory_cost.get("control_point_terrain_cost"),
+                    candidate_cost.get("control_point_terrain_cost"),
+                ),
+                "high_cost_exposure": _first_present(
+                    candidate_cost.get("high_cost_exposure"),
+                    trajectory_cost.get("high_cost_exposure"),
+                    gcs_candidate.get("high_cost_exposure"),
+                ),
+                "baseline_high_cost_exposure": candidate_cost.get("baseline_high_cost_exposure"),
+                "high_cost_exposure_delta_vs_baseline": candidate_cost.get(
+                    "high_cost_exposure_delta_vs_baseline"
+                ),
+            }
+        )
+    return audit
+
+
 def _gcs_motion_feasibility_audit(evaluations, *, scenario_id: str) -> list[dict[str, Any]]:
     audit: list[dict[str, Any]] = []
     for item in evaluations:
@@ -2828,6 +3085,62 @@ def _float_value(value: Any) -> float | None:
     if number != number or number in {float("inf"), float("-inf")}:
         return None
     return number
+
+
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _first_float(*values: Any) -> float | None:
+    for value in values:
+        number = _float_value(value)
+        if number is not None:
+            return number
+    return None
+
+
+def _numeric_metric_stats(values: list[float]) -> dict[str, float | int | None]:
+    if not values:
+        return {"count": 0, "min": None, "max": None, "mean": None}
+    return {
+        "count": len(values),
+        "min": float(min(values)),
+        "max": float(max(values)),
+        "mean": float(sum(values) / len(values)),
+    }
+
+
+def _aggregate_metric_stats(stats: list[dict[str, Any]]) -> dict[str, float | int | None]:
+    count = 0
+    weighted_total = 0.0
+    minimum: float | None = None
+    maximum: float | None = None
+    for item in stats:
+        item_count = _int_value(item.get("count"))
+        if item_count <= 0:
+            continue
+        item_mean = _float_value(item.get("mean"))
+        if item_mean is None:
+            continue
+        count += item_count
+        weighted_total += item_mean * item_count
+        item_min = _float_value(item.get("min"))
+        item_max = _float_value(item.get("max"))
+        if item_min is not None:
+            minimum = item_min if minimum is None else min(minimum, item_min)
+        if item_max is not None:
+            maximum = item_max if maximum is None else max(maximum, item_max)
+    if count == 0:
+        return {"count": 0, "min": None, "max": None, "mean": None}
+    return {
+        "count": count,
+        "min": minimum,
+        "max": maximum,
+        "mean": float(weighted_total / count),
+    }
 
 
 def _optional_str(value: Any) -> str | None:
