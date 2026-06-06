@@ -1971,7 +1971,13 @@ class PathPlanningAdapterTests(unittest.TestCase):
                         "acceptance_gate": "semi-real-closed-loop",
                         "planner": {"backend": "path_planner_route", "python_executable": sys.executable},
                         "scenarios": manifest_scenarios,
-                        "outputs": {"summary": str(summary_path), "report": str(report_path)},
+                        "outputs": {
+                            "summary": str(summary_path),
+                            "report": str(report_path),
+                            "gcs_control_point_candidate_artifacts": str(
+                                root / "gcs-control-point-candidate-artifacts"
+                            ),
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -1981,6 +1987,16 @@ class PathPlanningAdapterTests(unittest.TestCase):
             self.assertTrue(summary_path.exists())
             self.assertTrue(report_path.exists())
             report = report_path.read_text(encoding="utf-8")
+            artifact_entry = (
+                summary.get("gcs_control_point_candidate_artifacts", {}).get("entries", [{}])[0]
+            )
+            route_artifact_path = Path(str(artifact_entry.get("route_artifact", "")))
+            route_artifact_exists = route_artifact_path.exists()
+            persisted_route = (
+                json.loads(route_artifact_path.read_text(encoding="utf-8"))
+                if route_artifact_exists
+                else {}
+            )
 
         self.assertEqual(summary["schema_version"], "path-feedback-summary/v1")
         self.assertEqual(summary["scenario_count"], 3)
@@ -2117,6 +2133,54 @@ class PathPlanningAdapterTests(unittest.TestCase):
             summary["gcs_control_point_candidate_audit"][0]["terrain_objective_source"],
             "region_inverse_cost_weighted_passable_cell_centroid",
         )
+        triage = summary["gcs_control_point_candidate_triage"]
+        self.assertEqual(triage["schema_version"], "gcs-control-point-candidate-triage-summary/v1")
+        self.assertEqual(triage["candidate_count"], 1)
+        self.assertEqual(triage["attempted_count"], 1)
+        self.assertEqual(triage["success_count"], 1)
+        self.assertEqual(triage["selected_count"], 1)
+        self.assertEqual(triage["route_artifact_count"], 1)
+        self.assertEqual(triage["fallback_reason_counts"], {})
+        triage_row = triage["candidates"][0]
+        self.assertEqual(triage_row["scenario_id"], "npz_shadow_corridor")
+        self.assertEqual(triage_row["action_index"], 1)
+        self.assertEqual(triage_row["direction_cone_violation_count"], 0)
+        self.assertEqual(triage_row["direction_cone_risk_flags"], [])
+        self.assertTrue(triage_row["direction_cone_backend_enforced"])
+        self.assertEqual(triage_row["direction_cone_eta"], 1.0)
+        self.assertEqual(triage_row["direction_cone_rho_min"], 0.025)
+        self.assertEqual(triage_row["direction_cone_tolerance_deg"], 45.0)
+        self.assertEqual(triage_row["second_difference_weight"], 0.2)
+        self.assertEqual(triage_row["motion_feasibility_status"], "feasible")
+        self.assertEqual(triage_row["terrain_objective_weight"], 0.05)
+        self.assertEqual(triage_row["cost_delta_vs_baseline"], -1.0)
+        self.assertEqual(triage_row["high_cost_exposure_delta_vs_baseline"], -1.0)
+        sweep = triage["calibration_sweep"]
+        self.assertEqual(
+            sweep["schema_version"],
+            "gcs-control-point-candidate-calibration-sweep/v1",
+        )
+        self.assertFalse(sweep["default_change_recommended"])
+        self.assertTrue(sweep["solver_rerun_required"])
+        self.assertIn("terrain_objective_weight", sweep["sweep_dimensions"])
+        self.assertEqual(sweep["observed_current_values"]["terrain_objective_weight"], [0.05])
+        self.assertEqual(sweep["observed_current_values"]["second_difference_weight"], [0.2])
+        self.assertFalse(sweep["safety_regression_guard"]["direction_cone_degradation_allowed"])
+        artifacts = summary["gcs_control_point_candidate_artifacts"]
+        self.assertEqual(artifacts["schema_version"], "gcs-control-point-candidate-artifact-index/v1")
+        self.assertEqual(artifacts["candidate_count"], 1)
+        self.assertEqual(artifacts["route_artifact_count"], 1)
+        artifact_entry = artifacts["entries"][0]
+        self.assertEqual(artifact_entry["scenario_id"], "npz_shadow_corridor")
+        self.assertEqual(artifact_entry["action_index"], 1)
+        self.assertTrue(route_artifact_exists)
+        self.assertEqual(persisted_route["schema_version"], "path-planner-route/v1")
+        self.assertEqual(
+            persisted_route["gcs_trajectory_backend"],
+            "pydrake_control_point_direction_cone_program",
+        )
+        self.assertIn("## GCS Control-Point Candidate Triage", report)
+        self.assertIn("gcs-control-point-candidate-triage-summary/v1", report)
         self.assertEqual(summary["sampled_region_path_selected_count"], 1)
         self.assertEqual(summary["sampled_region_path_fallback_count"], 1)
         self.assertEqual(summary["sampled_region_path_source_counts"]["iris"], 1)
@@ -4620,6 +4684,26 @@ def _gcs_trajectory_route_fields(
         "gcs_trajectory_path_length": 2.0,
         "gcs_trajectory_region_count": 2,
         "gcs_trajectory_sampled_points": [[0.5, 0.5], [1.5, 1.5]],
+        "gcs_trajectory_constraint_summary": {
+            "schema_version": "gcs_direction_cone_constraint/v1",
+            "constraint_model": "direction_cone",
+            "attempted": True,
+            "evaluated": True,
+            "backend_enforced": True,
+            "violation_count": 0,
+            "eta": 1.0,
+            "rho_min": 0.025,
+            "max_allowed_direction_error_deg": 45.0,
+            "constraint_tightness_min": 1.0,
+            "risk_flags": [],
+            "rho_source_counts": {"seed_distance_portal_support_min": 1},
+            "objective_term_weights": {
+                "segment_length_quadratic": 1.0,
+                "low_cost_anchor_quadratic": 0.1,
+                "control_point_terrain_anchor_quadratic": 0.05,
+                "control_point_second_difference_quadratic": 0.2,
+            },
+        },
     }
     if cost_summary is not None:
         fields["gcs_trajectory_cost_summary"] = cost_summary

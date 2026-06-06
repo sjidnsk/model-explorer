@@ -756,6 +756,11 @@ def _gcs_trajectory_route_report(route: dict[str, Any]) -> dict[str, Any] | None
             if isinstance(route.get("gcs_trajectory_sampled_points"), list)
             else []
         ),
+        "constraint_summary": (
+            route.get("gcs_trajectory_constraint_summary")
+            if isinstance(route.get("gcs_trajectory_constraint_summary"), dict)
+            else {}
+        ),
         "cost_summary": (
             route.get("gcs_trajectory_cost_summary")
             if isinstance(route.get("gcs_trajectory_cost_summary"), dict)
@@ -778,6 +783,9 @@ def _gcs_trajectory_summary(value: Any) -> dict[str, Any] | None:
         "collision_count": value.get("collision_count"),
         "path_length": value.get("path_length"),
         "region_count": value.get("region_count"),
+        "constraint_summary": (
+            value.get("constraint_summary") if isinstance(value.get("constraint_summary"), dict) else {}
+        ),
         "cost_summary": value.get("cost_summary") if isinstance(value.get("cost_summary"), dict) else {},
     }
 
