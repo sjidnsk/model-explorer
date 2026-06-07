@@ -5,10 +5,11 @@ import os
 import subprocess
 import sys
 import tempfile
+from collections import Counter, deque
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from heapq import heappop, heappush
-from math import hypot
+from math import ceil, hypot
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -53,6 +54,10 @@ class PathCandidateEvaluation:
 
     def to_dict(self) -> dict[str, Any]:
         input_sources = _input_source_summary(self.result.metadata.get("request_payload"))
+        platform_goal_feasibility = _platform_goal_feasibility(
+            cell=self.cell,
+            result=self.result,
+        )
         payload = {
             "action_index": self.action_index,
             "cell": [self.cell[0], self.cell[1]],
@@ -83,6 +88,7 @@ class PathCandidateEvaluation:
             ),
             "input_sources": input_sources,
             "open_grid_fallback_used": bool(input_sources["open_grid_fallback_used"]),
+            "platform_goal_feasibility": platform_goal_feasibility,
         }
         return payload
 
@@ -484,6 +490,10 @@ def path_feedback_summary(evaluations: Sequence[PathCandidateEvaluation]) -> dic
     ]
     replan_count = sum(1 for item in items if item["replan_required"])
     feasible_items = [item for item in items if item["reachable"]]
+    platform_counts = Counter(
+        item.get("platform_goal_feasibility", {}).get("classification", "unavailable")
+        for item in items
+    )
     return {
         "candidate_count": len(items),
         "reachable_count": len(feasible_items),
@@ -496,6 +506,23 @@ def path_feedback_summary(evaluations: Sequence[PathCandidateEvaluation]) -> dic
             default=None,
         ),
         "candidates": items,
+        "platform_goal_feasibility_class_counts": dict(sorted(platform_counts.items())),
+        "platform_goal_contract_mismatch_count": sum(
+            1
+            for item in items
+            if _platform_goal_contract_mismatch(
+                item.get("platform_goal_feasibility")
+                if isinstance(item.get("platform_goal_feasibility"), dict)
+                else {}
+            )
+        ),
+        "platform_goal_anchor_available_count": sum(
+            1
+            for item in items
+            if isinstance(item.get("platform_goal_feasibility"), dict)
+            and item["platform_goal_feasibility"].get("nearest_inflated_passable_anchor") is not None
+        ),
+        "platform_goal_unresolved_count": platform_counts["unknown_contract_mismatch"],
     }
 
 
@@ -972,6 +999,331 @@ def _gcs_curvature_constrained_candidate_summary(value: Any) -> dict[str, Any] |
         "cost_delta_vs_baseline": value.get("cost_delta_vs_baseline"),
         "constraint_summary": value.get("constraint_summary") if isinstance(value.get("constraint_summary"), dict) else {},
     }
+
+
+def _platform_goal_feasibility(*, cell: tuple[int, int], result: PathPlanResult) -> dict[str, Any]:
+    request_payload = result.metadata.get("request_payload")
+    request_payload = request_payload if isinstance(request_payload, dict) else {}
+    diagnostics = result.metadata.get("diagnostics")
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    grid = request_payload.get("grid") if isinstance(request_payload.get("grid"), dict) else {}
+    width = _positive_int(grid.get("width"))
+    height = _positive_int(grid.get("height"))
+    resolution = _positive_float(grid.get("resolution"), default=1.0)
+    mask = _bool_grid(request_payload.get("passable_mask"), width=width, height=height)
+    footprint_radius_m = _optional_positive_float(diagnostics.get("footprint_radius_m"))
+    if width is None or height is None or mask is None:
+        return _platform_goal_feasibility_payload(
+            classification="unknown_contract_mismatch",
+            cell=cell,
+            contract_reachable=True,
+            original_passable=None,
+            inflated_passable=None,
+            footprint_radius_m=footprint_radius_m,
+            nearest_anchor=None,
+            anchor_distance_cells=None,
+            anchor_distance_m=None,
+            proxy_route_comparison=_proxy_route_unavailable("missing_request_passable_mask"),
+        )
+
+    original_passable = _mask_value(mask, cell)
+    inflated_mask = _inflated_passable_mask(
+        mask,
+        resolution=resolution,
+        footprint_radius_m=footprint_radius_m,
+    )
+    inflated_passable = _mask_value(inflated_mask, cell)
+    classification = _platform_goal_classification(
+        original_passable=original_passable,
+        inflated_passable=inflated_passable,
+    )
+    nearest_anchor = (
+        _nearest_inflated_passable_anchor(inflated_mask, cell)
+        if classification == "platform_inflated_goal_blocked"
+        else None
+    )
+    anchor_distance_cells = None
+    anchor_distance_m = None
+    if nearest_anchor is not None:
+        anchor_distance_cells = _manhattan_distance(cell, nearest_anchor)
+        anchor_distance_m = float(hypot(nearest_anchor[0] - cell[0], nearest_anchor[1] - cell[1]) * resolution)
+    proxy_route_comparison = _proxy_anchor_route_comparison(
+        request_payload=request_payload,
+        inflated_mask=inflated_mask,
+        anchor=nearest_anchor,
+        resolution=resolution,
+    )
+    return _platform_goal_feasibility_payload(
+        classification=classification,
+        cell=cell,
+        contract_reachable=True,
+        original_passable=original_passable,
+        inflated_passable=inflated_passable,
+        footprint_radius_m=footprint_radius_m,
+        nearest_anchor=nearest_anchor,
+        anchor_distance_cells=anchor_distance_cells,
+        anchor_distance_m=anchor_distance_m,
+        proxy_route_comparison=proxy_route_comparison,
+    )
+
+
+def _platform_goal_feasibility_payload(
+    *,
+    classification: str,
+    cell: tuple[int, int],
+    contract_reachable: bool,
+    original_passable: bool | None,
+    inflated_passable: bool | None,
+    footprint_radius_m: float | None,
+    nearest_anchor: tuple[int, int] | None,
+    anchor_distance_cells: int | None,
+    anchor_distance_m: float | None,
+    proxy_route_comparison: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": "platform-goal-feasibility/v1",
+        "cell": [cell[0], cell[1]],
+        "contract_reachable": bool(contract_reachable),
+        "original_passable": original_passable,
+        "inflated_passable": inflated_passable,
+        "blocked_by_platform_footprint": bool(
+            original_passable is True and inflated_passable is False
+        ),
+        "footprint_radius_m": footprint_radius_m,
+        "nearest_inflated_passable_anchor": (
+            None if nearest_anchor is None else [nearest_anchor[0], nearest_anchor[1]]
+        ),
+        "anchor_distance_cells": anchor_distance_cells,
+        "anchor_distance_m": anchor_distance_m,
+        "classification": classification,
+        "proxy_route_comparison": proxy_route_comparison,
+    }
+
+
+def _platform_goal_classification(
+    *,
+    original_passable: bool | None,
+    inflated_passable: bool | None,
+) -> str:
+    if original_passable is None or inflated_passable is None:
+        return "out_of_bounds"
+    if not original_passable:
+        return "original_goal_blocked"
+    if not inflated_passable:
+        return "platform_inflated_goal_blocked"
+    return "goal_passable"
+
+
+def _platform_goal_contract_mismatch(feasibility: dict[str, Any]) -> bool:
+    return bool(feasibility.get("contract_reachable")) and feasibility.get("classification") in {
+        "platform_inflated_goal_blocked",
+        "original_goal_blocked",
+        "out_of_bounds",
+        "unknown_contract_mismatch",
+    }
+
+
+def _inflated_passable_mask(
+    mask: tuple[tuple[bool, ...], ...],
+    *,
+    resolution: float,
+    footprint_radius_m: float | None,
+) -> tuple[tuple[bool, ...], ...]:
+    if footprint_radius_m is None or footprint_radius_m <= 0.0:
+        return tuple(tuple(row) for row in mask)
+    height = len(mask)
+    width = len(mask[0]) if height else 0
+    safe = [[bool(value) for value in row] for row in mask]
+    radius_cells = int(ceil(footprint_radius_m / max(resolution, 1.0e-12)))
+    for blocked_y, row in enumerate(mask):
+        for blocked_x, passable in enumerate(row):
+            if passable:
+                continue
+            min_y = max(0, blocked_y - radius_cells)
+            max_y = min(height - 1, blocked_y + radius_cells)
+            min_x = max(0, blocked_x - radius_cells)
+            max_x = min(width - 1, blocked_x + radius_cells)
+            for y in range(min_y, max_y + 1):
+                for x in range(min_x, max_x + 1):
+                    distance_m = hypot((x - blocked_x) * resolution, (y - blocked_y) * resolution)
+                    if distance_m <= footprint_radius_m:
+                        safe[y][x] = False
+    return tuple(tuple(row) for row in safe)
+
+
+def _nearest_inflated_passable_anchor(
+    mask: tuple[tuple[bool, ...], ...],
+    cell: tuple[int, int],
+) -> tuple[int, int] | None:
+    candidates: list[tuple[int, float, int, int]] = []
+    for y, row in enumerate(mask):
+        for x, passable in enumerate(row):
+            if passable:
+                manhattan = abs(x - cell[0]) + abs(y - cell[1])
+                euclidean = hypot(x - cell[0], y - cell[1])
+                candidates.append((manhattan, euclidean, y, x))
+    if not candidates:
+        return None
+    _, _, y, x = min(candidates)
+    return (x, y)
+
+
+def _proxy_anchor_route_comparison(
+    *,
+    request_payload: dict[str, Any],
+    inflated_mask: tuple[tuple[bool, ...], ...],
+    anchor: tuple[int, int] | None,
+    resolution: float,
+) -> dict[str, Any]:
+    if anchor is None:
+        return _proxy_route_unavailable("no_inflated_passable_anchor")
+    start = _cell_pair(request_payload.get("start"))
+    if start is None:
+        return _proxy_route_unavailable("missing_start")
+    path = _grid_path(inflated_mask, start=start, goal=anchor)
+    if path is None:
+        return {
+            "scope": "audit_proxy_anchor_not_same_cell",
+            "anchor_route_feasible": False,
+            "anchor_path_cost": None,
+            "anchor_path_length_cells": None,
+            "anchor_path_length_m": None,
+            "same_cell_positive_evidence": False,
+            "failure_reason": "anchor_unreachable",
+        }
+    cost = _path_cost_for_payload(request_payload.get("cost"), path)
+    return {
+        "scope": "audit_proxy_anchor_not_same_cell",
+        "anchor_route_feasible": True,
+        "anchor_path_cost": cost,
+        "anchor_path_length_cells": max(len(path) - 1, 0),
+        "anchor_path_length_m": float(max(len(path) - 1, 0) * resolution),
+        "same_cell_positive_evidence": False,
+        "failure_reason": None,
+    }
+
+
+def _proxy_route_unavailable(reason: str) -> dict[str, Any]:
+    return {
+        "scope": "audit_proxy_anchor_not_same_cell",
+        "anchor_route_feasible": False,
+        "anchor_path_cost": None,
+        "anchor_path_length_cells": None,
+        "anchor_path_length_m": None,
+        "same_cell_positive_evidence": False,
+        "failure_reason": reason,
+    }
+
+
+def _grid_path(
+    mask: tuple[tuple[bool, ...], ...],
+    *,
+    start: tuple[int, int],
+    goal: tuple[int, int],
+) -> tuple[tuple[int, int], ...] | None:
+    if _mask_value(mask, start) is not True or _mask_value(mask, goal) is not True:
+        return None
+    frontier: deque[tuple[int, int]] = deque([start])
+    came_from: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
+    while frontier:
+        current = frontier.popleft()
+        if current == goal:
+            return _reconstruct_path(came_from, current)
+        for neighbor in _mask_neighbors(mask, current):
+            if neighbor in came_from:
+                continue
+            came_from[neighbor] = current
+            frontier.append(neighbor)
+    return None
+
+
+def _mask_neighbors(
+    mask: tuple[tuple[bool, ...], ...],
+    cell: tuple[int, int],
+) -> tuple[tuple[int, int], ...]:
+    x, y = cell
+    candidates = ((x + 1, y), (x, y + 1), (x - 1, y), (x, y - 1))
+    return tuple(candidate for candidate in candidates if _mask_value(mask, candidate) is True)
+
+
+def _path_cost_for_payload(cost_payload: Any, path: tuple[tuple[int, int], ...]) -> float | None:
+    if len(path) < 2:
+        return 0.0
+    total = 0.0
+    for _, cell in zip(path[:-1], path[1:]):
+        value = _grid_value(cost_payload, cell)
+        if value is None:
+            return None
+        total += float(value)
+    return float(total)
+
+
+def _bool_grid(value: Any, *, width: int | None, height: int | None) -> tuple[tuple[bool, ...], ...] | None:
+    if width is None or height is None or not isinstance(value, list):
+        return None
+    rows: list[tuple[bool, ...]] = []
+    if len(value) != height:
+        return None
+    for row in value:
+        if not isinstance(row, list) or len(row) != width:
+            return None
+        rows.append(tuple(bool(item) for item in row))
+    return tuple(rows)
+
+
+def _mask_value(mask: tuple[tuple[bool, ...], ...], cell: tuple[int, int]) -> bool | None:
+    x, y = cell
+    if y < 0 or y >= len(mask):
+        return None
+    if x < 0 or x >= len(mask[y]):
+        return None
+    return bool(mask[y][x])
+
+
+def _grid_value(value: Any, cell: tuple[int, int]) -> float | None:
+    x, y = cell
+    if not isinstance(value, list) or y < 0 or y >= len(value):
+        return None
+    row = value[y]
+    if not isinstance(row, list) or x < 0 or x >= len(row):
+        return None
+    try:
+        return float(row[x])
+    except (TypeError, ValueError):
+        return None
+
+
+def _cell_pair(value: Any) -> tuple[int, int] | None:
+    if not isinstance(value, list | tuple) or len(value) != 2:
+        return None
+    try:
+        return (int(value[0]), int(value[1]))
+    except (TypeError, ValueError):
+        return None
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _positive_float(value: Any, *, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0.0 else default
+
+
+def _optional_positive_float(value: Any) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0.0 else None
 
 
 def _input_source_summary(value: Any) -> dict[str, Any]:

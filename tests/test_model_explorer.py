@@ -1898,6 +1898,97 @@ class PathPlanningAdapterTests(unittest.TestCase):
             "iris",
         )
 
+    def test_path_feedback_marks_platform_inflated_goal_blocked_candidates(self):
+        from model_explorer.policy.planning import (
+            PathPlanResult,
+            evaluate_candidate_paths,
+            path_feedback_summary,
+        )
+        from model_explorer.policy.path_feedback import _channel_aware_astar_diagnostics
+
+        contract = load_contract_from_dict(
+            minimal_contract(goals=[{"cell": [2, 1], "utility": 0.4, "reachable": True}])
+        )
+        request_payload = {
+            "schema_version": "path-planner-request/v1",
+            "grid": {
+                "width": 4,
+                "height": 3,
+                "resolution": 1.0,
+                "origin": [0.0, 0.0],
+                "frame_id": "moon_local",
+            },
+            "cost": [[1.0, 1.0, 1.0, 1.0] for _ in range(3)],
+            "passable_mask": [
+                [True, True, False, True],
+                [True, True, True, True],
+                [True, True, True, True],
+            ],
+            "start": [0, 0],
+            "goal": [2, 1],
+            "metadata": {"passable_mask_source": "configured"},
+        }
+
+        class InflatedGoalBlockedPlanner:
+            def plan(self, plan_request):
+                return PathPlanResult(
+                    feasible=False,
+                    failure_reason="goal_blocked",
+                    replan_required=True,
+                    risk=0.2,
+                    metadata={
+                        "request_payload": request_payload,
+                        "diagnostics": {
+                            "search_mode": "platform_aware_astar",
+                            "passable_source": "inflated_passable_mask",
+                            "footprint_radius_m": 1.0,
+                            "original_blocked_count": 1,
+                            "inflated_blocked_count": 6,
+                        },
+                        "planning_backend_report": {
+                            "requested_backend": "channel_aware_astar",
+                            "selected_backend": "astar",
+                            "status": "fallback",
+                            "fallback_reason": "channel_search_failed:goal_blocked",
+                            "comparison": {},
+                        },
+                    },
+                )
+
+        evaluations = evaluate_candidate_paths(
+            contract,
+            current_cell=(0, 0),
+            top_k=1,
+            planner=InflatedGoalBlockedPlanner(),
+        )
+        summary = path_feedback_summary(evaluations)
+        candidate = summary["candidates"][0]
+
+        feasibility = candidate["platform_goal_feasibility"]
+        self.assertTrue(feasibility["contract_reachable"])
+        self.assertTrue(feasibility["original_passable"])
+        self.assertFalse(feasibility["inflated_passable"])
+        self.assertTrue(feasibility["blocked_by_platform_footprint"])
+        self.assertEqual(feasibility["classification"], "platform_inflated_goal_blocked")
+        self.assertEqual(feasibility["nearest_inflated_passable_anchor"], [1, 1])
+        self.assertEqual(feasibility["anchor_distance_cells"], 1)
+        self.assertEqual(feasibility["anchor_distance_m"], 1.0)
+        self.assertEqual(feasibility["proxy_route_comparison"]["scope"], "audit_proxy_anchor_not_same_cell")
+        self.assertTrue(feasibility["proxy_route_comparison"]["anchor_route_feasible"])
+        self.assertFalse(feasibility["proxy_route_comparison"]["same_cell_positive_evidence"])
+        self.assertEqual(summary["platform_goal_feasibility_class_counts"]["platform_inflated_goal_blocked"], 1)
+        self.assertEqual(summary["platform_goal_contract_mismatch_count"], 1)
+        self.assertEqual(summary["platform_goal_anchor_available_count"], 1)
+
+        diagnostics = _channel_aware_astar_diagnostics(evaluations, scenario_id="unit")
+        audit = diagnostics["candidate_audit"][0]
+        self.assertEqual(audit["blocker_class"], "platform_inflated_goal_blocked")
+        self.assertEqual(audit["failure_taxonomy"], "platform_inflated_goal_blocked")
+        self.assertEqual(
+            audit["platform_goal_feasibility"]["classification"],
+            "platform_inflated_goal_blocked",
+        )
+
     def test_path_planner_sidecar_validation_and_route_replan_signals(self):
         from model_explorer.policy.planning import (
             PathPlanRequest,

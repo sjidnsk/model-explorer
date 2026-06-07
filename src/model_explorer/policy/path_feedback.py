@@ -77,6 +77,14 @@ PATH_FEEDBACK_SUMMARY_REQUIRED_KEYS = (
     "scenarios",
 )
 GCS_CONTROL_POINT_BACKEND = "pydrake_control_point_direction_cone_program"
+PLATFORM_GOAL_CONTRACT_MISMATCH_CLASSES = frozenset(
+    {
+        "platform_inflated_goal_blocked",
+        "original_goal_blocked",
+        "out_of_bounds",
+        "unknown_contract_mismatch",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -445,6 +453,18 @@ def compact_path_feedback_summary(
         ),
         "channel_aware_astar_blocker_class_counts": summary.get(
             "channel_aware_astar_blocker_class_counts", {}
+        ),
+        "channel_aware_astar_platform_goal_feasibility_class_counts": summary.get(
+            "channel_aware_astar_platform_goal_feasibility_class_counts", {}
+        ),
+        "channel_aware_astar_platform_goal_contract_mismatch_count": summary.get(
+            "channel_aware_astar_platform_goal_contract_mismatch_count"
+        ),
+        "channel_aware_astar_platform_goal_anchor_available_count": summary.get(
+            "channel_aware_astar_platform_goal_anchor_available_count"
+        ),
+        "channel_aware_astar_platform_goal_unresolved_count": summary.get(
+            "channel_aware_astar_platform_goal_unresolved_count"
         ),
         "channel_aware_astar_path_changed_count": summary.get("channel_aware_astar_path_changed_count"),
         "channel_aware_astar_path_changed_rate": summary.get("channel_aware_astar_path_changed_rate"),
@@ -3060,6 +3080,7 @@ def _channel_aware_astar_diagnostics(evaluations, *, scenario_id: str) -> dict[s
     status_counts: Counter[str] = Counter()
     fallback_reason_counts: Counter[str] = Counter()
     blocker_class_counts: Counter[str] = Counter()
+    platform_goal_class_counts: Counter[str] = Counter()
     path_cost_deltas: list[float] = []
     channel_cost_deltas: list[float] = []
     high_cost_exposure_deltas: list[float] = []
@@ -3068,6 +3089,9 @@ def _channel_aware_astar_diagnostics(evaluations, *, scenario_id: str) -> dict[s
     selected_count = 0
     fallback_count = 0
     path_changed_count = 0
+    platform_goal_contract_mismatch_count = 0
+    platform_goal_anchor_available_count = 0
+    platform_goal_unresolved_count = 0
 
     for item in evaluations:
         candidate = item.to_dict()
@@ -3098,9 +3122,29 @@ def _channel_aware_astar_diagnostics(evaluations, *, scenario_id: str) -> dict[s
         if fallback_reason_text:
             fallback_reason_counts[fallback_reason_text] += 1
 
+        platform_goal_feasibility = candidate.get("platform_goal_feasibility")
+        platform_goal_feasibility = (
+            platform_goal_feasibility
+            if isinstance(platform_goal_feasibility, dict)
+            else {}
+        )
+        platform_goal_class = str(platform_goal_feasibility.get("classification") or "unavailable")
+        platform_goal_class_counts[platform_goal_class] += 1
+        if _platform_goal_contract_mismatch(platform_goal_feasibility):
+            platform_goal_contract_mismatch_count += 1
+        if platform_goal_feasibility.get("nearest_inflated_passable_anchor") is not None:
+            platform_goal_anchor_available_count += 1
+        if platform_goal_class == "unknown_contract_mismatch":
+            platform_goal_unresolved_count += 1
+
         blocker_class = _channel_aware_astar_blocker_class(
             status=status,
             selected_backend=selected_key,
+            fallback_reason=fallback_reason_text,
+            platform_goal_feasibility=platform_goal_feasibility,
+        )
+        failure_taxonomy = _channel_aware_astar_failure_taxonomy(
+            blocker_class=blocker_class,
             fallback_reason=fallback_reason_text,
         )
         blocker_class_counts[blocker_class] += 1
@@ -3129,6 +3173,8 @@ def _channel_aware_astar_diagnostics(evaluations, *, scenario_id: str) -> dict[s
                 "status": status,
                 "fallback_reason": fallback_reason_text,
                 "blocker_class": blocker_class,
+                "failure_taxonomy": failure_taxonomy,
+                "platform_goal_feasibility": platform_goal_feasibility,
                 "comparison": {
                     "path_changed": comparison.get("path_changed"),
                     "path_cost_delta": path_cost_delta,
@@ -3147,6 +3193,10 @@ def _channel_aware_astar_diagnostics(evaluations, *, scenario_id: str) -> dict[s
         "status_counts": dict(sorted(status_counts.items())),
         "fallback_reason_counts": dict(sorted(fallback_reason_counts.items())),
         "blocker_class_counts": dict(sorted(blocker_class_counts.items())),
+        "platform_goal_feasibility_class_counts": dict(sorted(platform_goal_class_counts.items())),
+        "platform_goal_contract_mismatch_count": platform_goal_contract_mismatch_count,
+        "platform_goal_anchor_available_count": platform_goal_anchor_available_count,
+        "platform_goal_unresolved_count": platform_goal_unresolved_count,
         "path_changed_count": path_changed_count,
         "path_changed_rate": (path_changed_count / report_count if report_count else 0.0),
         "path_cost_delta": _numeric_metric_stats(path_cost_deltas),
@@ -3161,11 +3211,15 @@ def _channel_aware_astar_blocker_class(
     status: str,
     selected_backend: str,
     fallback_reason: str | None,
+    platform_goal_feasibility: dict[str, Any] | None = None,
 ) -> str:
     if status == "selected" or selected_backend == "channel_aware_astar":
         return "selected"
     reason = fallback_reason or ""
     if "goal_blocked" in reason:
+        platform_class = _platform_goal_failure_class(platform_goal_feasibility)
+        if platform_class is not None:
+            return platform_class
         return "goal_blocked"
     if "same_as_baseline" in reason:
         return "same_as_baseline"
@@ -3178,12 +3232,45 @@ def _channel_aware_astar_blocker_class(
     return "fallback_unspecified"
 
 
+def _channel_aware_astar_failure_taxonomy(
+    *,
+    blocker_class: str,
+    fallback_reason: str | None,
+) -> str:
+    if blocker_class in PLATFORM_GOAL_CONTRACT_MISMATCH_CLASSES:
+        return blocker_class
+    if blocker_class in {"selected", "same_as_baseline", "not_lower_risk", "goal_blocked"}:
+        return blocker_class
+    reason = fallback_reason or ""
+    if "goal_blocked" in reason:
+        return "goal_blocked"
+    if reason.startswith("channel_search_failed"):
+        return "search_failed"
+    return blocker_class
+
+
+def _platform_goal_failure_class(feasibility: dict[str, Any] | None) -> str | None:
+    if not isinstance(feasibility, dict):
+        return None
+    classification = str(feasibility.get("classification") or "")
+    if classification in PLATFORM_GOAL_CONTRACT_MISMATCH_CLASSES:
+        return classification
+    return None
+
+
+def _platform_goal_contract_mismatch(feasibility: dict[str, Any]) -> bool:
+    return bool(feasibility.get("contract_reachable")) and (
+        str(feasibility.get("classification") or "") in PLATFORM_GOAL_CONTRACT_MISMATCH_CLASSES
+    )
+
+
 def _aggregate_channel_aware_astar_diagnostics(items: list[dict[str, Any]]) -> dict[str, Any]:
     requested_backend_counts: Counter[str] = Counter()
     selected_backend_counts: Counter[str] = Counter()
     status_counts: Counter[str] = Counter()
     fallback_reason_counts: Counter[str] = Counter()
     blocker_class_counts: Counter[str] = Counter()
+    platform_goal_class_counts: Counter[str] = Counter()
     path_cost_stats: list[dict[str, Any]] = []
     channel_cost_stats: list[dict[str, Any]] = []
     high_cost_stats: list[dict[str, Any]] = []
@@ -3192,6 +3279,9 @@ def _aggregate_channel_aware_astar_diagnostics(items: list[dict[str, Any]]) -> d
     selected_count = 0
     fallback_count = 0
     path_changed_count = 0
+    platform_goal_contract_mismatch_count = 0
+    platform_goal_anchor_available_count = 0
+    platform_goal_unresolved_count = 0
 
     for item in items:
         if not isinstance(item, dict):
@@ -3205,6 +3295,16 @@ def _aggregate_channel_aware_astar_diagnostics(items: list[dict[str, Any]]) -> d
         status_counts.update(_counter_dict(item.get("status_counts")))
         fallback_reason_counts.update(_counter_dict(item.get("fallback_reason_counts")))
         blocker_class_counts.update(_counter_dict(item.get("blocker_class_counts")))
+        platform_goal_class_counts.update(
+            _counter_dict(item.get("platform_goal_feasibility_class_counts"))
+        )
+        platform_goal_contract_mismatch_count += _int_value(
+            item.get("platform_goal_contract_mismatch_count")
+        )
+        platform_goal_anchor_available_count += _int_value(
+            item.get("platform_goal_anchor_available_count")
+        )
+        platform_goal_unresolved_count += _int_value(item.get("platform_goal_unresolved_count"))
         if isinstance(item.get("path_cost_delta"), dict):
             path_cost_stats.append(item["path_cost_delta"])
         if isinstance(item.get("channel_cost_delta"), dict):
@@ -3224,6 +3324,10 @@ def _aggregate_channel_aware_astar_diagnostics(items: list[dict[str, Any]]) -> d
         "status_counts": dict(sorted(status_counts.items())),
         "fallback_reason_counts": dict(sorted(fallback_reason_counts.items())),
         "blocker_class_counts": dict(sorted(blocker_class_counts.items())),
+        "platform_goal_feasibility_class_counts": dict(sorted(platform_goal_class_counts.items())),
+        "platform_goal_contract_mismatch_count": platform_goal_contract_mismatch_count,
+        "platform_goal_anchor_available_count": platform_goal_anchor_available_count,
+        "platform_goal_unresolved_count": platform_goal_unresolved_count,
         "path_changed_count": path_changed_count,
         "path_changed_rate": (path_changed_count / report_count if report_count else 0.0),
         "path_cost_delta": _aggregate_metric_stats(path_cost_stats),
@@ -3259,6 +3363,18 @@ def _channel_aware_astar_prefixed_fields(summary: dict[str, Any]) -> dict[str, A
         "channel_aware_astar_status_counts": dict(summary.get("status_counts", {})),
         "channel_aware_astar_fallback_reason_counts": dict(summary.get("fallback_reason_counts", {})),
         "channel_aware_astar_blocker_class_counts": dict(summary.get("blocker_class_counts", {})),
+        "channel_aware_astar_platform_goal_feasibility_class_counts": dict(
+            summary.get("platform_goal_feasibility_class_counts", {})
+        ),
+        "channel_aware_astar_platform_goal_contract_mismatch_count": _int_value(
+            summary.get("platform_goal_contract_mismatch_count")
+        ),
+        "channel_aware_astar_platform_goal_anchor_available_count": _int_value(
+            summary.get("platform_goal_anchor_available_count")
+        ),
+        "channel_aware_astar_platform_goal_unresolved_count": _int_value(
+            summary.get("platform_goal_unresolved_count")
+        ),
         "channel_aware_astar_path_changed_count": _int_value(summary.get("path_changed_count")),
         "channel_aware_astar_path_changed_rate": float(summary.get("path_changed_rate") or 0.0),
         "channel_aware_astar_path_cost_delta_count": _int_value(path_cost.get("count")),
