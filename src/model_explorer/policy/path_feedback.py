@@ -430,6 +430,53 @@ def compact_path_feedback_summary(
             {},
         ),
         "gcs_curvature_constrained_audit": summary.get("gcs_curvature_constrained_audit", []),
+        "channel_aware_astar_report_count": summary.get("channel_aware_astar_report_count"),
+        "channel_aware_astar_selected_count": summary.get("channel_aware_astar_selected_count"),
+        "channel_aware_astar_fallback_count": summary.get("channel_aware_astar_fallback_count"),
+        "channel_aware_astar_requested_backend_counts": summary.get(
+            "channel_aware_astar_requested_backend_counts", {}
+        ),
+        "channel_aware_astar_selected_backend_counts": summary.get(
+            "channel_aware_astar_selected_backend_counts", {}
+        ),
+        "channel_aware_astar_status_counts": summary.get("channel_aware_astar_status_counts", {}),
+        "channel_aware_astar_fallback_reason_counts": summary.get(
+            "channel_aware_astar_fallback_reason_counts", {}
+        ),
+        "channel_aware_astar_blocker_class_counts": summary.get(
+            "channel_aware_astar_blocker_class_counts", {}
+        ),
+        "channel_aware_astar_path_changed_count": summary.get("channel_aware_astar_path_changed_count"),
+        "channel_aware_astar_path_changed_rate": summary.get("channel_aware_astar_path_changed_rate"),
+        "channel_aware_astar_path_cost_delta_count": summary.get("channel_aware_astar_path_cost_delta_count"),
+        "channel_aware_astar_path_cost_delta_min": summary.get("channel_aware_astar_path_cost_delta_min"),
+        "channel_aware_astar_path_cost_delta_max": summary.get("channel_aware_astar_path_cost_delta_max"),
+        "channel_aware_astar_path_cost_delta_mean": summary.get("channel_aware_astar_path_cost_delta_mean"),
+        "channel_aware_astar_channel_cost_delta_count": summary.get(
+            "channel_aware_astar_channel_cost_delta_count"
+        ),
+        "channel_aware_astar_channel_cost_delta_min": summary.get(
+            "channel_aware_astar_channel_cost_delta_min"
+        ),
+        "channel_aware_astar_channel_cost_delta_max": summary.get(
+            "channel_aware_astar_channel_cost_delta_max"
+        ),
+        "channel_aware_astar_channel_cost_delta_mean": summary.get(
+            "channel_aware_astar_channel_cost_delta_mean"
+        ),
+        "channel_aware_astar_high_cost_exposure_delta_count": summary.get(
+            "channel_aware_astar_high_cost_exposure_delta_count"
+        ),
+        "channel_aware_astar_high_cost_exposure_delta_min": summary.get(
+            "channel_aware_astar_high_cost_exposure_delta_min"
+        ),
+        "channel_aware_astar_high_cost_exposure_delta_max": summary.get(
+            "channel_aware_astar_high_cost_exposure_delta_max"
+        ),
+        "channel_aware_astar_high_cost_exposure_delta_mean": summary.get(
+            "channel_aware_astar_high_cost_exposure_delta_mean"
+        ),
+        "channel_aware_astar_candidate_audit": summary.get("channel_aware_astar_candidate_audit", []),
         "sampled_region_path_selected_count": summary.get("sampled_region_path_selected_count"),
         "sampled_region_path_fallback_count": summary.get("sampled_region_path_fallback_count"),
         "sampled_region_path_status_counts": summary.get("sampled_region_path_status_counts", {}),
@@ -1038,6 +1085,10 @@ def _run_feedback_scenario(
             evaluations,
             scenario_id=scenario.scenario_id,
         ),
+        "channel_aware_astar_diagnostics": _channel_aware_astar_diagnostics(
+            evaluations,
+            scenario_id=scenario.scenario_id,
+        ),
         "sampled_region_path_diagnostics": _sampled_region_path_diagnostics(evaluations),
         "sampled_region_path_candidate_audit": _sampled_region_path_candidate_audit(
             evaluations,
@@ -1606,6 +1657,7 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
     sampled_execution_tie_break_reason_counts: Counter[str] = Counter()
     sampled_complexity_reason_counts: Counter[str] = Counter()
     sampled_candidate_audit: list[dict[str, Any]] = []
+    channel_aware_astar_diagnostics: list[dict[str, Any]] = []
     group_summary: dict[str, dict[str, Any]] = defaultdict(_empty_group_summary)
     iris_report_count = 0
     iris_fallback_count = 0
@@ -1723,6 +1775,8 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         gcs_motion = scenario["gcs_motion_feasibility_diagnostics"]
         gcs_curvature = scenario["gcs_curvature_constrained_diagnostics"]
         sampled = scenario["sampled_region_path_diagnostics"]
+        channel_aware = scenario.get("channel_aware_astar_diagnostics")
+        channel_aware = channel_aware if isinstance(channel_aware, dict) else {}
         group_payload["iris_report_count"] += int(iris["report_count"])
         group_payload["iris_fallback_count"] += int(iris["fallback_count"])
         group_payload["region_graph_fallback_count"] += int(graph["fallback_count"])
@@ -1899,6 +1953,18 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         group_payload["sampled_region_path_constrained_connector_failed_count"] += int(
             sampled["constrained_connector_failed_count"]
         )
+        group_payload["channel_aware_astar_report_count"] += _int_value(
+            channel_aware.get("report_count")
+        )
+        group_payload["channel_aware_astar_selected_count"] += _int_value(
+            channel_aware.get("selected_count")
+        )
+        group_payload["channel_aware_astar_fallback_count"] += _int_value(
+            channel_aware.get("fallback_count")
+        )
+        group_payload["channel_aware_astar_path_changed_count"] += _int_value(
+            channel_aware.get("path_changed_count")
+        )
 
         iris_report_count += int(iris["report_count"])
         iris_fallback_count += int(iris["fallback_count"])
@@ -2074,9 +2140,13 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
         sampled_execution_tie_break_status_counts.update(sampled["execution_tie_break_status_counts"])
         sampled_execution_tie_break_reason_counts.update(sampled["execution_tie_break_reason_counts"])
         sampled_complexity_reason_counts.update(sampled["complexity_reason_counts"])
+        channel_aware_astar_diagnostics.append(channel_aware)
 
     control_point_sampled_stats = _aggregate_metric_stats(gcs_control_point_sampled_terrain_cost_stats)
     control_point_exposure_stats = _aggregate_metric_stats(gcs_control_point_high_cost_exposure_delta_stats)
+    channel_aware_astar_summary = _aggregate_channel_aware_astar_diagnostics(
+        channel_aware_astar_diagnostics
+    )
     return {
         "iris_requested_count": iris_report_count,
         "iris_report_count": iris_report_count,
@@ -2192,6 +2262,7 @@ def _diagnostic_aggregate(scenarios: list[dict[str, Any]]) -> dict[str, Any]:
             sorted(gcs_curvature_repair_strategy_counts.items())
         ),
         "gcs_curvature_constrained_audit": gcs_curvature_constrained_audit,
+        **_channel_aware_astar_prefixed_fields(channel_aware_astar_summary),
         "sampled_region_path_selected_count": sampled_selected_count,
         "sampled_region_path_fallback_count": sampled_fallback_count,
         "sampled_region_path_status_counts": dict(sorted(sampled_status_counts.items())),
@@ -2567,6 +2638,10 @@ def _empty_group_summary() -> dict[str, int]:
         "sampled_region_path_fixture_no_benefit_surface_count": 0,
         "sampled_region_path_candidate_missing_metrics_count": 0,
         "sampled_region_path_constrained_connector_failed_count": 0,
+        "channel_aware_astar_report_count": 0,
+        "channel_aware_astar_selected_count": 0,
+        "channel_aware_astar_fallback_count": 0,
+        "channel_aware_astar_path_changed_count": 0,
     }
 
 
@@ -2976,6 +3051,229 @@ def _gcs_curvature_constrained_diagnostics(evaluations) -> dict[str, Any]:
         "status_after_counts": dict(sorted(status_after_counts.items())),
         "fallback_reason_counts": dict(sorted(fallback_reason_counts.items())),
         "repair_strategy_counts": dict(sorted(repair_strategy_counts.items())),
+    }
+
+
+def _channel_aware_astar_diagnostics(evaluations, *, scenario_id: str) -> dict[str, Any]:
+    requested_backend_counts: Counter[str] = Counter()
+    selected_backend_counts: Counter[str] = Counter()
+    status_counts: Counter[str] = Counter()
+    fallback_reason_counts: Counter[str] = Counter()
+    blocker_class_counts: Counter[str] = Counter()
+    path_cost_deltas: list[float] = []
+    channel_cost_deltas: list[float] = []
+    high_cost_exposure_deltas: list[float] = []
+    candidate_audit: list[dict[str, Any]] = []
+    report_count = 0
+    selected_count = 0
+    fallback_count = 0
+    path_changed_count = 0
+
+    for item in evaluations:
+        candidate = item.to_dict()
+        planning_backend = candidate.get("planning_backend")
+        if not isinstance(planning_backend, dict):
+            continue
+        requested_backend = planning_backend.get("requested_backend")
+        selected_backend = planning_backend.get("selected_backend")
+        if requested_backend != "channel_aware_astar" and selected_backend != "channel_aware_astar":
+            continue
+
+        report_count += 1
+        requested_key = str(requested_backend or "unknown")
+        selected_key = str(selected_backend or "unknown")
+        status = str(planning_backend.get("status") or "unknown")
+        fallback_reason = planning_backend.get("fallback_reason")
+        fallback_reason_text = str(fallback_reason) if fallback_reason else None
+        requested_backend_counts[requested_key] += 1
+        selected_backend_counts[selected_key] += 1
+        status_counts[status] += 1
+
+        selected = status == "selected" or selected_backend == "channel_aware_astar"
+        fallback = status == "fallback" or bool(fallback_reason_text) or not selected
+        if selected:
+            selected_count += 1
+        if fallback:
+            fallback_count += 1
+        if fallback_reason_text:
+            fallback_reason_counts[fallback_reason_text] += 1
+
+        blocker_class = _channel_aware_astar_blocker_class(
+            status=status,
+            selected_backend=selected_key,
+            fallback_reason=fallback_reason_text,
+        )
+        blocker_class_counts[blocker_class] += 1
+
+        comparison = planning_backend.get("comparison")
+        comparison = comparison if isinstance(comparison, dict) else {}
+        if comparison.get("path_changed") is True:
+            path_changed_count += 1
+        path_cost_delta = _float_value(comparison.get("path_cost_delta"))
+        channel_cost_delta = _float_value(comparison.get("channel_cost_delta"))
+        high_cost_delta = _float_value(comparison.get("high_cost_exposure_delta"))
+        if path_cost_delta is not None:
+            path_cost_deltas.append(path_cost_delta)
+        if channel_cost_delta is not None:
+            channel_cost_deltas.append(channel_cost_delta)
+        if high_cost_delta is not None:
+            high_cost_exposure_deltas.append(high_cost_delta)
+
+        candidate_audit.append(
+            {
+                "scenario_id": scenario_id,
+                "action_index": candidate.get("action_index"),
+                "cell": candidate.get("cell"),
+                "requested_backend": requested_key,
+                "selected_backend": selected_key,
+                "status": status,
+                "fallback_reason": fallback_reason_text,
+                "blocker_class": blocker_class,
+                "comparison": {
+                    "path_changed": comparison.get("path_changed"),
+                    "path_cost_delta": path_cost_delta,
+                    "channel_cost_delta": channel_cost_delta,
+                    "high_cost_exposure_delta": high_cost_delta,
+                },
+            }
+        )
+
+    return {
+        "report_count": report_count,
+        "selected_count": selected_count,
+        "fallback_count": fallback_count,
+        "requested_backend_counts": dict(sorted(requested_backend_counts.items())),
+        "selected_backend_counts": dict(sorted(selected_backend_counts.items())),
+        "status_counts": dict(sorted(status_counts.items())),
+        "fallback_reason_counts": dict(sorted(fallback_reason_counts.items())),
+        "blocker_class_counts": dict(sorted(blocker_class_counts.items())),
+        "path_changed_count": path_changed_count,
+        "path_changed_rate": (path_changed_count / report_count if report_count else 0.0),
+        "path_cost_delta": _numeric_metric_stats(path_cost_deltas),
+        "channel_cost_delta": _numeric_metric_stats(channel_cost_deltas),
+        "high_cost_exposure_delta": _numeric_metric_stats(high_cost_exposure_deltas),
+        "candidate_audit": candidate_audit,
+    }
+
+
+def _channel_aware_astar_blocker_class(
+    *,
+    status: str,
+    selected_backend: str,
+    fallback_reason: str | None,
+) -> str:
+    if status == "selected" or selected_backend == "channel_aware_astar":
+        return "selected"
+    reason = fallback_reason or ""
+    if "goal_blocked" in reason:
+        return "goal_blocked"
+    if "same_as_baseline" in reason:
+        return "same_as_baseline"
+    if "not_lower_risk" in reason:
+        return "not_lower_risk"
+    if reason.startswith("channel_search_failed"):
+        return "search_failed"
+    if reason:
+        return reason
+    return "fallback_unspecified"
+
+
+def _aggregate_channel_aware_astar_diagnostics(items: list[dict[str, Any]]) -> dict[str, Any]:
+    requested_backend_counts: Counter[str] = Counter()
+    selected_backend_counts: Counter[str] = Counter()
+    status_counts: Counter[str] = Counter()
+    fallback_reason_counts: Counter[str] = Counter()
+    blocker_class_counts: Counter[str] = Counter()
+    path_cost_stats: list[dict[str, Any]] = []
+    channel_cost_stats: list[dict[str, Any]] = []
+    high_cost_stats: list[dict[str, Any]] = []
+    candidate_audit: list[dict[str, Any]] = []
+    report_count = 0
+    selected_count = 0
+    fallback_count = 0
+    path_changed_count = 0
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        report_count += _int_value(item.get("report_count"))
+        selected_count += _int_value(item.get("selected_count"))
+        fallback_count += _int_value(item.get("fallback_count"))
+        path_changed_count += _int_value(item.get("path_changed_count"))
+        requested_backend_counts.update(_counter_dict(item.get("requested_backend_counts")))
+        selected_backend_counts.update(_counter_dict(item.get("selected_backend_counts")))
+        status_counts.update(_counter_dict(item.get("status_counts")))
+        fallback_reason_counts.update(_counter_dict(item.get("fallback_reason_counts")))
+        blocker_class_counts.update(_counter_dict(item.get("blocker_class_counts")))
+        if isinstance(item.get("path_cost_delta"), dict):
+            path_cost_stats.append(item["path_cost_delta"])
+        if isinstance(item.get("channel_cost_delta"), dict):
+            channel_cost_stats.append(item["channel_cost_delta"])
+        if isinstance(item.get("high_cost_exposure_delta"), dict):
+            high_cost_stats.append(item["high_cost_exposure_delta"])
+        audit = item.get("candidate_audit")
+        if isinstance(audit, list):
+            candidate_audit.extend(entry for entry in audit if isinstance(entry, dict))
+
+    return {
+        "report_count": report_count,
+        "selected_count": selected_count,
+        "fallback_count": fallback_count,
+        "requested_backend_counts": dict(sorted(requested_backend_counts.items())),
+        "selected_backend_counts": dict(sorted(selected_backend_counts.items())),
+        "status_counts": dict(sorted(status_counts.items())),
+        "fallback_reason_counts": dict(sorted(fallback_reason_counts.items())),
+        "blocker_class_counts": dict(sorted(blocker_class_counts.items())),
+        "path_changed_count": path_changed_count,
+        "path_changed_rate": (path_changed_count / report_count if report_count else 0.0),
+        "path_cost_delta": _aggregate_metric_stats(path_cost_stats),
+        "channel_cost_delta": _aggregate_metric_stats(channel_cost_stats),
+        "high_cost_exposure_delta": _aggregate_metric_stats(high_cost_stats),
+        "candidate_audit": candidate_audit,
+    }
+
+
+def _counter_dict(value: Any) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    if not isinstance(value, dict):
+        return counts
+    for key, count in value.items():
+        counts[str(key)] += _int_value(count)
+    return counts
+
+
+def _channel_aware_astar_prefixed_fields(summary: dict[str, Any]) -> dict[str, Any]:
+    path_cost = summary.get("path_cost_delta") if isinstance(summary.get("path_cost_delta"), dict) else {}
+    channel_cost = summary.get("channel_cost_delta") if isinstance(summary.get("channel_cost_delta"), dict) else {}
+    high_cost = (
+        summary.get("high_cost_exposure_delta")
+        if isinstance(summary.get("high_cost_exposure_delta"), dict)
+        else {}
+    )
+    return {
+        "channel_aware_astar_report_count": _int_value(summary.get("report_count")),
+        "channel_aware_astar_selected_count": _int_value(summary.get("selected_count")),
+        "channel_aware_astar_fallback_count": _int_value(summary.get("fallback_count")),
+        "channel_aware_astar_requested_backend_counts": dict(summary.get("requested_backend_counts", {})),
+        "channel_aware_astar_selected_backend_counts": dict(summary.get("selected_backend_counts", {})),
+        "channel_aware_astar_status_counts": dict(summary.get("status_counts", {})),
+        "channel_aware_astar_fallback_reason_counts": dict(summary.get("fallback_reason_counts", {})),
+        "channel_aware_astar_blocker_class_counts": dict(summary.get("blocker_class_counts", {})),
+        "channel_aware_astar_path_changed_count": _int_value(summary.get("path_changed_count")),
+        "channel_aware_astar_path_changed_rate": float(summary.get("path_changed_rate") or 0.0),
+        "channel_aware_astar_path_cost_delta_count": _int_value(path_cost.get("count")),
+        "channel_aware_astar_path_cost_delta_min": path_cost.get("min"),
+        "channel_aware_astar_path_cost_delta_max": path_cost.get("max"),
+        "channel_aware_astar_path_cost_delta_mean": path_cost.get("mean"),
+        "channel_aware_astar_channel_cost_delta_count": _int_value(channel_cost.get("count")),
+        "channel_aware_astar_channel_cost_delta_min": channel_cost.get("min"),
+        "channel_aware_astar_channel_cost_delta_max": channel_cost.get("max"),
+        "channel_aware_astar_channel_cost_delta_mean": channel_cost.get("mean"),
+        "channel_aware_astar_high_cost_exposure_delta_count": _int_value(high_cost.get("count")),
+        "channel_aware_astar_high_cost_exposure_delta_min": high_cost.get("min"),
+        "channel_aware_astar_high_cost_exposure_delta_max": high_cost.get("max"),
+        "channel_aware_astar_high_cost_exposure_delta_mean": high_cost.get("mean"),
+        "channel_aware_astar_candidate_audit": list(summary.get("candidate_audit", [])),
     }
 
 

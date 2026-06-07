@@ -1410,6 +1410,86 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(planner.action_indices, [1])
         self.assertNotIn(0, selection.scores_by_action_index)
 
+    def test_feedback_aware_selection_audits_channel_aware_quality_signal_and_blockers(self):
+        from model_explorer.policy.feedback_selection import select_goal_with_path_feedback
+        from model_explorer.policy.planning import PathPlanResult
+
+        class ChannelAwarePlanner:
+            def plan(self, request):
+                reports = {
+                    0: {
+                        "requested_backend": "channel_aware_astar",
+                        "selected_backend": "channel_aware_astar",
+                        "status": "selected",
+                        "fallback_reason": None,
+                        "comparison": {
+                            "path_changed": True,
+                            "path_cost_delta": 2.0,
+                            "channel_cost_delta": -4.0,
+                            "high_cost_exposure_delta": -3.0,
+                        },
+                    },
+                    1: {
+                        "requested_backend": "channel_aware_astar",
+                        "selected_backend": "astar",
+                        "status": "fallback",
+                        "fallback_reason": "channel_search_failed:goal_blocked",
+                        "comparison": {},
+                    },
+                    2: {
+                        "requested_backend": "channel_aware_astar",
+                        "selected_backend": "astar",
+                        "status": "fallback",
+                        "fallback_reason": "channel_candidate_same_as_baseline",
+                        "comparison": {},
+                    },
+                    3: {
+                        "requested_backend": "channel_aware_astar",
+                        "selected_backend": "astar",
+                        "status": "fallback",
+                        "fallback_reason": "channel_candidate_not_lower_risk",
+                        "comparison": {},
+                    },
+                }
+                return PathPlanResult(
+                    feasible=True,
+                    path_cost=5.0 + request.action_index,
+                    path_length=5.0 + request.action_index,
+                    risk=0.1,
+                    metadata={"planning_backend_report": reports[request.action_index]},
+                )
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [1, 1], "utility": 0.9, "reachable": True, "expected_coverage_rate_delta": 0.9},
+                    {"cell": [2, 1], "utility": 0.8, "reachable": True, "expected_coverage_rate_delta": 0.8},
+                    {"cell": [3, 1], "utility": 0.7, "reachable": True, "expected_coverage_rate_delta": 0.7},
+                    {"cell": [4, 1], "utility": 0.6, "reachable": True, "expected_coverage_rate_delta": 0.6},
+                ]
+            )
+        )
+
+        selection = select_goal_with_path_feedback(
+            contract,
+            planner=ChannelAwarePlanner(),
+            current_cell=(0, 0),
+            top_k=4,
+        )
+
+        improved = selection.channel_aware_evidence_by_action_index[0]
+        self.assertTrue(improved["quality_improvement"])
+        self.assertTrue(improved["path_cost_tradeoff"])
+        self.assertEqual(improved["recommendation"], "keep")
+        self.assertIn("channel_aware_quality_improved", improved["reason_codes"])
+        self.assertIn("path_cost_tradeoff", improved["reason_codes"])
+        self.assertNotIn("path_cost_regression_failure", improved["reason_codes"])
+        self.assertGreater(selection.channel_aware_score_adjustments_by_action_index[0], 0.0)
+
+        self.assertIn("goal_blocked", selection.channel_aware_evidence_by_action_index[1]["reason_codes"])
+        self.assertIn("same_as_baseline", selection.channel_aware_evidence_by_action_index[2]["reason_codes"])
+        self.assertIn("not_lower_risk", selection.channel_aware_evidence_by_action_index[3]["reason_codes"])
+
     def test_path_feedback_summary_contract_lists_required_acceptance_metrics(self):
         from model_explorer.policy.path_feedback import (
             PATH_FEEDBACK_SUMMARY_ACCEPTANCE_METRICS,
@@ -2185,6 +2265,39 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(summary["sampled_region_path_fallback_count"], 1)
         self.assertEqual(summary["sampled_region_path_source_counts"]["iris"], 1)
         self.assertEqual(summary["sampled_region_path_fallback_reasons"]["target_component_disconnected"], 1)
+        self.assertEqual(summary["channel_aware_astar_report_count"], 2)
+        self.assertEqual(summary["channel_aware_astar_selected_count"], 1)
+        self.assertEqual(summary["channel_aware_astar_fallback_count"], 1)
+        self.assertEqual(summary["channel_aware_astar_requested_backend_counts"]["channel_aware_astar"], 2)
+        self.assertEqual(summary["channel_aware_astar_selected_backend_counts"]["channel_aware_astar"], 1)
+        self.assertEqual(summary["channel_aware_astar_selected_backend_counts"]["astar"], 1)
+        self.assertEqual(summary["channel_aware_astar_status_counts"]["selected"], 1)
+        self.assertEqual(summary["channel_aware_astar_status_counts"]["fallback"], 1)
+        self.assertEqual(
+            summary["channel_aware_astar_fallback_reason_counts"]["channel_candidate_same_as_baseline"],
+            1,
+        )
+        self.assertEqual(summary["channel_aware_astar_blocker_class_counts"]["selected"], 1)
+        self.assertEqual(summary["channel_aware_astar_blocker_class_counts"]["same_as_baseline"], 1)
+        self.assertEqual(summary["channel_aware_astar_path_changed_count"], 1)
+        self.assertEqual(summary["channel_aware_astar_path_changed_rate"], 0.5)
+        self.assertEqual(summary["channel_aware_astar_path_cost_delta_count"], 2)
+        self.assertEqual(summary["channel_aware_astar_path_cost_delta_min"], 0.0)
+        self.assertEqual(summary["channel_aware_astar_path_cost_delta_max"], 2.0)
+        self.assertEqual(summary["channel_aware_astar_path_cost_delta_mean"], 1.0)
+        self.assertEqual(summary["channel_aware_astar_channel_cost_delta_count"], 2)
+        self.assertEqual(summary["channel_aware_astar_channel_cost_delta_min"], -4.0)
+        self.assertEqual(summary["channel_aware_astar_channel_cost_delta_max"], 0.0)
+        self.assertEqual(summary["channel_aware_astar_channel_cost_delta_mean"], -2.0)
+        self.assertEqual(summary["channel_aware_astar_high_cost_exposure_delta_count"], 2)
+        self.assertEqual(summary["channel_aware_astar_high_cost_exposure_delta_min"], -3.0)
+        self.assertEqual(summary["channel_aware_astar_high_cost_exposure_delta_max"], 0.0)
+        self.assertEqual(summary["channel_aware_astar_high_cost_exposure_delta_mean"], -1.5)
+        self.assertEqual(len(summary["channel_aware_astar_candidate_audit"]), 2)
+        channel_group = summary["scenario_group_summary"]["smoke"]
+        self.assertEqual(channel_group["channel_aware_astar_report_count"], 2)
+        self.assertEqual(channel_group["channel_aware_astar_selected_count"], 1)
+        self.assertEqual(channel_group["channel_aware_astar_fallback_count"], 1)
         self.assertEqual(summary["sampled_region_path_sample_attempt_count"], 10)
         self.assertEqual(summary["sampled_region_path_candidate_ranking_count"], 3)
         self.assertEqual(summary["sampled_region_path_anchor_region_added_count"], 1)
@@ -4154,6 +4267,32 @@ def _route_fixture(scenario_index, *, action_index):
         "postprocess": {"fallback_status": "ok", "tracking_safety_report": {"violation_count": 0}},
     }
     route.update(_convex_region_route_fields("fallback_box", fallback_used=True))
+    if scenario_index == 0 and action_index == 1:
+        route["planning_backend_report"] = {
+            "requested_backend": "channel_aware_astar",
+            "selected_backend": "astar",
+            "status": "fallback",
+            "fallback_reason": "channel_candidate_same_as_baseline",
+            "comparison": {
+                "path_changed": False,
+                "path_cost_delta": 0.0,
+                "channel_cost_delta": 0.0,
+                "high_cost_exposure_delta": 0.0,
+            },
+        }
+    if scenario_index == 1 and action_index == 0:
+        route["planning_backend_report"] = {
+            "requested_backend": "channel_aware_astar",
+            "selected_backend": "channel_aware_astar",
+            "status": "selected",
+            "fallback_reason": None,
+            "comparison": {
+                "path_changed": True,
+                "path_cost_delta": 2.0,
+                "channel_cost_delta": -4.0,
+                "high_cost_exposure_delta": -3.0,
+            },
+        }
     control_point_route = scenario_index == 0 and action_index == 1
     route.update(
         _gcs_trajectory_route_fields(
