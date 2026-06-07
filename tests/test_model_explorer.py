@@ -1951,6 +1951,13 @@ class PathPlanningAdapterTests(unittest.TestCase):
                             "status": "fallback",
                             "fallback_reason": "channel_search_failed:goal_blocked",
                             "comparison": {},
+                            "execution_alignment": {
+                                "schema_version": "channel-aware-route-execution-alignment/v1",
+                                "postprocess_seed": "baseline_result",
+                                "selected_seed_postprocess_rebuilt": False,
+                                "default_route_replacement_verified": False,
+                                "verification_scope": "opt_in_audit_only",
+                            },
                         },
                     },
                 )
@@ -1966,6 +1973,8 @@ class PathPlanningAdapterTests(unittest.TestCase):
 
         feasibility = candidate["platform_goal_feasibility"]
         self.assertTrue(feasibility["contract_reachable"])
+        self.assertEqual(feasibility["policy_target_cell"], [2, 1])
+        self.assertIsNone(feasibility["execution_goal_cell"])
         self.assertTrue(feasibility["original_passable"])
         self.assertFalse(feasibility["inflated_passable"])
         self.assertTrue(feasibility["blocked_by_platform_footprint"])
@@ -1973,12 +1982,26 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(feasibility["nearest_inflated_passable_anchor"], [1, 1])
         self.assertEqual(feasibility["anchor_distance_cells"], 1)
         self.assertEqual(feasibility["anchor_distance_m"], 1.0)
+        self.assertEqual(feasibility["anchor_projection"]["scope"], "audit_proxy_anchor_not_same_cell")
+        self.assertEqual(feasibility["anchor_projection"]["training_use"], "not_positive_evidence")
+        self.assertFalse(feasibility["anchor_projection"]["same_cell_positive_evidence"])
+        self.assertTrue(feasibility["anchor_projection"]["anchor_reachable"])
         self.assertEqual(feasibility["proxy_route_comparison"]["scope"], "audit_proxy_anchor_not_same_cell")
         self.assertTrue(feasibility["proxy_route_comparison"]["anchor_route_feasible"])
         self.assertFalse(feasibility["proxy_route_comparison"]["same_cell_positive_evidence"])
         self.assertEqual(summary["platform_goal_feasibility_class_counts"]["platform_inflated_goal_blocked"], 1)
         self.assertEqual(summary["platform_goal_contract_mismatch_count"], 1)
         self.assertEqual(summary["platform_goal_anchor_available_count"], 1)
+        self.assertEqual(
+            candidate["planning_backend"]["execution_alignment"][
+                "default_route_replacement_verified"
+            ],
+            False,
+        )
+        self.assertEqual(
+            candidate["planning_backend"]["execution_alignment"]["verification_scope"],
+            "opt_in_audit_only",
+        )
 
         diagnostics = _channel_aware_astar_diagnostics(evaluations, scenario_id="unit")
         audit = diagnostics["candidate_audit"][0]

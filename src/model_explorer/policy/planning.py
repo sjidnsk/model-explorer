@@ -679,6 +679,11 @@ def _planning_backend_summary(value: Any) -> dict[str, Any] | None:
         "fallback_reason": value.get("fallback_reason"),
         "segment_count": value.get("segment_count"),
         "comparison": value.get("comparison") if isinstance(value.get("comparison"), dict) else {},
+        "execution_alignment": (
+            value.get("execution_alignment")
+            if isinstance(value.get("execution_alignment"), dict)
+            else {}
+        ),
         "region_graph_candidate": (
             value.get("region_graph_candidate") if isinstance(value.get("region_graph_candidate"), dict) else {}
         ),
@@ -1080,9 +1085,15 @@ def _platform_goal_feasibility_payload(
     anchor_distance_m: float | None,
     proxy_route_comparison: dict[str, Any],
 ) -> dict[str, Any]:
+    anchor_payload = None if nearest_anchor is None else [nearest_anchor[0], nearest_anchor[1]]
+    same_cell_positive_evidence = bool(proxy_route_comparison.get("same_cell_positive_evidence"))
+    anchor_reachable = bool(proxy_route_comparison.get("anchor_route_feasible"))
+    comparison_scope = str(proxy_route_comparison.get("scope") or "unavailable")
     return {
         "schema_version": "platform-goal-feasibility/v1",
         "cell": [cell[0], cell[1]],
+        "policy_target_cell": [cell[0], cell[1]],
+        "execution_goal_cell": [cell[0], cell[1]] if inflated_passable is True else None,
         "contract_reachable": bool(contract_reachable),
         "original_passable": original_passable,
         "inflated_passable": inflated_passable,
@@ -1090,11 +1101,20 @@ def _platform_goal_feasibility_payload(
             original_passable is True and inflated_passable is False
         ),
         "footprint_radius_m": footprint_radius_m,
-        "nearest_inflated_passable_anchor": (
-            None if nearest_anchor is None else [nearest_anchor[0], nearest_anchor[1]]
-        ),
+        "nearest_inflated_passable_anchor": anchor_payload,
         "anchor_distance_cells": anchor_distance_cells,
         "anchor_distance_m": anchor_distance_m,
+        "anchor_projection": {
+            "nearest_inflated_passable_anchor": anchor_payload,
+            "projection_distance_cells": anchor_distance_cells,
+            "projection_distance_m": anchor_distance_m,
+            "anchor_reachable": anchor_reachable,
+            "comparison_scope": comparison_scope,
+            "scope": comparison_scope,
+            "same_cell_positive_evidence": same_cell_positive_evidence,
+            "training_use": "not_positive_evidence",
+            "evidence_boundary": "audit_projection_not_same_cell_positive_evidence",
+        },
         "classification": classification,
         "proxy_route_comparison": proxy_route_comparison,
     }
