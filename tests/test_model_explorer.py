@@ -1663,6 +1663,97 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(projection["training_use"], "not_positive_evidence")
         self.assertEqual(projection["reject_reason"], "anchor_not_reachable")
 
+    def test_anchor_projection_candidate_generation_uses_reachable_substitute_anchor(self):
+        from model_explorer.policy.planning import (
+            AnchorProjectionCandidateConfig,
+            PathPlanResult,
+            evaluate_candidate_paths,
+            path_feedback_summary,
+        )
+
+        request_payload = {
+            "schema_version": "path-planner-request/v1",
+            "grid": {
+                "width": 6,
+                "height": 5,
+                "resolution": 1.0,
+                "origin": [0.0, 0.0],
+                "frame_id": "moon_local",
+            },
+            "cost": [[1.0, 1.0, 1.0, 1.0, 1.0, 1.0] for _ in range(5)],
+            "passable_mask": [
+                [True, True, False, True, True, True],
+                [True, True, False, False, True, True],
+                [True, True, False, True, True, True],
+                [True, True, False, True, True, True],
+                [True, True, False, True, True, True],
+            ],
+            "start": [0, 0],
+            "goal": [3, 2],
+            "metadata": {"passable_mask_source": "configured"},
+        }
+
+        class ReachableSubstitutePlanner:
+            def __init__(self):
+                self.requested_cells = []
+
+            def plan(self, request):
+                self.requested_cells.append(request.selected_goal.cell)
+                payload = json.loads(json.dumps(request_payload))
+                payload["goal"] = [request.selected_goal.cell[0], request.selected_goal.cell[1]]
+                metadata = {
+                    "request_payload": payload,
+                    "diagnostics": {
+                        "search_mode": "platform_aware_astar",
+                        "passable_source": "inflated_passable_mask",
+                        "footprint_radius_m": 1.0,
+                    },
+                }
+                if request.selected_goal.cell == (3, 2):
+                    return PathPlanResult(
+                        feasible=False,
+                        failure_reason="goal_blocked",
+                        replan_required=True,
+                        metadata=metadata,
+                    )
+                return PathPlanResult(
+                    feasible=True,
+                    path_cost=2.0,
+                    path_length=2.0,
+                    risk=0.1,
+                    metadata=metadata,
+                )
+
+        contract = load_contract_from_dict(
+            minimal_contract(goals=[{"cell": [3, 2], "utility": 0.9, "reachable": True}])
+        )
+        planner = ReachableSubstitutePlanner()
+
+        evaluations = evaluate_candidate_paths(
+            contract,
+            current_cell=(0, 0),
+            top_k=1,
+            planner=planner,
+            anchor_projection_candidate_config=AnchorProjectionCandidateConfig(enabled=True),
+        )
+        summary = path_feedback_summary(evaluations)
+        projected = summary["candidates"][1]
+        projection = projected["platform_goal_feasibility"]["anchor_projection"]
+
+        self.assertEqual(planner.requested_cells, [(3, 2), (0, 2)])
+        self.assertEqual([item.cell for item in evaluations], [(3, 2), (0, 2)])
+        self.assertEqual(projected["execution_goal_cell"], [0, 2])
+        self.assertEqual(projected["candidate_generation"]["projected_anchor_cell"], [0, 2])
+        self.assertTrue(projected["candidate_generation"]["anchor_reachable"])
+        self.assertEqual(projection["nearest_inflated_passable_anchor"], [4, 2])
+        self.assertEqual(projection["projected_anchor_cell"], [0, 2])
+        self.assertEqual(projection["anchor_selection_status"], "reachable_substitute_anchor_found")
+        self.assertNotEqual(
+            projection["start_component_id"],
+            projection["nearest_anchor_component_id"],
+        )
+        self.assertEqual(projection["start_component_id"], projection["projected_anchor_component_id"])
+
     def test_anchor_projection_candidate_generation_respects_projection_distance_threshold(self):
         from model_explorer.policy.planning import (
             AnchorProjectionCandidateConfig,

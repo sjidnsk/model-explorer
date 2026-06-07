@@ -636,6 +636,24 @@ def _projected_anchor_candidate_evaluation(
         "projection_distance_cells": distance_cells,
         "projection_distance_m": distance_m,
         "anchor_reachable": anchor_reachable,
+        "nearest_inflated_passable_anchor": projection.get("nearest_inflated_passable_anchor"),
+        "nearest_anchor_reachable": projection.get("nearest_anchor_reachable"),
+        "nearest_anchor_distance_cells": projection.get("nearest_anchor_distance_cells"),
+        "nearest_anchor_distance_m": projection.get("nearest_anchor_distance_m"),
+        "anchor_selection_status": projection.get("anchor_selection_status"),
+        "start_component_id": projection.get("start_component_id"),
+        "target_component_id": projection.get("target_component_id"),
+        "nearest_anchor_component_id": projection.get("nearest_anchor_component_id"),
+        "projected_anchor_component_id": projection.get("projected_anchor_component_id"),
+        "start_component_size": projection.get("start_component_size"),
+        "target_component_size": projection.get("target_component_size"),
+        "nearest_anchor_component_size": projection.get("nearest_anchor_component_size"),
+        "projected_anchor_component_size": projection.get("projected_anchor_component_size"),
+        "reachable_substitute_anchor_available": projection.get(
+            "reachable_substitute_anchor_available",
+            False,
+        ),
+        "reachable_substitute_anchor_count": projection.get("reachable_substitute_anchor_count", 0),
         "comparison_scope": "projected_target_anchor_contrast",
         "scope": "projected_target_anchor_contrast",
         "training_use": "not_positive_evidence",
@@ -1219,21 +1237,33 @@ def _platform_goal_feasibility(*, cell: tuple[int, int], result: PathPlanResult)
         original_passable=original_passable,
         inflated_passable=inflated_passable,
     )
-    nearest_anchor = (
-        _nearest_inflated_passable_anchor(inflated_mask, cell)
+    anchor_projection_analysis = (
+        _anchor_projection_analysis(
+            request_payload=request_payload,
+            inflated_mask=inflated_mask,
+            target_cell=cell,
+            resolution=resolution,
+        )
         if classification == "platform_inflated_goal_blocked"
-        else None
+        else {}
     )
-    anchor_distance_cells = None
-    anchor_distance_m = None
-    if nearest_anchor is not None:
-        anchor_distance_cells = _manhattan_distance(cell, nearest_anchor)
-        anchor_distance_m = float(hypot(nearest_anchor[0] - cell[0], nearest_anchor[1] - cell[1]) * resolution)
-    proxy_route_comparison = _proxy_anchor_route_comparison(
-        request_payload=request_payload,
-        inflated_mask=inflated_mask,
-        anchor=nearest_anchor,
-        resolution=resolution,
+    nearest_anchor = _cell_pair(anchor_projection_analysis.get("nearest_inflated_passable_anchor"))
+    anchor_distance_cells = _optional_nonnegative_int(
+        anchor_projection_analysis.get("nearest_anchor_distance_cells")
+    )
+    anchor_distance_m = _optional_nonnegative_float(
+        anchor_projection_analysis.get("nearest_anchor_distance_m")
+    )
+    proxy_route_comparison = anchor_projection_analysis.get("proxy_route_comparison")
+    proxy_route_comparison = (
+        proxy_route_comparison
+        if isinstance(proxy_route_comparison, dict)
+        else _proxy_anchor_route_comparison(
+            request_payload=request_payload,
+            inflated_mask=inflated_mask,
+            anchor=nearest_anchor,
+            resolution=resolution,
+        )
     )
     return _platform_goal_feasibility_payload(
         classification=classification,
@@ -1246,6 +1276,7 @@ def _platform_goal_feasibility(*, cell: tuple[int, int], result: PathPlanResult)
         anchor_distance_cells=anchor_distance_cells,
         anchor_distance_m=anchor_distance_m,
         proxy_route_comparison=proxy_route_comparison,
+        anchor_projection_analysis=anchor_projection_analysis,
     )
 
 
@@ -1261,8 +1292,26 @@ def _platform_goal_feasibility_payload(
     anchor_distance_cells: int | None,
     anchor_distance_m: float | None,
     proxy_route_comparison: dict[str, Any],
+    anchor_projection_analysis: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    anchor_projection_analysis = (
+        anchor_projection_analysis if isinstance(anchor_projection_analysis, dict) else {}
+    )
     anchor_payload = None if nearest_anchor is None else [nearest_anchor[0], nearest_anchor[1]]
+    projected_anchor = _cell_pair(anchor_projection_analysis.get("projected_anchor_cell")) or nearest_anchor
+    projected_anchor_payload = (
+        None if projected_anchor is None else [projected_anchor[0], projected_anchor[1]]
+    )
+    projection_distance_cells = _optional_nonnegative_int(
+        anchor_projection_analysis.get("projection_distance_cells")
+    )
+    if projection_distance_cells is None:
+        projection_distance_cells = anchor_distance_cells
+    projection_distance_m = _optional_nonnegative_float(
+        anchor_projection_analysis.get("projection_distance_m")
+    )
+    if projection_distance_m is None:
+        projection_distance_m = anchor_distance_m
     same_cell_positive_evidence = bool(proxy_route_comparison.get("same_cell_positive_evidence"))
     anchor_reachable = bool(proxy_route_comparison.get("anchor_route_feasible"))
     comparison_scope = str(proxy_route_comparison.get("scope") or "unavailable")
@@ -1288,10 +1337,38 @@ def _platform_goal_feasibility_payload(
         "anchor_distance_m": anchor_distance_m,
         "anchor_projection": {
             "nearest_inflated_passable_anchor": anchor_payload,
-            "projected_anchor_cell": anchor_payload,
-            "projection_distance_cells": anchor_distance_cells,
-            "projection_distance_m": anchor_distance_m,
+            "projected_anchor_cell": projected_anchor_payload,
+            "projection_distance_cells": projection_distance_cells,
+            "projection_distance_m": projection_distance_m,
+            "nearest_anchor_distance_cells": anchor_distance_cells,
+            "nearest_anchor_distance_m": anchor_distance_m,
             "anchor_reachable": anchor_reachable,
+            "nearest_anchor_reachable": bool(
+                anchor_projection_analysis.get("nearest_anchor_reachable", anchor_reachable)
+            ),
+            "anchor_selection_status": anchor_projection_analysis.get("anchor_selection_status"),
+            "start_component_id": anchor_projection_analysis.get("start_component_id"),
+            "target_component_id": anchor_projection_analysis.get("target_component_id"),
+            "nearest_anchor_component_id": anchor_projection_analysis.get(
+                "nearest_anchor_component_id"
+            ),
+            "projected_anchor_component_id": anchor_projection_analysis.get(
+                "projected_anchor_component_id"
+            ),
+            "start_component_size": anchor_projection_analysis.get("start_component_size"),
+            "target_component_size": anchor_projection_analysis.get("target_component_size"),
+            "nearest_anchor_component_size": anchor_projection_analysis.get(
+                "nearest_anchor_component_size"
+            ),
+            "projected_anchor_component_size": anchor_projection_analysis.get(
+                "projected_anchor_component_size"
+            ),
+            "reachable_substitute_anchor_available": bool(
+                anchor_projection_analysis.get("reachable_substitute_anchor_available", False)
+            ),
+            "reachable_substitute_anchor_count": int(
+                anchor_projection_analysis.get("reachable_substitute_anchor_count", 0) or 0
+            ),
             "comparison_scope": comparison_scope,
             "scope": comparison_scope,
             "same_cell_positive_evidence": same_cell_positive_evidence,
@@ -1323,7 +1400,6 @@ def _with_projected_anchor_feasibility(
     projection = dict(payload.get("anchor_projection") if isinstance(payload.get("anchor_projection"), dict) else {})
     if projected_anchor_cell is not None:
         projection["projected_anchor_cell"] = [projected_anchor_cell[0], projected_anchor_cell[1]]
-        projection["nearest_inflated_passable_anchor"] = [projected_anchor_cell[0], projected_anchor_cell[1]]
     projection.update(
         {
             "projection_distance_cells": candidate_generation.get("projection_distance_cells"),
@@ -1345,6 +1421,204 @@ def _with_projected_anchor_feasibility(
     )
     payload["anchor_projection"] = projection
     return payload
+
+
+def _anchor_projection_analysis(
+    *,
+    request_payload: dict[str, Any],
+    inflated_mask: tuple[tuple[bool, ...], ...],
+    target_cell: tuple[int, int],
+    resolution: float,
+) -> dict[str, Any]:
+    nearest_anchor = _nearest_inflated_passable_anchor(inflated_mask, target_cell)
+    nearest_route = _proxy_anchor_route_comparison(
+        request_payload=request_payload,
+        inflated_mask=inflated_mask,
+        anchor=nearest_anchor,
+        resolution=resolution,
+    )
+    labels, component_sizes = _connected_component_labels(inflated_mask)
+    start = _cell_pair(request_payload.get("start"))
+    start_component_id = _component_id_at(labels, start)
+    target_component_id = _component_id_at(labels, target_cell)
+    nearest_component_id = _component_id_at(labels, nearest_anchor)
+    projected_anchor = nearest_anchor
+    projected_component_id = nearest_component_id
+    proxy_route_comparison = nearest_route
+    nearest_reachable = bool(nearest_route.get("anchor_route_feasible"))
+    reachable_substitute_count = 0
+    reachable_substitute_available = False
+    anchor_selection_status = "nearest_anchor_reachable" if nearest_reachable else "anchor_not_reachable"
+
+    if nearest_anchor is None:
+        anchor_selection_status = "no_inflated_passable_anchor"
+    elif not nearest_reachable:
+        substitute, reachable_substitute_count = _best_reachable_anchor_in_component(
+            inflated_mask,
+            target_cell=target_cell,
+            start=start,
+            start_component_id=start_component_id,
+            component_labels=labels,
+        )
+        if substitute is not None:
+            projected_anchor = substitute
+            projected_component_id = _component_id_at(labels, projected_anchor)
+            proxy_route_comparison = _proxy_anchor_route_comparison(
+                request_payload=request_payload,
+                inflated_mask=inflated_mask,
+                anchor=projected_anchor,
+                resolution=resolution,
+            )
+            reachable_substitute_available = True
+            anchor_selection_status = "reachable_substitute_anchor_found"
+        elif start_component_id is None:
+            anchor_selection_status = "start_not_in_inflated_passable_component"
+        else:
+            anchor_selection_status = "true_geometry_unreachable"
+
+    return {
+        "nearest_inflated_passable_anchor": _cell_list(nearest_anchor),
+        "projected_anchor_cell": _cell_list(projected_anchor),
+        "nearest_anchor_distance_cells": _cell_manhattan_or_none(target_cell, nearest_anchor),
+        "nearest_anchor_distance_m": _cell_distance_m_or_none(target_cell, nearest_anchor, resolution),
+        "projection_distance_cells": _cell_manhattan_or_none(target_cell, projected_anchor),
+        "projection_distance_m": _cell_distance_m_or_none(target_cell, projected_anchor, resolution),
+        "nearest_anchor_reachable": nearest_reachable,
+        "anchor_selection_status": anchor_selection_status,
+        "start_component_id": start_component_id,
+        "target_component_id": target_component_id,
+        "nearest_anchor_component_id": nearest_component_id,
+        "projected_anchor_component_id": projected_component_id,
+        "start_component_size": _component_size(component_sizes, start_component_id),
+        "target_component_size": _component_size(component_sizes, target_component_id),
+        "nearest_anchor_component_size": _component_size(component_sizes, nearest_component_id),
+        "projected_anchor_component_size": _component_size(component_sizes, projected_component_id),
+        "reachable_substitute_anchor_available": reachable_substitute_available,
+        "reachable_substitute_anchor_count": reachable_substitute_count,
+        "proxy_route_comparison": proxy_route_comparison,
+    }
+
+
+def _connected_component_labels(
+    mask: tuple[tuple[bool, ...], ...],
+) -> tuple[tuple[tuple[int | None, ...], ...], dict[int, int]]:
+    height = len(mask)
+    width = len(mask[0]) if height else 0
+    labels: list[list[int | None]] = [[None for _ in range(width)] for _ in range(height)]
+    component_sizes: dict[int, int] = {}
+    next_component_id = 0
+    for y, row in enumerate(mask):
+        for x, passable in enumerate(row):
+            if not passable or labels[y][x] is not None:
+                continue
+            component_id = next_component_id
+            next_component_id += 1
+            frontier: deque[tuple[int, int]] = deque([(x, y)])
+            labels[y][x] = component_id
+            size = 0
+            while frontier:
+                current = frontier.popleft()
+                size += 1
+                for neighbor in _mask_neighbors(mask, current):
+                    nx, ny = neighbor
+                    if labels[ny][nx] is not None:
+                        continue
+                    labels[ny][nx] = component_id
+                    frontier.append(neighbor)
+            component_sizes[component_id] = size
+    return tuple(tuple(row) for row in labels), component_sizes
+
+
+def _best_reachable_anchor_in_component(
+    mask: tuple[tuple[bool, ...], ...],
+    *,
+    target_cell: tuple[int, int],
+    start: tuple[int, int] | None,
+    start_component_id: int | None,
+    component_labels: tuple[tuple[int | None, ...], ...],
+) -> tuple[tuple[int, int] | None, int]:
+    if start is None or start_component_id is None:
+        return None, 0
+    distances = _grid_distance_map(mask, start=start)
+    candidates: list[tuple[int, float, int, int, int]] = []
+    for y, row in enumerate(mask):
+        for x, passable in enumerate(row):
+            if not passable or _component_id_at(component_labels, (x, y)) != start_component_id:
+                continue
+            start_distance = distances.get((x, y))
+            if start_distance is None:
+                continue
+            manhattan = abs(x - target_cell[0]) + abs(y - target_cell[1])
+            euclidean = hypot(x - target_cell[0], y - target_cell[1])
+            candidates.append((manhattan, euclidean, start_distance, y, x))
+    if not candidates:
+        return None, 0
+    _, _, _, y, x = min(candidates)
+    return (x, y), len(candidates)
+
+
+def _grid_distance_map(
+    mask: tuple[tuple[bool, ...], ...],
+    *,
+    start: tuple[int, int],
+) -> dict[tuple[int, int], int]:
+    if _mask_value(mask, start) is not True:
+        return {}
+    frontier: deque[tuple[int, int]] = deque([start])
+    distances: dict[tuple[int, int], int] = {start: 0}
+    while frontier:
+        current = frontier.popleft()
+        for neighbor in _mask_neighbors(mask, current):
+            if neighbor in distances:
+                continue
+            distances[neighbor] = distances[current] + 1
+            frontier.append(neighbor)
+    return distances
+
+
+def _component_id_at(
+    labels: tuple[tuple[int | None, ...], ...],
+    cell: tuple[int, int] | None,
+) -> int | None:
+    if cell is None:
+        return None
+    x, y = cell
+    if y < 0 or y >= len(labels):
+        return None
+    if x < 0 or x >= len(labels[y]):
+        return None
+    return labels[y][x]
+
+
+def _component_size(component_sizes: dict[int, int], component_id: int | None) -> int | None:
+    if component_id is None:
+        return None
+    return component_sizes.get(component_id)
+
+
+def _cell_list(cell: tuple[int, int] | None) -> list[int] | None:
+    if cell is None:
+        return None
+    return [cell[0], cell[1]]
+
+
+def _cell_manhattan_or_none(
+    origin: tuple[int, int],
+    cell: tuple[int, int] | None,
+) -> int | None:
+    if cell is None:
+        return None
+    return _manhattan_distance(origin, cell)
+
+
+def _cell_distance_m_or_none(
+    origin: tuple[int, int],
+    cell: tuple[int, int] | None,
+    resolution: float,
+) -> float | None:
+    if cell is None:
+        return None
+    return float(hypot(cell[0] - origin[0], cell[1] - origin[1]) * resolution)
 
 
 def _anchor_projection_reject_reason(
