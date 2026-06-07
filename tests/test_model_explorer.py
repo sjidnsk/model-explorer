@@ -1662,6 +1662,8 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertFalse(projection["anchor_reachable"])
         self.assertEqual(projection["training_use"], "not_positive_evidence")
         self.assertEqual(projection["reject_reason"], "anchor_not_reachable")
+        self.assertEqual(projection["anchor_selection_status"], "true_geometry_unreachable")
+        self.assertFalse(projection["reachable_substitute_anchor_available"])
 
     def test_anchor_projection_candidate_generation_uses_reachable_substitute_anchor(self):
         from model_explorer.policy.planning import (

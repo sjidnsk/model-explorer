@@ -1472,7 +1472,7 @@ def _anchor_projection_analysis(
             reachable_substitute_available = True
             anchor_selection_status = "reachable_substitute_anchor_found"
         elif start_component_id is None:
-            anchor_selection_status = "start_not_in_inflated_passable_component"
+            anchor_selection_status = "true_geometry_unreachable"
         else:
             anchor_selection_status = "true_geometry_unreachable"
 
