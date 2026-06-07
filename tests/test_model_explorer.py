@@ -1490,6 +1490,338 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertIn("same_as_baseline", selection.channel_aware_evidence_by_action_index[2]["reason_codes"])
         self.assertIn("not_lower_risk", selection.channel_aware_evidence_by_action_index[3]["reason_codes"])
 
+    def test_anchor_projection_candidate_generation_adds_projected_execution_target(self):
+        from model_explorer.policy.planning import (
+            AnchorProjectionCandidateConfig,
+            PathPlanResult,
+            evaluate_candidate_paths,
+            path_feedback_summary,
+        )
+
+        request_payload = {
+            "schema_version": "path-planner-request/v1",
+            "grid": {
+                "width": 4,
+                "height": 3,
+                "resolution": 1.0,
+                "origin": [0.0, 0.0],
+                "frame_id": "moon_local",
+            },
+            "cost": [[1.0, 1.0, 1.0, 1.0] for _ in range(3)],
+            "passable_mask": [
+                [True, True, False, True],
+                [True, True, True, True],
+                [True, True, True, True],
+            ],
+            "start": [0, 0],
+            "goal": [2, 1],
+            "metadata": {"passable_mask_source": "configured"},
+        }
+
+        class ProjectionPlanner:
+            def __init__(self):
+                self.requested_cells = []
+
+            def plan(self, request):
+                self.requested_cells.append(request.selected_goal.cell)
+                payload = json.loads(json.dumps(request_payload))
+                payload["goal"] = [request.selected_goal.cell[0], request.selected_goal.cell[1]]
+                if request.selected_goal.cell == (2, 1):
+                    return PathPlanResult(
+                        feasible=False,
+                        failure_reason="goal_blocked",
+                        replan_required=True,
+                        risk=0.2,
+                        metadata={
+                            "request_payload": payload,
+                            "diagnostics": {
+                                "search_mode": "platform_aware_astar",
+                                "passable_source": "inflated_passable_mask",
+                                "footprint_radius_m": 1.0,
+                            },
+                        },
+                    )
+                return PathPlanResult(
+                    feasible=True,
+                    path_cost=2.0 if request.selected_goal.cell == (1, 1) else 5.0,
+                    path_length=2.0 if request.selected_goal.cell == (1, 1) else 5.0,
+                    risk=0.1,
+                    metadata={
+                        "request_payload": payload,
+                        "diagnostics": {
+                            "search_mode": "platform_aware_astar",
+                            "passable_source": "inflated_passable_mask",
+                            "footprint_radius_m": 1.0,
+                        },
+                    },
+                )
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [2, 1], "utility": 0.9, "reachable": True, "expected_coverage_rate_delta": 0.9},
+                    {"cell": [0, 2], "utility": 0.4, "reachable": True, "expected_coverage_rate_delta": 0.4},
+                ]
+            )
+        )
+        planner = ProjectionPlanner()
+
+        evaluations = evaluate_candidate_paths(
+            contract,
+            current_cell=(0, 0),
+            top_k=2,
+            planner=planner,
+            anchor_projection_candidate_config=AnchorProjectionCandidateConfig(enabled=True),
+        )
+        summary = path_feedback_summary(evaluations)
+        projected = summary["candidates"][1]
+
+        self.assertEqual(planner.requested_cells, [(2, 1), (1, 1), (0, 2)])
+        self.assertEqual([item.cell for item in evaluations], [(2, 1), (1, 1), (0, 2)])
+        self.assertEqual(projected["candidate_role"], "projected_execution_target")
+        self.assertEqual(projected["source_action_index"], 0)
+        self.assertEqual(projected["policy_target_cell"], [2, 1])
+        self.assertEqual(projected["execution_goal_cell"], [1, 1])
+        self.assertEqual(projected["candidate_generation"]["projected_anchor_cell"], [1, 1])
+        self.assertEqual(projected["candidate_generation"]["comparison_scope"], "projected_target_anchor_contrast")
+        self.assertEqual(projected["candidate_generation"]["training_use"], "not_positive_evidence")
+        self.assertEqual(projected["candidate_generation"]["source_selection_status"], "pending_source_selection")
+        feasibility = projected["platform_goal_feasibility"]
+        self.assertEqual(feasibility["classification"], "platform_inflated_goal_blocked")
+        self.assertEqual(feasibility["policy_target_cell"], [2, 1])
+        self.assertEqual(feasibility["execution_goal_cell"], [1, 1])
+        self.assertEqual(feasibility["anchor_projection"]["projected_anchor_cell"], [1, 1])
+        self.assertEqual(feasibility["anchor_projection"]["training_use"], "not_positive_evidence")
+        self.assertEqual(feasibility["anchor_projection"]["sample_weight"], 0.0)
+
+    def test_anchor_projection_candidate_generation_does_not_generate_unreachable_anchor(self):
+        from model_explorer.policy.planning import (
+            AnchorProjectionCandidateConfig,
+            PathPlanResult,
+            evaluate_candidate_paths,
+            path_feedback_summary,
+        )
+
+        request_payload = {
+            "schema_version": "path-planner-request/v1",
+            "grid": {
+                "width": 5,
+                "height": 3,
+                "resolution": 1.0,
+                "origin": [0.0, 0.0],
+                "frame_id": "moon_local",
+            },
+            "cost": [[1.0, 1.0, 1.0, 1.0, 1.0] for _ in range(3)],
+            "passable_mask": [
+                [True, False, False, True, True],
+                [True, False, True, True, True],
+                [True, False, False, True, True],
+            ],
+            "start": [0, 0],
+            "goal": [2, 1],
+            "metadata": {"passable_mask_source": "configured"},
+        }
+
+        class UnreachableAnchorPlanner:
+            def __init__(self):
+                self.requested_cells = []
+
+            def plan(self, request):
+                self.requested_cells.append(request.selected_goal.cell)
+                return PathPlanResult(
+                    feasible=False,
+                    failure_reason="goal_blocked",
+                    replan_required=True,
+                    metadata={
+                        "request_payload": request_payload,
+                        "diagnostics": {
+                            "search_mode": "platform_aware_astar",
+                            "passable_source": "inflated_passable_mask",
+                            "footprint_radius_m": 1.0,
+                        },
+                    },
+                )
+
+        contract = load_contract_from_dict(
+            minimal_contract(goals=[{"cell": [2, 1], "utility": 0.9, "reachable": True}])
+        )
+        planner = UnreachableAnchorPlanner()
+
+        evaluations = evaluate_candidate_paths(
+            contract,
+            current_cell=(0, 0),
+            top_k=1,
+            planner=planner,
+            anchor_projection_candidate_config=AnchorProjectionCandidateConfig(enabled=True),
+        )
+        summary = path_feedback_summary(evaluations)
+        projection = summary["candidates"][0]["platform_goal_feasibility"]["anchor_projection"]
+
+        self.assertEqual(planner.requested_cells, [(2, 1)])
+        self.assertEqual(len(evaluations), 1)
+        self.assertFalse(projection["anchor_reachable"])
+        self.assertEqual(projection["training_use"], "not_positive_evidence")
+        self.assertEqual(projection["reject_reason"], "anchor_not_reachable")
+
+    def test_anchor_projection_candidate_generation_respects_projection_distance_threshold(self):
+        from model_explorer.policy.planning import (
+            AnchorProjectionCandidateConfig,
+            PathPlanResult,
+            evaluate_candidate_paths,
+        )
+
+        request_payload = {
+            "schema_version": "path-planner-request/v1",
+            "grid": {
+                "width": 4,
+                "height": 3,
+                "resolution": 1.0,
+                "origin": [0.0, 0.0],
+                "frame_id": "moon_local",
+            },
+            "cost": [[1.0, 1.0, 1.0, 1.0] for _ in range(3)],
+            "passable_mask": [
+                [True, True, False, True],
+                [True, True, True, True],
+                [True, True, True, True],
+            ],
+            "start": [0, 0],
+            "goal": [2, 1],
+            "metadata": {"passable_mask_source": "configured"},
+        }
+
+        class DistanceThresholdPlanner:
+            def __init__(self):
+                self.requested_cells = []
+
+            def plan(self, request):
+                self.requested_cells.append(request.selected_goal.cell)
+                return PathPlanResult(
+                    feasible=False,
+                    failure_reason="goal_blocked",
+                    replan_required=True,
+                    metadata={
+                        "request_payload": request_payload,
+                        "diagnostics": {
+                            "search_mode": "platform_aware_astar",
+                            "passable_source": "inflated_passable_mask",
+                            "footprint_radius_m": 1.0,
+                        },
+                    },
+                )
+
+        contract = load_contract_from_dict(
+            minimal_contract(goals=[{"cell": [2, 1], "utility": 0.9, "reachable": True}])
+        )
+        planner = DistanceThresholdPlanner()
+
+        evaluations = evaluate_candidate_paths(
+            contract,
+            current_cell=(0, 0),
+            top_k=1,
+            planner=planner,
+            anchor_projection_candidate_config=AnchorProjectionCandidateConfig(
+                enabled=True,
+                max_projection_distance_cells=0,
+            ),
+        )
+
+        self.assertEqual(planner.requested_cells, [(2, 1)])
+        self.assertEqual(len(evaluations), 1)
+
+    def test_source_selected_anchor_projection_is_marked_trainable_only_after_selection(self):
+        from model_explorer.policy.path_feedback import annotate_source_selected_anchor_projection
+        from model_explorer.policy.planning import (
+            AnchorProjectionCandidateConfig,
+            PathPlanResult,
+            evaluate_candidate_paths,
+            path_feedback_summary,
+        )
+
+        request_payload = {
+            "schema_version": "path-planner-request/v1",
+            "grid": {
+                "width": 4,
+                "height": 3,
+                "resolution": 1.0,
+                "origin": [0.0, 0.0],
+                "frame_id": "moon_local",
+            },
+            "cost": [[1.0, 1.0, 1.0, 1.0] for _ in range(3)],
+            "passable_mask": [
+                [True, True, False, True],
+                [True, True, True, True],
+                [True, True, True, True],
+            ],
+            "start": [0, 0],
+            "goal": [2, 1],
+            "metadata": {"passable_mask_source": "configured"},
+        }
+
+        class SelectionPlanner:
+            def plan(self, request):
+                payload = json.loads(json.dumps(request_payload))
+                payload["goal"] = [request.selected_goal.cell[0], request.selected_goal.cell[1]]
+                common_metadata = {
+                    "request_payload": payload,
+                    "diagnostics": {
+                        "search_mode": "platform_aware_astar",
+                        "passable_source": "inflated_passable_mask",
+                        "footprint_radius_m": 1.0,
+                    },
+                }
+                if request.selected_goal.cell == (2, 1):
+                    return PathPlanResult(
+                        feasible=False,
+                        failure_reason="goal_blocked",
+                        replan_required=True,
+                        metadata=common_metadata,
+                    )
+                return PathPlanResult(
+                    feasible=True,
+                    path_cost=1.0 if request.selected_goal.cell == (1, 1) else 10.0,
+                    path_length=1.0 if request.selected_goal.cell == (1, 1) else 10.0,
+                    metadata=common_metadata,
+                )
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [2, 1], "utility": 0.9, "reachable": True},
+                    {"cell": [0, 2], "utility": 0.8, "reachable": True},
+                ]
+            )
+        )
+        evaluations = evaluate_candidate_paths(
+            contract,
+            current_cell=(0, 0),
+            top_k=2,
+            planner=SelectionPlanner(),
+            anchor_projection_candidate_config=AnchorProjectionCandidateConfig(enabled=True),
+        )
+        selected = min(
+            [item for item in evaluations if item.result.feasible],
+            key=lambda item: item.result.path_cost,
+        )
+        feedback = annotate_source_selected_anchor_projection(
+            path_feedback_summary(evaluations),
+            selected_evaluation=selected,
+        )
+        projected = next(
+            item for item in feedback["candidates"] if item["candidate_role"] == "projected_execution_target"
+        )
+        projection = projected["platform_goal_feasibility"]["anchor_projection"]
+
+        self.assertEqual(selected.cell, (1, 1))
+        self.assertEqual(projected["candidate_generation"]["source_selection_status"], "source_selected")
+        self.assertEqual(projected["candidate_generation"]["training_use"], "trainable_anchor_projection_contrast")
+        self.assertEqual(projected["candidate_generation"]["sample_weight"], 1.0)
+        self.assertIsNone(projected["candidate_generation"]["reject_reason"])
+        self.assertEqual(projection["training_use"], "trainable_anchor_projection_contrast")
+        self.assertEqual(projection["comparison_scope"], "projected_target_anchor_contrast")
+        self.assertEqual(projection["sample_weight"], 1.0)
+        self.assertIsNone(projection["reject_reason"])
+
     def test_path_feedback_summary_contract_lists_required_acceptance_metrics(self):
         from model_explorer.policy.path_feedback import (
             PATH_FEEDBACK_SUMMARY_ACCEPTANCE_METRICS,

@@ -46,21 +46,44 @@ class PathPlanResult:
 
 
 @dataclass(frozen=True)
+class AnchorProjectionCandidateConfig:
+    enabled: bool = False
+    max_projection_distance_cells: int | None = None
+    max_projection_distance_m: float | None = None
+    require_anchor_reachable: bool = True
+
+
+@dataclass(frozen=True)
 class PathCandidateEvaluation:
     action_index: int
     cell: tuple[int, int]
     utility: float
     result: PathPlanResult
+    selection_goal: GoalCandidate | None = None
+    source_action_index: int | None = None
+    candidate_generation: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         input_sources = _input_source_summary(self.result.metadata.get("request_payload"))
+        generation = dict(self.candidate_generation or {})
+        policy_target_cell = _cell_pair(generation.get("policy_target_cell")) or self.cell
+        execution_goal_cell = _cell_pair(generation.get("execution_goal_cell")) or self.cell
         platform_goal_feasibility = _platform_goal_feasibility(
-            cell=self.cell,
+            cell=policy_target_cell,
             result=self.result,
         )
+        if generation:
+            platform_goal_feasibility = _with_projected_anchor_feasibility(
+                platform_goal_feasibility,
+                candidate_generation=generation,
+            )
         payload = {
             "action_index": self.action_index,
+            "source_action_index": self.source_action_index,
             "cell": [self.cell[0], self.cell[1]],
+            "candidate_role": str(generation.get("candidate_role", "policy_target")),
+            "policy_target_cell": [policy_target_cell[0], policy_target_cell[1]],
+            "execution_goal_cell": [execution_goal_cell[0], execution_goal_cell[1]],
             "utility": float(self.utility),
             "reachable": bool(self.result.feasible),
             "path_cost": float(self.result.path_cost),
@@ -90,6 +113,8 @@ class PathCandidateEvaluation:
             "open_grid_fallback_used": bool(input_sources["open_grid_fallback_used"]),
             "platform_goal_feasibility": platform_goal_feasibility,
         }
+        if generation:
+            payload["candidate_generation"] = generation
         return payload
 
 
@@ -452,10 +477,14 @@ def evaluate_candidate_paths(
     top_k: int,
     planner: PathPlanningAdapter,
     step_index: int = 0,
+    anchor_projection_candidate_config: AnchorProjectionCandidateConfig | dict[str, Any] | None = None,
 ) -> tuple[PathCandidateEvaluation, ...]:
     evaluations: list[PathCandidateEvaluation] = []
+    projection_config = anchor_projection_candidate_config_from_mapping(anchor_projection_candidate_config)
+    evaluated_policy_candidate_count = 0
+    next_synthetic_action_index = len(contract.top_goals)
     for action_index, goal in enumerate(contract.top_goals):
-        if len(evaluations) >= top_k:
+        if evaluated_policy_candidate_count >= top_k:
             break
         if not goal.reachable:
             continue
@@ -468,15 +497,150 @@ def evaluate_candidate_paths(
                 current_cell=current_cell,
             )
         )
-        evaluations.append(
-            PathCandidateEvaluation(
-                action_index=action_index,
-                cell=goal.cell,
-                utility=goal.utility,
-                result=result,
-            )
+        evaluation = PathCandidateEvaluation(
+            action_index=action_index,
+            cell=goal.cell,
+            utility=goal.utility,
+            result=result,
+            selection_goal=goal,
         )
+        evaluations.append(evaluation)
+        evaluated_policy_candidate_count += 1
+        projected = _projected_anchor_candidate_evaluation(
+            contract=contract,
+            current_cell=current_cell,
+            step_index=step_index,
+            source_action_index=action_index,
+            synthetic_action_index=next_synthetic_action_index,
+            goal=goal,
+            source_result=result,
+            planner=planner,
+            config=projection_config,
+        )
+        if projected is not None:
+            evaluations.append(projected)
+            next_synthetic_action_index += 1
     return tuple(evaluations)
+
+
+def anchor_projection_candidate_config_from_mapping(
+    value: AnchorProjectionCandidateConfig | dict[str, Any] | None,
+) -> AnchorProjectionCandidateConfig:
+    if isinstance(value, AnchorProjectionCandidateConfig):
+        return value
+    if not isinstance(value, dict):
+        return AnchorProjectionCandidateConfig()
+    return AnchorProjectionCandidateConfig(
+        enabled=bool(value.get("enabled", False)),
+        max_projection_distance_cells=_optional_nonnegative_int(
+            value.get("max_projection_distance_cells")
+        ),
+        max_projection_distance_m=_optional_nonnegative_float(
+            value.get("max_projection_distance_m")
+        ),
+        require_anchor_reachable=bool(value.get("require_anchor_reachable", True)),
+    )
+
+
+def _projected_anchor_candidate_evaluation(
+    *,
+    contract: ModelExplorerContract,
+    current_cell: tuple[int, int],
+    step_index: int,
+    source_action_index: int,
+    synthetic_action_index: int,
+    goal: GoalCandidate,
+    source_result: PathPlanResult,
+    planner: PathPlanningAdapter,
+    config: AnchorProjectionCandidateConfig,
+) -> PathCandidateEvaluation | None:
+    if not config.enabled:
+        return None
+    source_feasibility = _platform_goal_feasibility(cell=goal.cell, result=source_result)
+    if source_feasibility.get("classification") != "platform_inflated_goal_blocked":
+        return None
+    projection = source_feasibility.get("anchor_projection")
+    projection = projection if isinstance(projection, dict) else {}
+    anchor = _cell_pair(
+        projection.get("projected_anchor_cell")
+        or projection.get("nearest_inflated_passable_anchor")
+        or source_feasibility.get("nearest_inflated_passable_anchor")
+    )
+    if anchor is None:
+        return None
+    anchor_reachable = bool(projection.get("anchor_reachable"))
+    if config.require_anchor_reachable and not anchor_reachable:
+        return None
+    distance_cells = _optional_nonnegative_int(projection.get("projection_distance_cells"))
+    distance_m = _optional_nonnegative_float(projection.get("projection_distance_m"))
+    if (
+        config.max_projection_distance_cells is not None
+        and distance_cells is not None
+        and distance_cells > config.max_projection_distance_cells
+    ):
+        return None
+    if (
+        config.max_projection_distance_m is not None
+        and distance_m is not None
+        and distance_m > config.max_projection_distance_m
+    ):
+        return None
+
+    projected_goal = GoalCandidate(
+        cell=anchor,
+        utility=goal.utility,
+        reachable=True,
+        experimental={
+            **goal.experimental,
+            "anchor_projection_source_action_index": source_action_index,
+            "anchor_projection_policy_target_cell": [goal.cell[0], goal.cell[1]],
+            "anchor_projection_execution_goal_cell": [anchor[0], anchor[1]],
+        },
+    )
+    projected_result = planner.plan(
+        PathPlanRequest(
+            contract=contract,
+            step_index=step_index,
+            action_index=synthetic_action_index,
+            selected_goal=projected_goal,
+            current_cell=current_cell,
+            metadata={
+                "anchor_projection_candidate_generation": True,
+                "source_action_index": source_action_index,
+                "policy_target_cell": [goal.cell[0], goal.cell[1]],
+                "execution_goal_cell": [anchor[0], anchor[1]],
+            },
+        )
+    )
+    candidate_generation = {
+        "schema_version": "anchor-projection-candidate/v1",
+        "candidate_role": "projected_execution_target",
+        "source": "anchor_projection_candidate_generation",
+        "source_action_index": source_action_index,
+        "policy_target_cell": [goal.cell[0], goal.cell[1]],
+        "execution_goal_cell": [anchor[0], anchor[1]],
+        "projected_anchor_cell": [anchor[0], anchor[1]],
+        "projection_distance_cells": distance_cells,
+        "projection_distance_m": distance_m,
+        "anchor_reachable": anchor_reachable,
+        "comparison_scope": "projected_target_anchor_contrast",
+        "scope": "projected_target_anchor_contrast",
+        "training_use": "not_positive_evidence",
+        "sample_weight": 0.0,
+        "reject_reason": "pending_source_selection",
+        "source_selection_status": "pending_source_selection",
+        "evidence_boundary": "source_candidate_pending_selection_not_audit_proxy",
+        "audit_proxy_positive_evidence": False,
+    }
+    return PathCandidateEvaluation(
+        action_index=synthetic_action_index,
+        cell=anchor,
+        utility=goal.utility,
+        result=projected_result,
+        selection_goal=projected_goal,
+        source_action_index=source_action_index,
+        candidate_generation=candidate_generation,
+    )
 
 
 def path_feedback_summary(evaluations: Sequence[PathCandidateEvaluation]) -> dict[str, Any]:
@@ -1089,6 +1253,11 @@ def _platform_goal_feasibility_payload(
     same_cell_positive_evidence = bool(proxy_route_comparison.get("same_cell_positive_evidence"))
     anchor_reachable = bool(proxy_route_comparison.get("anchor_route_feasible"))
     comparison_scope = str(proxy_route_comparison.get("scope") or "unavailable")
+    reject_reason = _anchor_projection_reject_reason(
+        nearest_anchor=nearest_anchor,
+        anchor_reachable=anchor_reachable,
+        comparison_scope=comparison_scope,
+    )
     return {
         "schema_version": "platform-goal-feasibility/v1",
         "cell": [cell[0], cell[1]],
@@ -1106,6 +1275,7 @@ def _platform_goal_feasibility_payload(
         "anchor_distance_m": anchor_distance_m,
         "anchor_projection": {
             "nearest_inflated_passable_anchor": anchor_payload,
+            "projected_anchor_cell": anchor_payload,
             "projection_distance_cells": anchor_distance_cells,
             "projection_distance_m": anchor_distance_m,
             "anchor_reachable": anchor_reachable,
@@ -1113,11 +1283,70 @@ def _platform_goal_feasibility_payload(
             "scope": comparison_scope,
             "same_cell_positive_evidence": same_cell_positive_evidence,
             "training_use": "not_positive_evidence",
+            "sample_weight": 0.0,
+            "reject_reason": reject_reason,
+            "source_selection_status": "not_source_candidate",
             "evidence_boundary": "audit_projection_not_same_cell_positive_evidence",
+            "audit_proxy_positive_evidence": False,
         },
         "classification": classification,
         "proxy_route_comparison": proxy_route_comparison,
     }
+
+
+def _with_projected_anchor_feasibility(
+    feasibility: dict[str, Any],
+    *,
+    candidate_generation: dict[str, Any],
+) -> dict[str, Any]:
+    payload = dict(feasibility)
+    policy_target_cell = _cell_pair(candidate_generation.get("policy_target_cell"))
+    execution_goal_cell = _cell_pair(candidate_generation.get("execution_goal_cell"))
+    projected_anchor_cell = _cell_pair(candidate_generation.get("projected_anchor_cell"))
+    if policy_target_cell is not None:
+        payload["policy_target_cell"] = [policy_target_cell[0], policy_target_cell[1]]
+    if execution_goal_cell is not None:
+        payload["execution_goal_cell"] = [execution_goal_cell[0], execution_goal_cell[1]]
+    projection = dict(payload.get("anchor_projection") if isinstance(payload.get("anchor_projection"), dict) else {})
+    if projected_anchor_cell is not None:
+        projection["projected_anchor_cell"] = [projected_anchor_cell[0], projected_anchor_cell[1]]
+        projection["nearest_inflated_passable_anchor"] = [projected_anchor_cell[0], projected_anchor_cell[1]]
+    projection.update(
+        {
+            "projection_distance_cells": candidate_generation.get("projection_distance_cells"),
+            "projection_distance_m": candidate_generation.get("projection_distance_m"),
+            "anchor_reachable": bool(candidate_generation.get("anchor_reachable")),
+            "comparison_scope": str(candidate_generation.get("comparison_scope") or "projected_target_anchor_contrast"),
+            "scope": str(candidate_generation.get("scope") or "projected_target_anchor_contrast"),
+            "same_cell_positive_evidence": False,
+            "training_use": str(candidate_generation.get("training_use") or "not_positive_evidence"),
+            "sample_weight": float(candidate_generation.get("sample_weight") or 0.0),
+            "reject_reason": candidate_generation.get("reject_reason"),
+            "source_selection_status": candidate_generation.get("source_selection_status"),
+            "evidence_boundary": candidate_generation.get(
+                "evidence_boundary",
+                "source_candidate_pending_selection_not_audit_proxy",
+            ),
+            "audit_proxy_positive_evidence": False,
+        }
+    )
+    payload["anchor_projection"] = projection
+    return payload
+
+
+def _anchor_projection_reject_reason(
+    *,
+    nearest_anchor: tuple[int, int] | None,
+    anchor_reachable: bool,
+    comparison_scope: str,
+) -> str:
+    if nearest_anchor is None:
+        return "no_inflated_passable_anchor"
+    if not anchor_reachable:
+        return "anchor_not_reachable"
+    if comparison_scope == "audit_proxy_anchor_not_same_cell":
+        return "audit_proxy_scope_not_positive_evidence"
+    return "not_positive_evidence"
 
 
 def _platform_goal_classification(
@@ -1344,6 +1573,26 @@ def _optional_positive_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0.0 else None
+
+
+def _optional_nonnegative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _optional_nonnegative_float(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0.0 else None
 
 
 def _input_source_summary(value: Any) -> dict[str, Any]:

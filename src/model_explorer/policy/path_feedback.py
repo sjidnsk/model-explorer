@@ -9,9 +9,11 @@ from typing import Any
 from ..core.interfaces import GoalCandidate, ModelExplorerContract
 from ..io.scenario import load_scenario
 from .planning import (
+    AnchorProjectionCandidateConfig,
     PathPlanRequest,
     PathPlanResult,
     PathPlanningAdapter,
+    anchor_projection_candidate_config_from_mapping,
     evaluate_candidate_paths,
     load_path_planner_sidecar,
     path_feedback_summary,
@@ -709,6 +711,9 @@ def run_path_feedback(manifest: PathFeedbackManifest) -> dict[str, Any]:
         manifest,
         open_grid_fallback_used=open_grid_fallback_used,
     )
+    anchor_projection_candidate_generation = _anchor_projection_candidate_generation_summary(
+        scenario_summaries
+    )
     return {
         "schema_version": PATH_FEEDBACK_SUMMARY_SCHEMA_VERSION,
         "scenario_count": len(scenario_summaries),
@@ -750,6 +755,7 @@ def run_path_feedback(manifest: PathFeedbackManifest) -> dict[str, Any]:
         "open_grid_fallback_used": open_grid_fallback_used,
         "open_grid_fallback_used_gate": acceptance_metadata["open_grid_fallback_used_gate"],
         "acceptance_metadata": acceptance_metadata,
+        **anchor_projection_candidate_generation,
         "failure_reasons": [
             reason
             for item in scenario_summaries
@@ -1037,15 +1043,20 @@ def _run_feedback_scenario(
 ) -> dict[str, Any]:
     contract = load_scenario(scenario.contract_path).snapshots[0]
     planner = _planner_for_scenario(scenario, manifest=manifest)
+    anchor_projection_candidate_config = _anchor_projection_candidate_config(manifest)
     evaluations = evaluate_candidate_paths(
         contract,
         current_cell=scenario.current_cell,
         top_k=manifest.top_k,
         planner=planner,
+        anchor_projection_candidate_config=anchor_projection_candidate_config,
     )
-    feedback = path_feedback_summary(evaluations)
     selected_before = _selected_before_feedback(contract)
     selected_after = _selected_after_feedback(evaluations)
+    feedback = annotate_source_selected_anchor_projection(
+        path_feedback_summary(evaluations),
+        selected_evaluation=selected_after,
+    )
     selected_after_cost = None if selected_after is None else selected_after.result.path_cost
     selected_before_cost = _candidate_path_cost_for_cell(
         evaluations,
@@ -1129,6 +1140,75 @@ def _run_feedback_scenario(
     return summary
 
 
+def annotate_source_selected_anchor_projection(
+    feedback: dict[str, Any],
+    *,
+    selected_evaluation: Any | None,
+) -> dict[str, Any]:
+    if not isinstance(feedback, dict):
+        return feedback
+    candidates = feedback.get("candidates")
+    if not isinstance(candidates, list):
+        return feedback
+    selected_action_index = None if selected_evaluation is None else getattr(selected_evaluation, "action_index", None)
+    selected_cell = None if selected_evaluation is None else getattr(selected_evaluation, "cell", None)
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        generation = candidate.get("candidate_generation")
+        if not isinstance(generation, dict):
+            continue
+        if generation.get("candidate_role") != "projected_execution_target":
+            continue
+        candidate_cell = _cell_tuple(candidate.get("cell"))
+        source_selected = (
+            selected_action_index is not None
+            and candidate.get("action_index") == selected_action_index
+            and selected_cell is not None
+            and candidate_cell == selected_cell
+        )
+        if source_selected and candidate.get("reachable") is True and not bool(candidate.get("replan_required")):
+            update = {
+                "training_use": "trainable_anchor_projection_contrast",
+                "sample_weight": 1.0,
+                "reject_reason": None,
+                "source_selection_status": "source_selected",
+                "comparison_scope": "projected_target_anchor_contrast",
+                "scope": "projected_target_anchor_contrast",
+                "evidence_boundary": "source_selected_projected_target_candidate",
+                "audit_proxy_positive_evidence": False,
+            }
+        else:
+            update = {
+                "training_use": "not_positive_evidence",
+                "sample_weight": 0.0,
+                "reject_reason": (
+                    "projected_candidate_replan_required"
+                    if bool(candidate.get("replan_required"))
+                    else "source_candidate_not_selected"
+                ),
+                "source_selection_status": "not_source_selected",
+                "comparison_scope": "projected_target_anchor_contrast",
+                "scope": "projected_target_anchor_contrast",
+                "evidence_boundary": "source_candidate_not_selected_not_positive_evidence",
+                "audit_proxy_positive_evidence": False,
+            }
+        generation.update(update)
+        feasibility = candidate.get("platform_goal_feasibility")
+        feasibility = feasibility if isinstance(feasibility, dict) else {}
+        projection = feasibility.get("anchor_projection")
+        if isinstance(projection, dict):
+            projection.update(update)
+            projection["same_cell_positive_evidence"] = False
+    return feedback
+
+
+def _anchor_projection_candidate_config(manifest: PathFeedbackManifest) -> AnchorProjectionCandidateConfig:
+    return anchor_projection_candidate_config_from_mapping(
+        manifest.planner_config.get("anchor_projection_candidate_generation")
+    )
+
+
 def _planner_for_scenario(
     scenario: PathFeedbackScenario,
     *,
@@ -1165,6 +1245,51 @@ def _selected_after_feedback(evaluations) -> Any | None:
             item.cell[1],
         ),
     )
+
+
+def _anchor_projection_candidate_generation_summary(
+    scenarios: list[dict[str, Any]],
+) -> dict[str, Any]:
+    generated_count = 0
+    source_selected_count = 0
+    trainable_count = 0
+    nontrainable_count = 0
+    positive_audit_proxy_count = 0
+    reject_reason_counts: Counter[str] = Counter()
+    for scenario in scenarios:
+        feedback = scenario.get("path_feedback")
+        feedback = feedback if isinstance(feedback, dict) else {}
+        candidates = feedback.get("candidates")
+        if not isinstance(candidates, list):
+            continue
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            generation = candidate.get("candidate_generation")
+            if not isinstance(generation, dict):
+                continue
+            if generation.get("candidate_role") != "projected_execution_target":
+                continue
+            generated_count += 1
+            if generation.get("source_selection_status") == "source_selected":
+                source_selected_count += 1
+            if generation.get("training_use") == "trainable_anchor_projection_contrast":
+                trainable_count += 1
+                if generation.get("comparison_scope") == "audit_proxy_anchor_not_same_cell":
+                    positive_audit_proxy_count += 1
+            else:
+                nontrainable_count += 1
+            reject_reason = generation.get("reject_reason")
+            if reject_reason:
+                reject_reason_counts[str(reject_reason)] += 1
+    return {
+        "anchor_projection_candidate_generated_count": generated_count,
+        "anchor_projection_source_selected_count": source_selected_count,
+        "trainable_anchor_projection_count": trainable_count,
+        "nontrainable_anchor_projection_count": nontrainable_count,
+        "positive_training_evidence_contains_audit_proxy_anchor_count": positive_audit_proxy_count,
+        "anchor_projection_candidate_reject_reason_counts": dict(sorted(reject_reason_counts.items())),
+    }
 
 
 def _candidate_path_cost_for_cell(evaluations, cell: tuple[int, int] | None) -> float | None:
@@ -4107,6 +4232,9 @@ def _acceptance_metadata(
         "top_k": int(manifest.top_k),
         "python_executable": manifest.python_executable,
         "planner_extra_args": list(manifest.planner_extra_args),
+        "anchor_projection_candidate_generation_enabled": bool(
+            _anchor_projection_candidate_config(manifest).enabled
+        ),
         "open_grid_fallback_used": bool(open_grid_fallback_used),
         "open_grid_fallback_used_gate": {
             "status": gate_status,
@@ -4181,6 +4309,15 @@ def _cell(value: Any) -> tuple[int, int]:
 
 def _cell_to_list(cell: tuple[int, int] | None) -> list[int] | None:
     return None if cell is None else [cell[0], cell[1]]
+
+
+def _cell_tuple(value: Any) -> tuple[int, int] | None:
+    if not isinstance(value, list | tuple) or len(value) != 2:
+        return None
+    try:
+        return (int(value[0]), int(value[1]))
+    except (TypeError, ValueError):
+        return None
 
 
 def _numeric_observation(contract: ModelExplorerContract, field: str) -> float:

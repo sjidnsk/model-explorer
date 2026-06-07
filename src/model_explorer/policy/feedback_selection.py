@@ -6,6 +6,7 @@ from typing import Any
 
 from ..core.interfaces import ExplorerDecision, GoalCandidate, ModelExplorerContract
 from .planning import (
+    AnchorProjectionCandidateConfig,
     PathCandidateEvaluation,
     PathPlanningAdapter,
     evaluate_candidate_paths,
@@ -56,6 +57,7 @@ def select_goal_with_path_feedback(
     step_index: int = 0,
     top_k: int | None = None,
     config: FeedbackAwareSelectionConfig | None = None,
+    anchor_projection_candidate_config: AnchorProjectionCandidateConfig | dict[str, Any] | None = None,
 ) -> FeedbackAwareSelection:
     selection_config = config or FeedbackAwareSelectionConfig()
     candidate_limit = len(contract.top_goals) if top_k is None else max(0, int(top_k))
@@ -65,6 +67,7 @@ def select_goal_with_path_feedback(
         top_k=candidate_limit,
         planner=planner,
         step_index=step_index,
+        anchor_projection_candidate_config=anchor_projection_candidate_config,
     )
     if not evaluations:
         decision = ExplorerDecision(status="no_reachable_goal", selected_goal=None, ranked_goals=())
@@ -75,11 +78,7 @@ def select_goal_with_path_feedback(
             selected_evaluation=None,
         )
 
-    goals_by_action_index = {
-        action_index: goal
-        for action_index, goal in enumerate(contract.top_goals)
-        if goal.reachable
-    }
+    goals_by_action_index = _goals_by_evaluation_action_index(evaluations, contract)
     scores = _score_evaluations(evaluations, goals_by_action_index, selection_config)
     channel_aware_evidence_by_action_index = _channel_aware_evidence_by_action_index(evaluations)
     channel_aware_score_adjustments_by_action_index = {
@@ -132,6 +131,28 @@ def select_goal_with_path_feedback(
         channel_aware_evidence_by_action_index=channel_aware_evidence_by_action_index,
         channel_aware_score_adjustments_by_action_index=channel_aware_score_adjustments_by_action_index,
     )
+
+
+def _goals_by_evaluation_action_index(
+    evaluations: tuple[PathCandidateEvaluation, ...],
+    contract: ModelExplorerContract,
+) -> dict[int, GoalCandidate]:
+    goals: dict[int, GoalCandidate] = {}
+    for evaluation in evaluations:
+        if evaluation.selection_goal is not None:
+            goals[evaluation.action_index] = evaluation.selection_goal
+            continue
+        if 0 <= evaluation.action_index < len(contract.top_goals):
+            goal = contract.top_goals[evaluation.action_index]
+            if goal.reachable:
+                goals[evaluation.action_index] = goal
+            continue
+        goals[evaluation.action_index] = GoalCandidate(
+            cell=evaluation.cell,
+            utility=evaluation.utility,
+            reachable=bool(evaluation.result.feasible),
+        )
+    return goals
 
 
 def _score_evaluations(
