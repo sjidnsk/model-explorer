@@ -24,6 +24,7 @@ from .planning import (
 
 PATH_FEEDBACK_SCHEMA_VERSION = "path-feedback-manifest/v1"
 PATH_FEEDBACK_SUMMARY_SCHEMA_VERSION = "path-feedback-summary/v1"
+SOURCE_SELECTION_BEST_ALTERNATIVE_SCOPE = "reachable_non_replan_candidates_including_policy_and_projected_targets"
 GCS_CONTROL_POINT_CANDIDATE_TRIAGE_SCHEMA_VERSION = "gcs-control-point-candidate-triage-summary/v1"
 GCS_CONTROL_POINT_CANDIDATE_ARTIFACT_INDEX_SCHEMA_VERSION = (
     "gcs-control-point-candidate-artifact-index/v1"
@@ -1052,10 +1053,14 @@ def _run_feedback_scenario(
         anchor_projection_candidate_config=anchor_projection_candidate_config,
     )
     selected_before = _selected_before_feedback(contract)
-    selected_after = _selected_after_feedback(evaluations)
+    selected_after = _selected_after_feedback(
+        evaluations,
+        anchor_projection_candidate_config=anchor_projection_candidate_config,
+    )
     feedback = annotate_source_selected_anchor_projection(
         path_feedback_summary(evaluations),
         selected_evaluation=selected_after,
+        anchor_projection_candidate_config=anchor_projection_candidate_config,
     )
     selected_after_cost = None if selected_after is None else selected_after.result.path_cost
     selected_before_cost = _candidate_path_cost_for_cell(
@@ -1144,14 +1149,21 @@ def annotate_source_selected_anchor_projection(
     feedback: dict[str, Any],
     *,
     selected_evaluation: Any | None,
+    anchor_projection_candidate_config: AnchorProjectionCandidateConfig | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(feedback, dict):
         return feedback
     candidates = feedback.get("candidates")
     if not isinstance(candidates, list):
         return feedback
+    projection_config = anchor_projection_candidate_config_from_mapping(anchor_projection_candidate_config)
     selected_action_index = None if selected_evaluation is None else getattr(selected_evaluation, "action_index", None)
     selected_cell = None if selected_evaluation is None else getattr(selected_evaluation, "cell", None)
+    best_alternative = _best_source_selection_alternative(
+        candidates,
+        selected_action_index=selected_action_index,
+        selected_cell=selected_cell,
+    )
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue
@@ -1160,6 +1172,10 @@ def annotate_source_selected_anchor_projection(
             continue
         if generation.get("candidate_role") != "projected_execution_target":
             continue
+        adjusted_path_cost = _anchor_projection_adjusted_path_cost(
+            candidate,
+            config=projection_config,
+        )
         candidate_cell = _cell_tuple(candidate.get("cell"))
         source_selected = (
             selected_action_index is not None
@@ -1167,17 +1183,38 @@ def annotate_source_selected_anchor_projection(
             and selected_cell is not None
             and candidate_cell == selected_cell
         )
+        quality_regression, quality_update = _anchor_projection_source_selection_quality(
+            candidate,
+            alternative=best_alternative,
+            config=projection_config,
+        )
         if source_selected and candidate.get("reachable") is True and not bool(candidate.get("replan_required")):
-            update = {
-                "training_use": "trainable_anchor_projection_contrast",
-                "sample_weight": 1.0,
-                "reject_reason": None,
-                "source_selection_status": "source_selected",
-                "comparison_scope": "projected_target_anchor_contrast",
-                "scope": "projected_target_anchor_contrast",
-                "evidence_boundary": "source_selected_projected_target_candidate",
-                "audit_proxy_positive_evidence": False,
-            }
+            if quality_regression:
+                update = {
+                    "training_use": "not_positive_evidence",
+                    "sample_weight": 0.0,
+                    "reject_reason": "source_selection_quality_regression",
+                    "source_selection_status": "source_selected_quality_regression",
+                    "comparison_scope": "projected_target_anchor_contrast",
+                    "scope": "projected_target_anchor_contrast",
+                    "evidence_boundary": "source_selected_projected_target_quality_regression_not_positive_evidence",
+                    "audit_proxy_positive_evidence": False,
+                    "source_selection_path_cost_bonus": projection_config.source_selection_path_cost_bonus,
+                    "source_selection_adjusted_path_cost": adjusted_path_cost,
+                }
+            else:
+                update = {
+                    "training_use": "trainable_anchor_projection_contrast",
+                    "sample_weight": 1.0,
+                    "reject_reason": None,
+                    "source_selection_status": "source_selected",
+                    "comparison_scope": "projected_target_anchor_contrast",
+                    "scope": "projected_target_anchor_contrast",
+                    "evidence_boundary": "source_selected_projected_target_candidate",
+                    "audit_proxy_positive_evidence": False,
+                    "source_selection_path_cost_bonus": projection_config.source_selection_path_cost_bonus,
+                    "source_selection_adjusted_path_cost": adjusted_path_cost,
+                }
         else:
             update = {
                 "training_use": "not_positive_evidence",
@@ -1192,7 +1229,11 @@ def annotate_source_selected_anchor_projection(
                 "scope": "projected_target_anchor_contrast",
                 "evidence_boundary": "source_candidate_not_selected_not_positive_evidence",
                 "audit_proxy_positive_evidence": False,
+                "source_selection_path_cost_bonus": projection_config.source_selection_path_cost_bonus,
+                "source_selection_adjusted_path_cost": adjusted_path_cost,
             }
+            quality_update["source_selection_quality_regression"] = False
+        update.update(quality_update)
         generation.update(update)
         feasibility = candidate.get("platform_goal_feasibility")
         feasibility = feasibility if isinstance(feasibility, dict) else {}
@@ -1229,7 +1270,12 @@ def _selected_before_feedback(contract: ModelExplorerContract) -> GoalCandidate 
     return None
 
 
-def _selected_after_feedback(evaluations) -> Any | None:
+def _selected_after_feedback(
+    evaluations,
+    *,
+    anchor_projection_candidate_config: AnchorProjectionCandidateConfig | dict[str, Any] | None = None,
+) -> Any | None:
+    projection_config = anchor_projection_candidate_config_from_mapping(anchor_projection_candidate_config)
     feasible = [item for item in evaluations if item.result.feasible and not item.result.replan_required]
     if not feasible:
         feasible = [item for item in evaluations if item.result.feasible]
@@ -1237,14 +1283,138 @@ def _selected_after_feedback(evaluations) -> Any | None:
         return None
     return min(
         feasible,
-        key=lambda item: (
-            float(item.result.path_cost),
-            float(item.result.risk),
-            -float(item.utility),
-            item.cell[0],
-            item.cell[1],
+        key=lambda item: _source_selection_key(item, config=projection_config),
+    )
+
+
+def _source_selection_key(
+    evaluation: Any,
+    *,
+    config: AnchorProjectionCandidateConfig,
+) -> tuple[float, float, float, int, int]:
+    return (
+        _anchor_projection_adjusted_path_cost(evaluation, config=config),
+        float(evaluation.result.risk),
+        -float(evaluation.utility),
+        evaluation.cell[0],
+        evaluation.cell[1],
+    )
+
+
+def _anchor_projection_adjusted_path_cost(
+    evaluation_or_candidate: Any,
+    *,
+    config: AnchorProjectionCandidateConfig,
+) -> float:
+    path_cost = _path_cost_for_selection(evaluation_or_candidate)
+    if not config.enabled:
+        return path_cost
+    if config.source_selection_path_cost_bonus <= 0.0:
+        return path_cost
+    candidate_generation = _candidate_generation_for_selection(evaluation_or_candidate)
+    if candidate_generation.get("candidate_role") != "projected_execution_target":
+        return path_cost
+    if candidate_generation.get("comparison_scope") != "projected_target_anchor_contrast":
+        return path_cost
+    if candidate_generation.get("anchor_reachable") is not True:
+        return path_cost
+    return path_cost - float(config.source_selection_path_cost_bonus)
+
+
+def _best_source_selection_alternative(
+    candidates: list[Any],
+    *,
+    selected_action_index: Any,
+    selected_cell: tuple[int, int] | None,
+) -> dict[str, Any] | None:
+    alternatives = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        # This mirrors the source-selection pool: policy targets and projected
+        # targets are both valid contrasts if they are reachable and non-replan.
+        if candidate.get("reachable") is not True or bool(candidate.get("replan_required")):
+            continue
+        if candidate.get("action_index") == selected_action_index and _cell_tuple(candidate.get("cell")) == selected_cell:
+            continue
+        alternatives.append(candidate)
+    if not alternatives:
+        return None
+    return min(
+        alternatives,
+        key=lambda candidate: (
+            _candidate_float(candidate, "path_cost", float("inf")),
+            _candidate_float(candidate, "risk", float("inf")),
+            -_candidate_float(candidate, "utility", 0.0),
+            _cell_tuple(candidate.get("cell")) or (10**9, 10**9),
         ),
     )
+
+
+def _anchor_projection_source_selection_quality(
+    candidate: dict[str, Any],
+    *,
+    alternative: dict[str, Any] | None,
+    config: AnchorProjectionCandidateConfig,
+) -> tuple[bool, dict[str, Any]]:
+    update: dict[str, Any] = {}
+    if alternative is None:
+        return False, update
+    path_margin = _candidate_float(candidate, "path_cost", 0.0) - _candidate_float(
+        alternative,
+        "path_cost",
+        0.0,
+    )
+    risk_margin = _candidate_float(candidate, "risk", 0.0) - _candidate_float(alternative, "risk", 0.0)
+    update["source_selection_best_alternative_action_index"] = alternative.get("action_index")
+    update["source_selection_best_alternative_cell"] = _list_cell(_cell_tuple(alternative.get("cell")))
+    update["source_selection_best_alternative_scope"] = SOURCE_SELECTION_BEST_ALTERNATIVE_SCOPE
+    update["source_selection_best_alternative_candidate_role"] = (
+        alternative.get("candidate_role")
+        or _candidate_generation_for_selection(alternative).get("candidate_role")
+    )
+    update["source_selection_path_cost_margin_vs_best_alternative"] = float(path_margin)
+    update["source_selection_risk_margin_vs_best_alternative"] = float(risk_margin)
+    path_regressed = (
+        config.max_source_selection_path_cost_regression is not None
+        and path_margin > float(config.max_source_selection_path_cost_regression)
+    )
+    risk_regressed = (
+        config.max_source_selection_risk_regression is not None
+        and risk_margin > float(config.max_source_selection_risk_regression)
+    )
+    update["source_selection_quality_regression"] = bool(path_regressed or risk_regressed)
+    return bool(path_regressed or risk_regressed), update
+
+
+def _candidate_float(candidate: dict[str, Any], field: str, default: float) -> float:
+    try:
+        return float(candidate.get(field, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _list_cell(cell: tuple[int, int] | None) -> list[int] | None:
+    if cell is None:
+        return None
+    return [cell[0], cell[1]]
+
+
+def _path_cost_for_selection(value: Any) -> float:
+    if isinstance(value, dict):
+        try:
+            return float(value.get("path_cost", 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+    return float(value.result.path_cost)
+
+
+def _candidate_generation_for_selection(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        generation = value.get("candidate_generation")
+    else:
+        generation = getattr(value, "candidate_generation", None)
+    return generation if isinstance(generation, dict) else {}
 
 
 def _anchor_projection_candidate_generation_summary(

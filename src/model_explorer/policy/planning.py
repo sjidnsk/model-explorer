@@ -51,6 +51,9 @@ class AnchorProjectionCandidateConfig:
     max_projection_distance_cells: int | None = None
     max_projection_distance_m: float | None = None
     require_anchor_reachable: bool = True
+    source_selection_path_cost_bonus: float = 0.0
+    max_source_selection_path_cost_regression: float | None = None
+    max_source_selection_risk_regression: float | None = None
 
 
 @dataclass(frozen=True)
@@ -539,6 +542,16 @@ def anchor_projection_candidate_config_from_mapping(
             value.get("max_projection_distance_m")
         ),
         require_anchor_reachable=bool(value.get("require_anchor_reachable", True)),
+        source_selection_path_cost_bonus=_optional_nonnegative_float(
+            value.get("source_selection_path_cost_bonus")
+        )
+        or 0.0,
+        max_source_selection_path_cost_regression=_optional_nonnegative_float(
+            value.get("max_source_selection_path_cost_regression")
+        ),
+        max_source_selection_risk_regression=_optional_nonnegative_float(
+            value.get("max_source_selection_risk_regression")
+        ),
     )
 
 
