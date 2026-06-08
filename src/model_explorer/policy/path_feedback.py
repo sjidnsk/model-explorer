@@ -8,6 +8,7 @@ from typing import Any
 
 from ..core.interfaces import GoalCandidate, ModelExplorerContract
 from ..io.scenario import load_scenario
+from .context_id import policy_context_id_metadata
 from .planning import (
     AnchorProjectionCandidateConfig,
     PathPlanRequest,
@@ -96,6 +97,8 @@ class PathFeedbackScenario:
     contract_path: Path
     sidecar_path: Path
     scenario_group: str = "unknown"
+    scenario_seed: int | str | None = None
+    scenario_variant_id: str | None = None
     current_cell: tuple[int, int] = (0, 0)
     route_fixtures: dict[int, Path] = field(default_factory=dict)
 
@@ -176,6 +179,8 @@ def dry_run_path_feedback_manifest(path: str | Path) -> dict[str, Any]:
             {
                 "scenario_id": scenario.scenario_id,
                 "scenario_group": scenario.scenario_group,
+                "scenario_seed": scenario.scenario_seed,
+                "scenario_variant_id": scenario.scenario_variant_id,
                 "contract": str(scenario.contract_path),
                 "sidecar": str(scenario.sidecar_path),
                 "route_fixture_count": len(scenario.route_fixtures),
@@ -1062,6 +1067,7 @@ def _run_feedback_scenario(
         selected_evaluation=selected_after,
         anchor_projection_candidate_config=anchor_projection_candidate_config,
     )
+    _annotate_policy_context_ids(feedback, scenario=scenario, manifest=manifest)
     selected_after_cost = None if selected_after is None else selected_after.result.path_cost
     selected_before_cost = _candidate_path_cost_for_cell(
         evaluations,
@@ -1073,6 +1079,8 @@ def _run_feedback_scenario(
     summary = {
         "scenario_id": scenario.scenario_id,
         "scenario_group": scenario.scenario_group,
+        "scenario_seed": scenario.scenario_seed,
+        "scenario_variant_id": scenario.scenario_variant_id,
         "selected_cell_before_path_feedback": before_cell,
         "selected_cell_after_path_feedback": after_cell,
         "selection_changed_by_path_feedback": before_cell != after_cell,
@@ -1284,6 +1292,49 @@ def annotate_source_selected_anchor_projection(
             projection.update(update)
             projection["same_cell_positive_evidence"] = False
     return feedback
+
+
+def _annotate_policy_context_ids(
+    feedback: dict[str, Any],
+    *,
+    scenario: PathFeedbackScenario,
+    manifest: PathFeedbackManifest,
+) -> None:
+    candidates = feedback.get("candidates")
+    if not isinstance(candidates, list):
+        return
+    planning_backend = _policy_context_planning_backend(manifest)
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        source_action_index = candidate.get("source_action_index")
+        if source_action_index is None:
+            source_action_index = candidate.get("action_index")
+        candidate_role = str(candidate.get("candidate_role") or "policy_target")
+        fields = {
+            "scenario_id": scenario.scenario_id,
+            "scenario_group": scenario.scenario_group,
+            "scenario_seed": scenario.scenario_seed,
+            "scenario_variant_id": scenario.scenario_variant_id,
+            "diagnostic_profile": manifest.diagnostic_profile,
+            "planning_backend": planning_backend,
+            "top_k": manifest.top_k,
+            "sample_type": "path_feedback_candidate",
+            "candidate_role": candidate_role,
+            "source_action_index": source_action_index,
+            "policy_target_cell": candidate.get("policy_target_cell") or candidate.get("cell"),
+            "execution_goal_cell": candidate.get("execution_goal_cell") or candidate.get("cell"),
+            "target_binding_mode": candidate.get("target_binding_mode") or candidate_role,
+        }
+        candidate.update(policy_context_id_metadata(fields))
+
+
+def _policy_context_planning_backend(manifest: PathFeedbackManifest) -> str:
+    extra_args = list(manifest.planner_extra_args)
+    for index, value in enumerate(extra_args):
+        if value == "--planning-backend" and index + 1 < len(extra_args):
+            return str(extra_args[index + 1])
+    return str(manifest.planner_config.get("backend") or "path_planner_route")
 
 
 def _updated_trainability_gate(
@@ -4624,9 +4675,30 @@ def _scenario_from_payload(payload: Any, *, base_dir: Path) -> PathFeedbackScena
         contract_path=_required_path(payload, "contract", base_dir=base_dir),
         sidecar_path=_required_path(payload, "sidecar", base_dir=base_dir),
         scenario_group=str(payload.get("scenario_group") or payload.get("group") or "unknown"),
+        scenario_seed=_scenario_seed(payload.get("scenario_seed")),
+        scenario_variant_id=_optional_string(payload.get("scenario_variant_id")),
         current_cell=_cell(payload.get("current_cell", [0, 0])),
         route_fixtures=_route_fixtures(payload.get("route_fixtures", {}), base_dir=base_dir),
     )
+
+
+def _scenario_seed(value: Any) -> int | str | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        parsed = str(value)
+        return parsed if parsed else None
+
+
+def _optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    parsed = str(value)
+    return parsed if parsed else None
 
 
 def _resolve_planner_config(config: Any, *, base_dir: Path) -> dict[str, Any]:
