@@ -9,6 +9,7 @@ from .planning import (
     AnchorProjectionCandidateConfig,
     PathCandidateEvaluation,
     PathPlanningAdapter,
+    anchor_projection_candidate_config_from_mapping,
     evaluate_candidate_paths,
 )
 
@@ -60,6 +61,7 @@ def select_goal_with_path_feedback(
     anchor_projection_candidate_config: AnchorProjectionCandidateConfig | dict[str, Any] | None = None,
 ) -> FeedbackAwareSelection:
     selection_config = config or FeedbackAwareSelectionConfig()
+    projection_config = anchor_projection_candidate_config_from_mapping(anchor_projection_candidate_config)
     candidate_limit = len(contract.top_goals) if top_k is None else max(0, int(top_k))
     evaluations = evaluate_candidate_paths(
         contract,
@@ -67,7 +69,7 @@ def select_goal_with_path_feedback(
         top_k=candidate_limit,
         planner=planner,
         step_index=step_index,
-        anchor_projection_candidate_config=anchor_projection_candidate_config,
+        anchor_projection_candidate_config=projection_config,
     )
     if not evaluations:
         decision = ExplorerDecision(status="no_reachable_goal", selected_goal=None, ranked_goals=())
@@ -89,12 +91,22 @@ def select_goal_with_path_feedback(
         for evaluation in evaluations
         if evaluation.action_index in channel_aware_evidence_by_action_index
     }
+    preferred_evaluation = _contract_aware_preferred_evaluation(
+        evaluations,
+        goals_by_action_index=goals_by_action_index,
+        scores=scores,
+        config=projection_config,
+    )
     ranked_evaluations = tuple(
         sorted(
             evaluations,
             key=lambda evaluation: _ranking_key(evaluation, goals_by_action_index, scores),
         )
     )
+    if preferred_evaluation is not None:
+        ranked_evaluations = (preferred_evaluation,) + tuple(
+            evaluation for evaluation in ranked_evaluations if evaluation is not preferred_evaluation
+        )
     ranked_goals = tuple(
         goals_by_action_index[evaluation.action_index]
         for evaluation in ranked_evaluations
@@ -372,9 +384,98 @@ def _ranking_key(
     evaluation: PathCandidateEvaluation,
     goals_by_action_index: dict[int, GoalCandidate],
     scores: dict[int, float],
-) -> tuple[float, float, int, int]:
+) -> tuple[float, int, int, float, int, int]:
     goal = goals_by_action_index[evaluation.action_index]
-    return (-scores[evaluation.action_index], -goal.utility, goal.cell[0], goal.cell[1])
+    return (
+        -scores[evaluation.action_index],
+        0 if evaluation.result.feasible else 1,
+        1 if evaluation.result.replan_required else 0,
+        -goal.utility,
+        goal.cell[0],
+        goal.cell[1],
+    )
+
+
+def _contract_aware_preferred_evaluation(
+    evaluations: tuple[PathCandidateEvaluation, ...],
+    *,
+    goals_by_action_index: dict[int, GoalCandidate],
+    scores: dict[int, float],
+    config: AnchorProjectionCandidateConfig,
+) -> PathCandidateEvaluation | None:
+    if not config.enabled or not config.prefer_contract_safe_trainable_targets:
+        return None
+    eligible = [
+        evaluation
+        for evaluation in evaluations
+        if _contract_safe_trainable_evaluation(evaluation, config=config)
+        and not _source_selection_quality_regression(evaluation, evaluations, config=config)
+    ]
+    if not eligible:
+        return None
+    return min(eligible, key=lambda evaluation: _ranking_key(evaluation, goals_by_action_index, scores))
+
+
+def _contract_safe_trainable_evaluation(
+    evaluation: PathCandidateEvaluation,
+    *,
+    config: AnchorProjectionCandidateConfig,
+) -> bool:
+    generation = evaluation.candidate_generation if isinstance(evaluation.candidate_generation, dict) else {}
+    if generation.get("candidate_role") != "projected_execution_target":
+        return False
+    if generation.get("target_binding_mode") != "same_action_execution_substitute":
+        return False
+    if generation.get("ppo_consumable_action") is not True:
+        return False
+    if generation.get("contract_safe") is not True:
+        return False
+    if generation.get("anchor_reachable") is not True:
+        return False
+    distance_cells = _finite_float(generation.get("projection_distance_cells"))
+    distance_m = _finite_float(generation.get("projection_distance_m"))
+    return (
+        evaluation.result.feasible
+        and not evaluation.result.replan_required
+        and distance_cells <= float(config.max_trainable_projection_distance_cells)
+        and distance_m <= float(config.max_trainable_projection_distance_m)
+    )
+
+
+def _source_selection_quality_regression(
+    evaluation: PathCandidateEvaluation,
+    evaluations: tuple[PathCandidateEvaluation, ...],
+    *,
+    config: AnchorProjectionCandidateConfig,
+) -> bool:
+    alternatives = [
+        item
+        for item in evaluations
+        if item is not evaluation
+        and item.result.feasible
+        and not item.result.replan_required
+    ]
+    if not alternatives:
+        return False
+    alternative = min(
+        alternatives,
+        key=lambda item: (
+            float(item.result.path_cost),
+            float(item.result.risk),
+            -float(item.utility),
+            item.cell[0],
+            item.cell[1],
+        ),
+    )
+    path_margin = float(evaluation.result.path_cost) - float(alternative.result.path_cost)
+    risk_margin = float(evaluation.result.risk) - float(alternative.result.risk)
+    return (
+        config.max_source_selection_path_cost_regression is not None
+        and path_margin > float(config.max_source_selection_path_cost_regression)
+    ) or (
+        config.max_source_selection_risk_regression is not None
+        and risk_margin > float(config.max_source_selection_risk_regression)
+    )
 
 
 def _coverage_value(goal: GoalCandidate) -> float:

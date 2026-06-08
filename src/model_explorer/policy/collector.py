@@ -9,7 +9,13 @@ from ..io.scenario import Scenario
 from .execution import ExecutionFeasibilityAdapter, ExecutionFeasibilityRequest
 from .features import extract_policy_observation
 from .feedback_selection import select_goal_with_path_feedback
-from .planning import ContractCostPlanner, PathPlanRequest, PathPlanResult, PathPlanningAdapter
+from .planning import (
+    AnchorProjectionCandidateConfig,
+    ContractCostPlanner,
+    PathPlanRequest,
+    PathPlanResult,
+    PathPlanningAdapter,
+)
 from .provider import ContractProvider, ProviderStepRequest, SequenceContractProvider
 from .reward import compute_step_reward
 from .rollout import EpisodeMetrics, RolloutEpisode, RolloutInfo, RolloutTransition
@@ -21,6 +27,7 @@ def collect_rollout_episode(
     policy=None,
     max_candidates: int | None = None,
     planning_adapter: PathPlanningAdapter | None = None,
+    anchor_projection_candidate_config: AnchorProjectionCandidateConfig | dict[str, Any] | None = None,
     reward_config: dict[str, Any] | None = None,
     selection_strategy: str = "auto",
 ) -> RolloutEpisode:
@@ -39,6 +46,7 @@ def collect_rollout_episode(
         max_steps=len(snapshots),
         max_candidates=max_candidates,
         planning_adapter=planning_adapter,
+        anchor_projection_candidate_config=anchor_projection_candidate_config,
         reward_config=reward_config,
         rollout_metadata=rollout_metadata,
         selection_strategy=selection_strategy,
@@ -52,6 +60,7 @@ def collect_dynamic_rollout_episode(
     max_steps: int | None = None,
     max_candidates: int | None = None,
     planning_adapter: PathPlanningAdapter | None = None,
+    anchor_projection_candidate_config: AnchorProjectionCandidateConfig | dict[str, Any] | None = None,
     execution_adapter: ExecutionFeasibilityAdapter | None = None,
     reward_config: dict[str, Any] | None = None,
     rollout_metadata: dict[str, Any] | None = None,
@@ -91,6 +100,7 @@ def collect_dynamic_rollout_episode(
             step_index=step_index,
             max_candidates=max_candidates,
             selection_strategy=requested_selection_strategy,
+            anchor_projection_candidate_config=anchor_projection_candidate_config,
         )
         selected_goal = decision.selected_goal
         failure_reason = None if selected_goal is not None else "no_reachable_goal"
@@ -285,6 +295,7 @@ def _select_rollout_goal(
     step_index: int,
     max_candidates: int | None,
     selection_strategy: str,
+    anchor_projection_candidate_config: AnchorProjectionCandidateConfig | dict[str, Any] | None,
 ):
     if policy is not None:
         return select_goal(contract, policy=policy), "external_policy", None
@@ -300,6 +311,7 @@ def _select_rollout_goal(
                 current_cell=current_cell,
                 step_index=step_index,
                 top_k=max_candidates,
+                anchor_projection_candidate_config=anchor_projection_candidate_config,
             )
             return feedback_selection.decision, "feedback_aware", feedback_selection
         return select_goal(contract), "coverage_heuristic", None
@@ -311,6 +323,7 @@ def _select_rollout_goal(
             current_cell=current_cell,
             step_index=step_index,
             top_k=max_candidates,
+            anchor_projection_candidate_config=anchor_projection_candidate_config,
         )
         return feedback_selection.decision, "feedback_aware", feedback_selection
     return select_goal(contract), "coverage_heuristic", None

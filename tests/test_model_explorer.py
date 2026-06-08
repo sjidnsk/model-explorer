@@ -1594,6 +1594,259 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(feasibility["anchor_projection"]["training_use"], "not_positive_evidence")
         self.assertEqual(feasibility["anchor_projection"]["sample_weight"], 0.0)
 
+    def test_contract_aware_anchor_projection_adds_same_action_execution_substitute(self):
+        from model_explorer.policy.planning import (
+            AnchorProjectionCandidateConfig,
+            PathPlanResult,
+            evaluate_candidate_paths,
+            path_feedback_summary,
+        )
+
+        request_payload = {
+            "schema_version": "path-planner-request/v1",
+            "grid": {
+                "width": 4,
+                "height": 3,
+                "resolution": 1.0,
+                "origin": [0.0, 0.0],
+                "frame_id": "moon_local",
+            },
+            "cost": [[1.0, 1.0, 1.0, 1.0] for _ in range(3)],
+            "passable_mask": [
+                [True, True, False, True],
+                [True, True, True, True],
+                [True, True, True, True],
+            ],
+            "start": [0, 0],
+            "goal": [2, 1],
+            "metadata": {"passable_mask_source": "configured"},
+        }
+
+        class ContractAwarePlanner:
+            def __init__(self):
+                self.requested = []
+
+            def plan(self, request):
+                self.requested.append(
+                    {
+                        "action_index": request.action_index,
+                        "selected_cell": request.selected_goal.cell,
+                        "execution_goal_cell": request.metadata.get("execution_goal_cell"),
+                    }
+                )
+                payload = json.loads(json.dumps(request_payload))
+                payload["goal"] = [request.selected_goal.cell[0], request.selected_goal.cell[1]]
+                metadata = {
+                    "request_payload": payload,
+                    "diagnostics": {
+                        "search_mode": "platform_aware_astar",
+                        "passable_source": "inflated_passable_mask",
+                        "footprint_radius_m": 1.0,
+                    },
+                }
+                if request.selected_goal.cell == (2, 1):
+                    return PathPlanResult(
+                        feasible=False,
+                        failure_reason="goal_blocked",
+                        replan_required=True,
+                        metadata=metadata,
+                    )
+                return PathPlanResult(
+                    feasible=True,
+                    path_cost=2.0,
+                    path_length=2.0,
+                    risk=0.1,
+                    metadata=metadata,
+                )
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [2, 1], "utility": 0.9, "reachable": True},
+                    {"cell": [0, 2], "utility": 0.4, "reachable": True},
+                ]
+            )
+        )
+        planner = ContractAwarePlanner()
+
+        evaluations = evaluate_candidate_paths(
+            contract,
+            current_cell=(0, 0),
+            top_k=2,
+            planner=planner,
+            anchor_projection_candidate_config=AnchorProjectionCandidateConfig(
+                enabled=True,
+                contract_aware_trainable_target_generation=True,
+                prefer_contract_safe_trainable_targets=True,
+            ),
+        )
+        summary = path_feedback_summary(evaluations)
+        same_action = summary["candidates"][1]
+
+        self.assertEqual(
+            planner.requested,
+            [
+                {"action_index": 0, "selected_cell": (2, 1), "execution_goal_cell": None},
+                {"action_index": 0, "selected_cell": (1, 1), "execution_goal_cell": [1, 1]},
+                {"action_index": 2, "selected_cell": (1, 1), "execution_goal_cell": [1, 1]},
+                {"action_index": 1, "selected_cell": (0, 2), "execution_goal_cell": None},
+            ],
+        )
+        self.assertEqual(same_action["action_index"], 0)
+        self.assertEqual(same_action["source_action_index"], 0)
+        self.assertEqual(same_action["cell"], [2, 1])
+        self.assertEqual(same_action["policy_target_cell"], [2, 1])
+        self.assertEqual(same_action["execution_goal_cell"], [1, 1])
+        generation = same_action["candidate_generation"]
+        self.assertEqual(generation["candidate_role"], "projected_execution_target")
+        self.assertEqual(generation["target_binding_mode"], "same_action_execution_substitute")
+        self.assertTrue(generation["ppo_consumable_action"])
+        self.assertTrue(generation["contract_safe"])
+        self.assertEqual(generation["trainability_gate"]["status"], "eligible_if_source_selected")
+        self.assertEqual(generation["trainability_gate"]["reason_codes"], [])
+
+    def test_contract_aware_selection_rejects_quality_regression_before_preference(self):
+        from model_explorer.policy.path_feedback import _selected_after_feedback
+        from model_explorer.policy.planning import (
+            AnchorProjectionCandidateConfig,
+            PathCandidateEvaluation,
+            PathPlanResult,
+        )
+
+        generation = {
+            "schema_version": "anchor-projection-candidate/v1",
+            "candidate_role": "projected_execution_target",
+            "target_binding_mode": "same_action_execution_substitute",
+            "source_action_index": 0,
+            "policy_target_cell": [2, 1],
+            "execution_goal_cell": [1, 1],
+            "projected_anchor_cell": [1, 1],
+            "projection_distance_cells": 1,
+            "projection_distance_m": 1.0,
+            "anchor_reachable": True,
+            "comparison_scope": "projected_target_anchor_contrast",
+            "scope": "projected_target_anchor_contrast",
+            "training_use": "not_positive_evidence",
+            "sample_weight": 0.0,
+            "reject_reason": "pending_source_selection",
+            "source_selection_status": "pending_source_selection",
+            "evidence_boundary": "source_candidate_pending_selection_not_audit_proxy",
+            "audit_proxy_positive_evidence": False,
+            "ppo_consumable_action": True,
+            "contract_safe": True,
+            "trainability_gate": {"status": "eligible_if_source_selected", "reason_codes": []},
+        }
+        same_action = PathCandidateEvaluation(
+            action_index=0,
+            cell=(2, 1),
+            utility=0.9,
+            result=PathPlanResult(feasible=True, path_cost=10.0, path_length=10.0, risk=0.6),
+            source_action_index=0,
+            candidate_generation=dict(generation),
+        )
+        alternative = PathCandidateEvaluation(
+            action_index=1,
+            cell=(0, 2),
+            utility=0.5,
+            result=PathPlanResult(feasible=True, path_cost=3.0, path_length=3.0, risk=0.2),
+        )
+
+        selected = _selected_after_feedback(
+            (same_action, alternative),
+            anchor_projection_candidate_config=AnchorProjectionCandidateConfig(
+                enabled=True,
+                contract_aware_trainable_target_generation=True,
+                prefer_contract_safe_trainable_targets=True,
+                max_source_selection_path_cost_regression=2.0,
+                max_source_selection_risk_regression=0.2,
+            ),
+        )
+
+        self.assertIs(selected, alternative)
+
+    def test_contract_aware_rollout_keeps_teacher_action_mask_consumable(self):
+        from model_explorer.policy.collector import collect_rollout_episode
+        from model_explorer.policy.planning import AnchorProjectionCandidateConfig, PathPlanResult
+
+        request_payload = {
+            "schema_version": "path-planner-request/v1",
+            "grid": {
+                "width": 4,
+                "height": 3,
+                "resolution": 1.0,
+                "origin": [0.0, 0.0],
+                "frame_id": "moon_local",
+            },
+            "cost": [[1.0, 1.0, 1.0, 1.0] for _ in range(3)],
+            "passable_mask": [
+                [True, True, False, True],
+                [True, True, True, True],
+                [True, True, True, True],
+            ],
+            "start": [0, 0],
+            "goal": [2, 1],
+            "metadata": {"passable_mask_source": "configured"},
+        }
+
+        class ContractAwarePlanner:
+            def plan(self, request):
+                payload = json.loads(json.dumps(request_payload))
+                payload["goal"] = [request.selected_goal.cell[0], request.selected_goal.cell[1]]
+                metadata = {
+                    "request_payload": payload,
+                    "diagnostics": {
+                        "search_mode": "platform_aware_astar",
+                        "passable_source": "inflated_passable_mask",
+                        "footprint_radius_m": 1.0,
+                    },
+                }
+                if request.selected_goal.cell == (2, 1):
+                    return PathPlanResult(
+                        feasible=False,
+                        failure_reason="goal_blocked",
+                        replan_required=True,
+                        metadata=metadata,
+                    )
+                return PathPlanResult(
+                    feasible=True,
+                    path_cost=2.0,
+                    path_length=2.0,
+                    risk=0.1,
+                    metadata=metadata,
+                )
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [2, 1], "utility": 0.9, "reachable": True},
+                    {"cell": [0, 2], "utility": 0.4, "reachable": True},
+                ],
+                observation_update={"coverage_rate": 0.1, "coverage_rate_delta": 0.2},
+            )
+        )
+
+        episode = collect_rollout_episode(
+            [contract],
+            planning_adapter=ContractAwarePlanner(),
+            selection_strategy="feedback_aware",
+            max_candidates=2,
+            anchor_projection_candidate_config=AnchorProjectionCandidateConfig(
+                enabled=True,
+                contract_aware_trainable_target_generation=True,
+                prefer_contract_safe_trainable_targets=True,
+            ),
+        )
+
+        transition = episode.transitions[0]
+        self.assertEqual(transition.action_index, 0)
+        self.assertTrue(transition.observation.action_mask[transition.action_index])
+        self.assertEqual(transition.info.selected_cell, (2, 1))
+        self.assertEqual(transition.info.extra["teacher_action_index"], 0)
+        self.assertEqual(
+            transition.info.extra["planning_metadata"]["request_payload"]["goal"],
+            [1, 1],
+        )
+
     def test_anchor_projection_candidate_generation_does_not_generate_unreachable_anchor(self):
         from model_explorer.policy.planning import (
             AnchorProjectionCandidateConfig,

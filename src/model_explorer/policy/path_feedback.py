@@ -1188,6 +1188,8 @@ def annotate_source_selected_anchor_projection(
             alternative=best_alternative,
             config=projection_config,
         )
+        contract_aware_mode = projection_config.contract_aware_trainable_target_generation
+        ppo_consumable_trainable = _contract_safe_trainable_candidate(candidate, config=projection_config)
         if source_selected and candidate.get("reachable") is True and not bool(candidate.get("replan_required")):
             if quality_regression:
                 update = {
@@ -1198,6 +1200,19 @@ def annotate_source_selected_anchor_projection(
                     "comparison_scope": "projected_target_anchor_contrast",
                     "scope": "projected_target_anchor_contrast",
                     "evidence_boundary": "source_selected_projected_target_quality_regression_not_positive_evidence",
+                    "audit_proxy_positive_evidence": False,
+                    "source_selection_path_cost_bonus": projection_config.source_selection_path_cost_bonus,
+                    "source_selection_adjusted_path_cost": adjusted_path_cost,
+                }
+            elif contract_aware_mode and not ppo_consumable_trainable:
+                update = {
+                    "training_use": "not_positive_evidence",
+                    "sample_weight": 0.0,
+                    "reject_reason": "not_ppo_consumable_action",
+                    "source_selection_status": "source_selected_not_ppo_consumable",
+                    "comparison_scope": "projected_target_anchor_contrast",
+                    "scope": "projected_target_anchor_contrast",
+                    "evidence_boundary": "source_selected_projected_target_not_ppo_consumable",
                     "audit_proxy_positive_evidence": False,
                     "source_selection_path_cost_bonus": projection_config.source_selection_path_cost_bonus,
                     "source_selection_adjusted_path_cost": adjusted_path_cost,
@@ -1233,6 +1248,12 @@ def annotate_source_selected_anchor_projection(
                 "source_selection_adjusted_path_cost": adjusted_path_cost,
             }
             quality_update["source_selection_quality_regression"] = False
+        update["trainability_gate"] = _updated_trainability_gate(
+            generation.get("trainability_gate"),
+            update=update,
+            ppo_consumable_trainable=ppo_consumable_trainable,
+            contract_aware_mode=contract_aware_mode,
+        )
         update.update(quality_update)
         generation.update(update)
         feasibility = candidate.get("platform_goal_feasibility")
@@ -1242,6 +1263,40 @@ def annotate_source_selected_anchor_projection(
             projection.update(update)
             projection["same_cell_positive_evidence"] = False
     return feedback
+
+
+def _updated_trainability_gate(
+    value: Any,
+    *,
+    update: dict[str, Any],
+    ppo_consumable_trainable: bool,
+    contract_aware_mode: bool,
+) -> dict[str, Any]:
+    gate = dict(value) if isinstance(value, dict) else {}
+    reason_codes = [
+        str(item)
+        for item in gate.get("reason_codes", [])
+        if item is not None
+    ] if isinstance(gate.get("reason_codes"), list) else []
+    reject_reason = update.get("reject_reason")
+    if reject_reason and reject_reason not in reason_codes:
+        reason_codes.append(str(reject_reason))
+    if update.get("training_use") == "trainable_anchor_projection_contrast":
+        status = "selected_trainable"
+        reason_codes = []
+    elif update.get("source_selection_status") == "pending_source_selection":
+        status = "eligible_if_source_selected"
+    else:
+        status = "rejected"
+    gate.update(
+        {
+            "status": status,
+            "reason_codes": reason_codes,
+            "ppo_consumable_action": bool(gate.get("ppo_consumable_action", ppo_consumable_trainable)),
+            "contract_safe": bool(gate.get("contract_safe", ppo_consumable_trainable or not contract_aware_mode)),
+        }
+    )
+    return gate
 
 
 def _anchor_projection_candidate_config(manifest: PathFeedbackManifest) -> AnchorProjectionCandidateConfig:
@@ -1281,6 +1336,9 @@ def _selected_after_feedback(
         feasible = [item for item in evaluations if item.result.feasible]
     if not feasible:
         return None
+    preferred = _contract_aware_preferred_selection(feasible, config=projection_config)
+    if preferred is not None:
+        return preferred
     return min(
         feasible,
         key=lambda item: _source_selection_key(item, config=projection_config),
@@ -1318,7 +1376,82 @@ def _anchor_projection_adjusted_path_cost(
         return path_cost
     if candidate_generation.get("anchor_reachable") is not True:
         return path_cost
+    if config.prefer_contract_safe_trainable_targets and not _contract_safe_trainable_candidate(
+        evaluation_or_candidate,
+        config=config,
+    ):
+        return path_cost
     return path_cost - float(config.source_selection_path_cost_bonus)
+
+
+def _contract_aware_preferred_selection(
+    evaluations: list[Any],
+    *,
+    config: AnchorProjectionCandidateConfig,
+) -> Any | None:
+    if not config.enabled or not config.prefer_contract_safe_trainable_targets:
+        return None
+    candidate_payloads = [_selection_payload(item) for item in evaluations]
+    eligible: list[Any] = []
+    for evaluation, payload in zip(evaluations, candidate_payloads):
+        if not _contract_safe_trainable_candidate(payload, config=config):
+            continue
+        alternative = _best_source_selection_alternative(
+            candidate_payloads,
+            selected_action_index=payload.get("action_index"),
+            selected_cell=_cell_tuple(payload.get("cell")),
+        )
+        quality_regression, _ = _anchor_projection_source_selection_quality(
+            payload,
+            alternative=alternative,
+            config=config,
+        )
+        if not quality_regression:
+            eligible.append(evaluation)
+    if not eligible:
+        return None
+    return min(eligible, key=lambda item: _source_selection_key(item, config=config))
+
+
+def _contract_safe_trainable_candidate(
+    evaluation_or_candidate: Any,
+    *,
+    config: AnchorProjectionCandidateConfig,
+) -> bool:
+    generation = _candidate_generation_for_selection(evaluation_or_candidate)
+    if generation.get("candidate_role") != "projected_execution_target":
+        return False
+    if generation.get("target_binding_mode") != "same_action_execution_substitute":
+        return False
+    if generation.get("ppo_consumable_action") is not True:
+        return False
+    if generation.get("contract_safe") is not True:
+        return False
+    if generation.get("anchor_reachable") is not True:
+        return False
+    distance_cells = _candidate_float(generation, "projection_distance_cells", float("inf"))
+    distance_m = _candidate_float(generation, "projection_distance_m", float("inf"))
+    return (
+        distance_cells <= float(config.max_trainable_projection_distance_cells)
+        and distance_m <= float(config.max_trainable_projection_distance_m)
+    )
+
+
+def _selection_payload(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    return {
+        "action_index": getattr(value, "action_index", None),
+        "source_action_index": getattr(value, "source_action_index", None),
+        "cell": _list_cell(getattr(value, "cell", None)),
+        "candidate_role": _candidate_generation_for_selection(value).get("candidate_role", "policy_target"),
+        "reachable": bool(getattr(value.result, "feasible", False)),
+        "replan_required": bool(getattr(value.result, "replan_required", False)),
+        "path_cost": float(getattr(value.result, "path_cost", 0.0)),
+        "risk": float(getattr(value.result, "risk", 0.0)),
+        "utility": float(getattr(value, "utility", 0.0)),
+        "candidate_generation": dict(_candidate_generation_for_selection(value)),
+    }
 
 
 def _best_source_selection_alternative(
@@ -1424,6 +1557,7 @@ def _anchor_projection_candidate_generation_summary(
     source_selected_count = 0
     trainable_count = 0
     nontrainable_count = 0
+    ppo_consumable_trainable_count = 0
     positive_audit_proxy_count = 0
     reject_reason_counts: Counter[str] = Counter()
     for scenario in scenarios:
@@ -1445,6 +1579,8 @@ def _anchor_projection_candidate_generation_summary(
                 source_selected_count += 1
             if generation.get("training_use") == "trainable_anchor_projection_contrast":
                 trainable_count += 1
+                if generation.get("ppo_consumable_action") is True:
+                    ppo_consumable_trainable_count += 1
                 if generation.get("comparison_scope") == "audit_proxy_anchor_not_same_cell":
                     positive_audit_proxy_count += 1
             else:
@@ -1456,6 +1592,7 @@ def _anchor_projection_candidate_generation_summary(
         "anchor_projection_candidate_generated_count": generated_count,
         "anchor_projection_source_selected_count": source_selected_count,
         "trainable_anchor_projection_count": trainable_count,
+        "ppo_consumable_trainable_target_count": ppo_consumable_trainable_count,
         "nontrainable_anchor_projection_count": nontrainable_count,
         "positive_training_evidence_contains_audit_proxy_anchor_count": positive_audit_proxy_count,
         "anchor_projection_candidate_reject_reason_counts": dict(sorted(reject_reason_counts.items())),

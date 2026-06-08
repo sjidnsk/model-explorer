@@ -54,6 +54,10 @@ class AnchorProjectionCandidateConfig:
     source_selection_path_cost_bonus: float = 0.0
     max_source_selection_path_cost_regression: float | None = None
     max_source_selection_risk_regression: float | None = None
+    contract_aware_trainable_target_generation: bool = False
+    prefer_contract_safe_trainable_targets: bool = False
+    max_trainable_projection_distance_cells: int = 2
+    max_trainable_projection_distance_m: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -508,6 +512,18 @@ def evaluate_candidate_paths(
             selection_goal=goal,
         )
         evaluations.append(evaluation)
+        same_action = _same_action_anchor_projection_candidate_evaluation(
+            contract=contract,
+            current_cell=current_cell,
+            step_index=step_index,
+            source_action_index=action_index,
+            goal=goal,
+            source_result=result,
+            planner=planner,
+            config=projection_config,
+        )
+        if same_action is not None:
+            evaluations.append(same_action)
         evaluated_policy_candidate_count += 1
         projected = _projected_anchor_candidate_evaluation(
             contract=contract,
@@ -552,6 +568,112 @@ def anchor_projection_candidate_config_from_mapping(
         max_source_selection_risk_regression=_optional_nonnegative_float(
             value.get("max_source_selection_risk_regression")
         ),
+        contract_aware_trainable_target_generation=bool(
+            value.get("contract_aware_trainable_target_generation", False)
+        ),
+        prefer_contract_safe_trainable_targets=bool(
+            value.get("prefer_contract_safe_trainable_targets", False)
+        ),
+        max_trainable_projection_distance_cells=_optional_nonnegative_int(
+            value.get("max_trainable_projection_distance_cells")
+        )
+        if value.get("max_trainable_projection_distance_cells") is not None
+        else 2,
+        max_trainable_projection_distance_m=_optional_nonnegative_float(
+            value.get("max_trainable_projection_distance_m")
+        )
+        if value.get("max_trainable_projection_distance_m") is not None
+        else 1.0,
+    )
+
+
+def _same_action_anchor_projection_candidate_evaluation(
+    *,
+    contract: ModelExplorerContract,
+    current_cell: tuple[int, int],
+    step_index: int,
+    source_action_index: int,
+    goal: GoalCandidate,
+    source_result: PathPlanResult,
+    planner: PathPlanningAdapter,
+    config: AnchorProjectionCandidateConfig,
+) -> PathCandidateEvaluation | None:
+    if not config.enabled or not config.contract_aware_trainable_target_generation:
+        return None
+    source_feasibility = _platform_goal_feasibility(cell=goal.cell, result=source_result)
+    if source_feasibility.get("classification") != "platform_inflated_goal_blocked":
+        return None
+    projection = source_feasibility.get("anchor_projection")
+    projection = projection if isinstance(projection, dict) else {}
+    anchor = _cell_pair(
+        projection.get("projected_anchor_cell")
+        or projection.get("nearest_inflated_passable_anchor")
+        or source_feasibility.get("nearest_inflated_passable_anchor")
+    )
+    if anchor is None:
+        return None
+    anchor_reachable = bool(projection.get("anchor_reachable"))
+    if config.require_anchor_reachable and not anchor_reachable:
+        return None
+    distance_cells = _optional_nonnegative_int(projection.get("projection_distance_cells"))
+    distance_m = _optional_nonnegative_float(projection.get("projection_distance_m"))
+    contract_reasons = _trainability_distance_reject_reasons(
+        distance_cells=distance_cells,
+        distance_m=distance_m,
+        config=config,
+    )
+    if contract_reasons:
+        return None
+
+    execution_goal = GoalCandidate(
+        cell=anchor,
+        utility=goal.utility,
+        reachable=True,
+        experimental={
+            **goal.experimental,
+            "anchor_projection_source_action_index": source_action_index,
+            "anchor_projection_policy_target_cell": [goal.cell[0], goal.cell[1]],
+            "anchor_projection_execution_goal_cell": [anchor[0], anchor[1]],
+            "anchor_projection_target_binding_mode": "same_action_execution_substitute",
+        },
+    )
+    projected_result = planner.plan(
+        PathPlanRequest(
+            contract=contract,
+            step_index=step_index,
+            action_index=source_action_index,
+            selected_goal=execution_goal,
+            current_cell=current_cell,
+            metadata={
+                "anchor_projection_candidate_generation": True,
+                "contract_aware_trainable_target_generation": True,
+                "target_binding_mode": "same_action_execution_substitute",
+                "source_action_index": source_action_index,
+                "policy_target_cell": [goal.cell[0], goal.cell[1]],
+                "execution_goal_cell": [anchor[0], anchor[1]],
+            },
+        )
+    )
+    candidate_generation = _anchor_projection_candidate_generation_payload(
+        source_action_index=source_action_index,
+        policy_target=goal.cell,
+        execution_goal=anchor,
+        projection=projection,
+        distance_cells=distance_cells,
+        distance_m=distance_m,
+        anchor_reachable=anchor_reachable,
+        target_binding_mode="same_action_execution_substitute",
+        ppo_consumable_action=True,
+        contract_safe=True,
+    )
+    return PathCandidateEvaluation(
+        action_index=source_action_index,
+        cell=goal.cell,
+        utility=goal.utility,
+        result=projected_result,
+        selection_goal=goal,
+        source_action_index=source_action_index,
+        candidate_generation=candidate_generation,
     )
 
 
@@ -625,14 +747,60 @@ def _projected_anchor_candidate_evaluation(
             },
         )
     )
-    candidate_generation = {
+    contract_reasons = _trainability_distance_reject_reasons(
+        distance_cells=distance_cells,
+        distance_m=distance_m,
+        config=config,
+    )
+    candidate_generation = _anchor_projection_candidate_generation_payload(
+        source_action_index=source_action_index,
+        policy_target=goal.cell,
+        execution_goal=anchor,
+        projection=projection,
+        distance_cells=distance_cells,
+        distance_m=distance_m,
+        anchor_reachable=anchor_reachable,
+        target_binding_mode="synthetic_projection",
+        ppo_consumable_action=False,
+        contract_safe=not contract_reasons,
+        extra_reject_reasons=contract_reasons,
+    )
+    return PathCandidateEvaluation(
+        action_index=synthetic_action_index,
+        cell=anchor,
+        utility=goal.utility,
+        result=projected_result,
+        selection_goal=projected_goal,
+        source_action_index=source_action_index,
+        candidate_generation=candidate_generation,
+    )
+
+
+def _anchor_projection_candidate_generation_payload(
+    *,
+    source_action_index: int,
+    policy_target: tuple[int, int],
+    execution_goal: tuple[int, int],
+    projection: dict[str, Any],
+    distance_cells: int | None,
+    distance_m: float | None,
+    anchor_reachable: bool,
+    target_binding_mode: str,
+    ppo_consumable_action: bool,
+    contract_safe: bool,
+    extra_reject_reasons: list[str] | None = None,
+) -> dict[str, Any]:
+    reason_codes = list(extra_reject_reasons or [])
+    trainability_status = "eligible_if_source_selected" if contract_safe else "rejected"
+    return {
         "schema_version": "anchor-projection-candidate/v1",
         "candidate_role": "projected_execution_target",
+        "target_binding_mode": target_binding_mode,
         "source": "anchor_projection_candidate_generation",
         "source_action_index": source_action_index,
-        "policy_target_cell": [goal.cell[0], goal.cell[1]],
-        "execution_goal_cell": [anchor[0], anchor[1]],
-        "projected_anchor_cell": [anchor[0], anchor[1]],
+        "policy_target_cell": [policy_target[0], policy_target[1]],
+        "execution_goal_cell": [execution_goal[0], execution_goal[1]],
+        "projected_anchor_cell": [execution_goal[0], execution_goal[1]],
         "projection_distance_cells": distance_cells,
         "projection_distance_m": distance_m,
         "anchor_reachable": anchor_reachable,
@@ -662,16 +830,36 @@ def _projected_anchor_candidate_evaluation(
         "source_selection_status": "pending_source_selection",
         "evidence_boundary": "source_candidate_pending_selection_not_audit_proxy",
         "audit_proxy_positive_evidence": False,
+        "ppo_consumable_action": bool(ppo_consumable_action),
+        "contract_safe": bool(contract_safe),
+        "trainability_gate": {
+            "status": trainability_status,
+            "reason_codes": reason_codes,
+            "ppo_consumable_action": bool(ppo_consumable_action),
+            "source_action_index": source_action_index,
+            "policy_target_cell": [policy_target[0], policy_target[1]],
+            "execution_goal_cell": [execution_goal[0], execution_goal[1]],
+            "contract_safe": bool(contract_safe),
+        },
     }
-    return PathCandidateEvaluation(
-        action_index=synthetic_action_index,
-        cell=anchor,
-        utility=goal.utility,
-        result=projected_result,
-        selection_goal=projected_goal,
-        source_action_index=source_action_index,
-        candidate_generation=candidate_generation,
-    )
+
+
+def _trainability_distance_reject_reasons(
+    *,
+    distance_cells: int | None,
+    distance_m: float | None,
+    config: AnchorProjectionCandidateConfig,
+) -> list[str]:
+    reasons: list[str] = []
+    if distance_cells is None:
+        reasons.append("projection_distance_cells_missing")
+    elif distance_cells > config.max_trainable_projection_distance_cells:
+        reasons.append("projection_distance_cells_exceeds_contract")
+    if distance_m is None:
+        reasons.append("projection_distance_m_missing")
+    elif distance_m > config.max_trainable_projection_distance_m:
+        reasons.append("projection_distance_m_exceeds_contract")
+    return reasons
 
 
 def path_feedback_summary(evaluations: Sequence[PathCandidateEvaluation]) -> dict[str, Any]:
@@ -1417,6 +1605,10 @@ def _with_projected_anchor_feasibility(
                 "source_candidate_pending_selection_not_audit_proxy",
             ),
             "audit_proxy_positive_evidence": False,
+            "target_binding_mode": candidate_generation.get("target_binding_mode"),
+            "ppo_consumable_action": bool(candidate_generation.get("ppo_consumable_action", False)),
+            "contract_safe": bool(candidate_generation.get("contract_safe", False)),
+            "trainability_gate": candidate_generation.get("trainability_gate"),
         }
     )
     payload["anchor_projection"] = projection
