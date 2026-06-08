@@ -408,12 +408,23 @@ def _contract_aware_preferred_evaluation(
     eligible = [
         evaluation
         for evaluation in evaluations
-        if _contract_safe_trainable_evaluation(evaluation, config=config)
+        if _preferred_trainable_evaluation(evaluation, config=config)
         and not _source_selection_quality_regression(evaluation, evaluations, config=config)
     ]
     if not eligible:
         return None
     return min(eligible, key=lambda evaluation: _ranking_key(evaluation, goals_by_action_index, scores))
+
+
+def _preferred_trainable_evaluation(
+    evaluation: PathCandidateEvaluation,
+    *,
+    config: AnchorProjectionCandidateConfig,
+) -> bool:
+    return _contract_safe_trainable_evaluation(
+        evaluation,
+        config=config,
+    ) or _planner_validated_distance_exception_evaluation(evaluation, config=config)
 
 
 def _contract_safe_trainable_evaluation(
@@ -439,6 +450,37 @@ def _contract_safe_trainable_evaluation(
         and not evaluation.result.replan_required
         and distance_cells <= float(config.max_trainable_projection_distance_cells)
         and distance_m <= float(config.max_trainable_projection_distance_m)
+    )
+
+
+def _planner_validated_distance_exception_evaluation(
+    evaluation: PathCandidateEvaluation,
+    *,
+    config: AnchorProjectionCandidateConfig,
+) -> bool:
+    if (
+        not config.planner_validated_trainable_target_mining
+        or not config.allow_planner_validated_distance_exception
+    ):
+        return False
+    generation = evaluation.candidate_generation if isinstance(evaluation.candidate_generation, dict) else {}
+    if generation.get("candidate_role") != "projected_execution_target":
+        return False
+    if generation.get("target_binding_mode") != "same_action_execution_substitute":
+        return False
+    if generation.get("ppo_consumable_action") is not True:
+        return False
+    if generation.get("anchor_reachable") is not True:
+        return False
+    if generation.get("planner_validated_exception_safe") is not True:
+        return False
+    distance_cells = _finite_float(generation.get("projection_distance_cells"))
+    distance_m = _finite_float(generation.get("projection_distance_m"))
+    return (
+        evaluation.result.feasible
+        and not evaluation.result.replan_required
+        and distance_cells <= float(config.max_planner_validated_distance_cells)
+        and distance_m <= float(config.max_planner_validated_distance_m)
     )
 
 

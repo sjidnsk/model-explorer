@@ -1190,6 +1190,10 @@ def annotate_source_selected_anchor_projection(
         )
         contract_aware_mode = projection_config.contract_aware_trainable_target_generation
         ppo_consumable_trainable = _contract_safe_trainable_candidate(candidate, config=projection_config)
+        planner_validated_exception = _planner_validated_distance_exception_candidate(
+            candidate,
+            config=projection_config,
+        )
         if source_selected and candidate.get("reachable") is True and not bool(candidate.get("replan_required")):
             if quality_regression:
                 update = {
@@ -1204,7 +1208,7 @@ def annotate_source_selected_anchor_projection(
                     "source_selection_path_cost_bonus": projection_config.source_selection_path_cost_bonus,
                     "source_selection_adjusted_path_cost": adjusted_path_cost,
                 }
-            elif contract_aware_mode and not ppo_consumable_trainable:
+            elif contract_aware_mode and not ppo_consumable_trainable and not planner_validated_exception:
                 update = {
                     "training_use": "not_positive_evidence",
                     "sample_weight": 0.0,
@@ -1216,6 +1220,23 @@ def annotate_source_selected_anchor_projection(
                     "audit_proxy_positive_evidence": False,
                     "source_selection_path_cost_bonus": projection_config.source_selection_path_cost_bonus,
                     "source_selection_adjusted_path_cost": adjusted_path_cost,
+                }
+            elif contract_aware_mode and planner_validated_exception and not ppo_consumable_trainable:
+                update = {
+                    "training_use": "not_positive_evidence",
+                    "sample_weight": 0.0,
+                    "reject_reason": "planner_validated_distance_exception_pending_mining",
+                    "source_selection_status": "source_selected",
+                    "comparison_scope": "projected_target_anchor_contrast",
+                    "scope": "projected_target_anchor_contrast",
+                    "evidence_boundary": "source_selected_planner_validated_distance_exception_pending_mining",
+                    "audit_proxy_positive_evidence": False,
+                    "source_selection_path_cost_bonus": projection_config.source_selection_path_cost_bonus,
+                    "source_selection_adjusted_path_cost": adjusted_path_cost,
+                    "planner_validated_mining_decision": (
+                        "selected_planner_validated_distance_exception"
+                    ),
+                    "planner_validated_trainable_target_mining": True,
                 }
             else:
                 update = {
@@ -1379,7 +1400,7 @@ def _anchor_projection_adjusted_path_cost(
     if config.prefer_contract_safe_trainable_targets and not _contract_safe_trainable_candidate(
         evaluation_or_candidate,
         config=config,
-    ):
+    ) and not _planner_validated_distance_exception_candidate(evaluation_or_candidate, config=config):
         return path_cost
     return path_cost - float(config.source_selection_path_cost_bonus)
 
@@ -1394,7 +1415,7 @@ def _contract_aware_preferred_selection(
     candidate_payloads = [_selection_payload(item) for item in evaluations]
     eligible: list[Any] = []
     for evaluation, payload in zip(evaluations, candidate_payloads):
-        if not _contract_safe_trainable_candidate(payload, config=config):
+        if not _preferred_trainable_candidate(payload, config=config):
             continue
         alternative = _best_source_selection_alternative(
             candidate_payloads,
@@ -1411,6 +1432,17 @@ def _contract_aware_preferred_selection(
     if not eligible:
         return None
     return min(eligible, key=lambda item: _source_selection_key(item, config=config))
+
+
+def _preferred_trainable_candidate(
+    evaluation_or_candidate: Any,
+    *,
+    config: AnchorProjectionCandidateConfig,
+) -> bool:
+    return _contract_safe_trainable_candidate(
+        evaluation_or_candidate,
+        config=config,
+    ) or _planner_validated_distance_exception_candidate(evaluation_or_candidate, config=config)
 
 
 def _contract_safe_trainable_candidate(
@@ -1434,6 +1466,35 @@ def _contract_safe_trainable_candidate(
     return (
         distance_cells <= float(config.max_trainable_projection_distance_cells)
         and distance_m <= float(config.max_trainable_projection_distance_m)
+    )
+
+
+def _planner_validated_distance_exception_candidate(
+    evaluation_or_candidate: Any,
+    *,
+    config: AnchorProjectionCandidateConfig,
+) -> bool:
+    if (
+        not config.planner_validated_trainable_target_mining
+        or not config.allow_planner_validated_distance_exception
+    ):
+        return False
+    generation = _candidate_generation_for_selection(evaluation_or_candidate)
+    if generation.get("candidate_role") != "projected_execution_target":
+        return False
+    if generation.get("target_binding_mode") != "same_action_execution_substitute":
+        return False
+    if generation.get("ppo_consumable_action") is not True:
+        return False
+    if generation.get("anchor_reachable") is not True:
+        return False
+    if generation.get("planner_validated_exception_safe") is not True:
+        return False
+    distance_cells = _candidate_float(generation, "projection_distance_cells", float("inf"))
+    distance_m = _candidate_float(generation, "projection_distance_m", float("inf"))
+    return (
+        distance_cells <= float(config.max_planner_validated_distance_cells)
+        and distance_m <= float(config.max_planner_validated_distance_m)
     )
 
 

@@ -58,6 +58,10 @@ class AnchorProjectionCandidateConfig:
     prefer_contract_safe_trainable_targets: bool = False
     max_trainable_projection_distance_cells: int = 2
     max_trainable_projection_distance_m: float = 1.0
+    planner_validated_trainable_target_mining: bool = False
+    allow_planner_validated_distance_exception: bool = False
+    max_planner_validated_distance_cells: int = 3
+    max_planner_validated_distance_m: float = 1.5
 
 
 @dataclass(frozen=True)
@@ -584,6 +588,22 @@ def anchor_projection_candidate_config_from_mapping(
         )
         if value.get("max_trainable_projection_distance_m") is not None
         else 1.0,
+        planner_validated_trainable_target_mining=bool(
+            value.get("planner_validated_trainable_target_mining", False)
+        ),
+        allow_planner_validated_distance_exception=bool(
+            value.get("allow_planner_validated_distance_exception", False)
+        ),
+        max_planner_validated_distance_cells=_optional_nonnegative_int(
+            value.get("max_planner_validated_distance_cells")
+        )
+        if value.get("max_planner_validated_distance_cells") is not None
+        else 3,
+        max_planner_validated_distance_m=_optional_nonnegative_float(
+            value.get("max_planner_validated_distance_m")
+        )
+        if value.get("max_planner_validated_distance_m") is not None
+        else 1.5,
     )
 
 
@@ -622,7 +642,16 @@ def _same_action_anchor_projection_candidate_evaluation(
         distance_m=distance_m,
         config=config,
     )
-    if contract_reasons:
+    default_distance_contract_safe = not contract_reasons
+    planner_exception_safe = _planner_validated_distance_exception_safe(
+        distance_cells=distance_cells,
+        distance_m=distance_m,
+        config=config,
+    )
+    planner_validated_exception = bool(
+        not default_distance_contract_safe and planner_exception_safe
+    )
+    if contract_reasons and not planner_validated_exception:
         return None
 
     execution_goal = GoalCandidate(
@@ -647,6 +676,12 @@ def _same_action_anchor_projection_candidate_evaluation(
             metadata={
                 "anchor_projection_candidate_generation": True,
                 "contract_aware_trainable_target_generation": True,
+                "planner_validated_trainable_target_mining": (
+                    config.planner_validated_trainable_target_mining
+                ),
+                "allow_planner_validated_distance_exception": (
+                    config.allow_planner_validated_distance_exception
+                ),
                 "target_binding_mode": "same_action_execution_substitute",
                 "source_action_index": source_action_index,
                 "policy_target_cell": [goal.cell[0], goal.cell[1]],
@@ -664,7 +699,11 @@ def _same_action_anchor_projection_candidate_evaluation(
         anchor_reachable=anchor_reachable,
         target_binding_mode="same_action_execution_substitute",
         ppo_consumable_action=True,
-        contract_safe=True,
+        contract_safe=default_distance_contract_safe,
+        default_distance_contract_safe=default_distance_contract_safe,
+        planner_validated_distance_exception=planner_validated_exception,
+        planner_validated_exception_safe=planner_exception_safe,
+        default_distance_contract_reject_reasons=contract_reasons,
     )
     return PathCandidateEvaluation(
         action_index=source_action_index,
@@ -763,6 +802,10 @@ def _projected_anchor_candidate_evaluation(
         target_binding_mode="synthetic_projection",
         ppo_consumable_action=False,
         contract_safe=not contract_reasons,
+        default_distance_contract_safe=not contract_reasons,
+        planner_validated_distance_exception=False,
+        planner_validated_exception_safe=False,
+        default_distance_contract_reject_reasons=contract_reasons,
         extra_reject_reasons=contract_reasons,
     )
     return PathCandidateEvaluation(
@@ -788,10 +831,20 @@ def _anchor_projection_candidate_generation_payload(
     target_binding_mode: str,
     ppo_consumable_action: bool,
     contract_safe: bool,
+    default_distance_contract_safe: bool | None = None,
+    planner_validated_distance_exception: bool = False,
+    planner_validated_exception_safe: bool = False,
+    default_distance_contract_reject_reasons: list[str] | None = None,
     extra_reject_reasons: list[str] | None = None,
 ) -> dict[str, Any]:
     reason_codes = list(extra_reject_reasons or [])
-    trainability_status = "eligible_if_source_selected" if contract_safe else "rejected"
+    default_distance_contract_safe = (
+        bool(contract_safe)
+        if default_distance_contract_safe is None
+        else bool(default_distance_contract_safe)
+    )
+    eligible_if_selected = bool(contract_safe or planner_validated_exception_safe)
+    trainability_status = "eligible_if_source_selected" if eligible_if_selected else "rejected"
     return {
         "schema_version": "anchor-projection-candidate/v1",
         "candidate_role": "projected_execution_target",
@@ -832,6 +885,15 @@ def _anchor_projection_candidate_generation_payload(
         "audit_proxy_positive_evidence": False,
         "ppo_consumable_action": bool(ppo_consumable_action),
         "contract_safe": bool(contract_safe),
+        "default_distance_contract_safe": default_distance_contract_safe,
+        "default_distance_contract_reject_reasons": list(
+            default_distance_contract_reject_reasons or []
+        ),
+        "planner_validated_distance_exception": bool(planner_validated_distance_exception),
+        "planner_validated_exception_safe": bool(planner_validated_exception_safe),
+        "planner_validated_trainable_target_mining": bool(
+            planner_validated_distance_exception or planner_validated_exception_safe
+        ),
         "trainability_gate": {
             "status": trainability_status,
             "reason_codes": reason_codes,
@@ -840,6 +902,9 @@ def _anchor_projection_candidate_generation_payload(
             "policy_target_cell": [policy_target[0], policy_target[1]],
             "execution_goal_cell": [execution_goal[0], execution_goal[1]],
             "contract_safe": bool(contract_safe),
+            "default_distance_contract_safe": default_distance_contract_safe,
+            "planner_validated_distance_exception": bool(planner_validated_distance_exception),
+            "planner_validated_exception_safe": bool(planner_validated_exception_safe),
         },
     }
 
@@ -860,6 +925,25 @@ def _trainability_distance_reject_reasons(
     elif distance_m > config.max_trainable_projection_distance_m:
         reasons.append("projection_distance_m_exceeds_contract")
     return reasons
+
+
+def _planner_validated_distance_exception_safe(
+    *,
+    distance_cells: int | None,
+    distance_m: float | None,
+    config: AnchorProjectionCandidateConfig,
+) -> bool:
+    if (
+        not config.planner_validated_trainable_target_mining
+        or not config.allow_planner_validated_distance_exception
+    ):
+        return False
+    if distance_cells is None or distance_m is None:
+        return False
+    return (
+        distance_cells <= config.max_planner_validated_distance_cells
+        and distance_m <= float(config.max_planner_validated_distance_m)
+    )
 
 
 def path_feedback_summary(evaluations: Sequence[PathCandidateEvaluation]) -> dict[str, Any]:
@@ -1608,6 +1692,22 @@ def _with_projected_anchor_feasibility(
             "target_binding_mode": candidate_generation.get("target_binding_mode"),
             "ppo_consumable_action": bool(candidate_generation.get("ppo_consumable_action", False)),
             "contract_safe": bool(candidate_generation.get("contract_safe", False)),
+            "default_distance_contract_safe": bool(
+                candidate_generation.get("default_distance_contract_safe", False)
+            ),
+            "default_distance_contract_reject_reasons": candidate_generation.get(
+                "default_distance_contract_reject_reasons",
+                [],
+            ),
+            "planner_validated_distance_exception": bool(
+                candidate_generation.get("planner_validated_distance_exception", False)
+            ),
+            "planner_validated_exception_safe": bool(
+                candidate_generation.get("planner_validated_exception_safe", False)
+            ),
+            "planner_validated_trainable_target_mining": bool(
+                candidate_generation.get("planner_validated_trainable_target_mining", False)
+            ),
             "trainability_gate": candidate_generation.get("trainability_gate"),
         }
     )

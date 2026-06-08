@@ -1705,6 +1705,115 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(generation["trainability_gate"]["status"], "eligible_if_source_selected")
         self.assertEqual(generation["trainability_gate"]["reason_codes"], [])
 
+    def test_planner_validated_exception_adds_same_action_substitute_within_opt_in_distance(self):
+        from model_explorer.policy.planning import (
+            AnchorProjectionCandidateConfig,
+            PathPlanResult,
+            evaluate_candidate_paths,
+            path_feedback_summary,
+        )
+
+        request_payload = {
+            "schema_version": "path-planner-request/v1",
+            "grid": {
+                "width": 5,
+                "height": 3,
+                "resolution": 0.5,
+                "origin": [0.0, 0.0],
+                "frame_id": "moon_local",
+            },
+            "cost": [[1.0, 1.0, 1.0, 1.0, 1.0] for _ in range(3)],
+            "passable_mask": [
+                [True, True, False, True, False],
+                [True, True, False, True, False],
+                [True, True, False, True, False],
+            ],
+            "start": [0, 1],
+            "goal": [3, 1],
+            "metadata": {"passable_mask_source": "configured"},
+        }
+
+        class PlannerValidatedExceptionPlanner:
+            def __init__(self):
+                self.requested = []
+
+            def plan(self, request):
+                self.requested.append((request.action_index, request.selected_goal.cell))
+                payload = json.loads(json.dumps(request_payload))
+                payload["goal"] = [request.selected_goal.cell[0], request.selected_goal.cell[1]]
+                metadata = {
+                    "request_payload": payload,
+                    "diagnostics": {
+                        "search_mode": "platform_aware_astar",
+                        "passable_source": "inflated_passable_mask",
+                        "footprint_radius_m": 0.5,
+                    },
+                }
+                if request.selected_goal.cell == (3, 1):
+                    return PathPlanResult(
+                        feasible=False,
+                        failure_reason="goal_blocked",
+                        replan_required=True,
+                        metadata=metadata,
+                    )
+                return PathPlanResult(
+                    feasible=True,
+                    path_cost=2.0,
+                    path_length=2.0,
+                    risk=0.1,
+                    metadata=metadata,
+                )
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [3, 1], "utility": 0.9, "reachable": True},
+                    {"cell": [0, 2], "utility": 0.4, "reachable": True},
+                ]
+            )
+        )
+        planner = PlannerValidatedExceptionPlanner()
+
+        evaluations = evaluate_candidate_paths(
+            contract,
+            current_cell=(0, 1),
+            top_k=2,
+            planner=planner,
+            anchor_projection_candidate_config=AnchorProjectionCandidateConfig(
+                enabled=True,
+                contract_aware_trainable_target_generation=True,
+                planner_validated_trainable_target_mining=True,
+                allow_planner_validated_distance_exception=True,
+                max_planner_validated_distance_cells=3,
+                max_planner_validated_distance_m=1.5,
+            ),
+        )
+        summary = path_feedback_summary(evaluations)
+        same_actions = [
+            item
+            for item in summary["candidates"]
+            if item.get("candidate_generation", {}).get("target_binding_mode")
+            == "same_action_execution_substitute"
+        ]
+
+        self.assertEqual(len(same_actions), 1)
+        same_action = same_actions[0]
+        self.assertIn((0, (0, 1)), planner.requested)
+        self.assertEqual(same_action["action_index"], 0)
+        self.assertEqual(same_action["source_action_index"], 0)
+        self.assertEqual(same_action["cell"], [3, 1])
+        self.assertEqual(same_action["execution_goal_cell"], [0, 1])
+        generation = same_action["candidate_generation"]
+        self.assertTrue(generation["ppo_consumable_action"])
+        self.assertFalse(generation["contract_safe"])
+        self.assertFalse(generation["default_distance_contract_safe"])
+        self.assertTrue(generation["planner_validated_distance_exception"])
+        self.assertTrue(generation["planner_validated_exception_safe"])
+        self.assertEqual(generation["projection_distance_cells"], 3)
+        self.assertEqual(generation["projection_distance_m"], 1.5)
+        self.assertEqual(generation["trainability_gate"]["status"], "eligible_if_source_selected")
+        self.assertEqual(generation["trainability_gate"]["reason_codes"], [])
+
     def test_contract_aware_selection_rejects_quality_regression_before_preference(self):
         from model_explorer.policy.path_feedback import _selected_after_feedback
         from model_explorer.policy.planning import (
@@ -1763,6 +1872,70 @@ class PathPlanningAdapterTests(unittest.TestCase):
         )
 
         self.assertIs(selected, alternative)
+
+    def test_planner_validated_selection_can_prefer_distance_exception_without_quality_regression(self):
+        from model_explorer.policy.path_feedback import _selected_after_feedback
+        from model_explorer.policy.planning import (
+            AnchorProjectionCandidateConfig,
+            PathCandidateEvaluation,
+            PathPlanResult,
+        )
+
+        generation = {
+            "schema_version": "anchor-projection-candidate/v1",
+            "candidate_role": "projected_execution_target",
+            "target_binding_mode": "same_action_execution_substitute",
+            "source_action_index": 0,
+            "policy_target_cell": [3, 1],
+            "execution_goal_cell": [0, 1],
+            "projected_anchor_cell": [0, 1],
+            "projection_distance_cells": 3,
+            "projection_distance_m": 1.5,
+            "anchor_reachable": True,
+            "comparison_scope": "projected_target_anchor_contrast",
+            "scope": "projected_target_anchor_contrast",
+            "training_use": "not_positive_evidence",
+            "sample_weight": 0.0,
+            "reject_reason": "pending_source_selection",
+            "source_selection_status": "pending_source_selection",
+            "evidence_boundary": "source_candidate_pending_selection_not_audit_proxy",
+            "audit_proxy_positive_evidence": False,
+            "ppo_consumable_action": True,
+            "contract_safe": False,
+            "default_distance_contract_safe": False,
+            "planner_validated_distance_exception": True,
+            "planner_validated_exception_safe": True,
+            "trainability_gate": {"status": "eligible_if_source_selected", "reason_codes": []},
+        }
+        exception_candidate = PathCandidateEvaluation(
+            action_index=0,
+            cell=(3, 1),
+            utility=0.9,
+            result=PathPlanResult(feasible=True, path_cost=5.0, path_length=5.0, risk=0.1),
+            source_action_index=0,
+            candidate_generation=dict(generation),
+        )
+        alternative = PathCandidateEvaluation(
+            action_index=1,
+            cell=(0, 2),
+            utility=0.5,
+            result=PathPlanResult(feasible=True, path_cost=4.0, path_length=4.0, risk=0.1),
+        )
+
+        selected = _selected_after_feedback(
+            (exception_candidate, alternative),
+            anchor_projection_candidate_config=AnchorProjectionCandidateConfig(
+                enabled=True,
+                contract_aware_trainable_target_generation=True,
+                prefer_contract_safe_trainable_targets=True,
+                planner_validated_trainable_target_mining=True,
+                allow_planner_validated_distance_exception=True,
+                max_source_selection_path_cost_regression=2.0,
+                max_source_selection_risk_regression=0.0,
+            ),
+        )
+
+        self.assertIs(selected, exception_candidate)
 
     def test_contract_aware_rollout_keeps_teacher_action_mask_consumable(self):
         from model_explorer.policy.collector import collect_rollout_episode
