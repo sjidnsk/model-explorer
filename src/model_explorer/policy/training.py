@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .dataset import validate_rollout_dataset
+from .device import resolve_training_device
 from .features import OBSERVATION_SCHEMA_VERSION
 from .rollout import RolloutEpisode, RolloutTransition
 
@@ -31,6 +32,7 @@ def train_policy_on_episode(
     architecture_config: dict[str, Any] | None = None,
     teacher_imitation_weight: float = 0.0,
     teacher_margin_weighting: dict[str, Any] | None = None,
+    device: str | None = None,
 ) -> dict[str, Any]:
     return train_policy_on_episodes(
         (episode,),
@@ -45,6 +47,7 @@ def train_policy_on_episode(
         architecture_config=architecture_config,
         teacher_imitation_weight=teacher_imitation_weight,
         teacher_margin_weighting=teacher_margin_weighting,
+        device=device,
     )
 
 
@@ -62,6 +65,7 @@ def train_policy_on_episodes(
     architecture_config: dict[str, Any] | None = None,
     teacher_imitation_weight: float = 0.0,
     teacher_margin_weighting: dict[str, Any] | None = None,
+    device: str | None = None,
 ) -> dict[str, Any]:
     torch = _load_torch()
     from .architectures import build_policy_network
@@ -76,6 +80,10 @@ def train_policy_on_episodes(
     trainable_transitions = _trainable_transitions(episode_tuple)
     if not trainable_transitions:
         raise ValueError("episodes must contain at least one trainable transition")
+    device_resolution = resolve_training_device(device, torch_module=torch)
+    if device_resolution.reason_codes:
+        raise ValueError(f"invalid training device: {device_resolution.reason_codes[0]}")
+    resolved_device = device_resolution.resolved_device
 
     torch.manual_seed(seed)
     first_observation = trainable_transitions[0].observation
@@ -85,12 +93,14 @@ def train_policy_on_episodes(
         hidden_size=hidden_size,
         architecture_config=architecture_config,
     )
+    network.to(resolved_device)
     optimizer = torch.optim.Adam(network.parameters(), lr=learning_rate)
     batch = _transitions_to_batch(
         trainable_transitions,
         return_mode=return_mode,
         discount_factor=discount_factor,
         teacher_margin_weighting=teacher_margin_config,
+        device=resolved_device,
     )
     teacher_curriculum = _teacher_curriculum_summary(batch, teacher_margin_config)
 
@@ -145,6 +155,7 @@ def train_policy_on_episodes(
             teacher_imitation=teacher_imitation,
             teacher_margin_summary=teacher_margin_summary,
             teacher_curriculum=teacher_curriculum,
+            device_summary=device_resolution.to_summary(),
         )
 
     result = {
@@ -157,12 +168,12 @@ def train_policy_on_episodes(
             candidate_missing_indicator_names=first_observation.candidate_missing_indicator_names,
             dataset_summary=dataset_summary,
         ),
-        "loss": float(total_loss.detach()),
-        "total_loss": float(total_loss.detach()),
-        "ppo_total_loss": float(losses.total_loss.detach()),
-        "policy_loss": float(losses.policy_loss.detach()),
-        "value_loss": float(losses.value_loss.detach()),
-        "entropy": float(losses.entropy.detach()),
+        "loss": _tensor_float(total_loss),
+        "total_loss": _tensor_float(total_loss),
+        "ppo_total_loss": _tensor_float(losses.total_loss),
+        "policy_loss": _tensor_float(losses.policy_loss),
+        "value_loss": _tensor_float(losses.value_loss),
+        "entropy": _tensor_float(losses.entropy),
         "epoch_losses": epoch_losses,
         "sample_count": len(trainable_transitions),
         "epochs": int(epochs),
@@ -176,6 +187,7 @@ def train_policy_on_episodes(
         "teacher_margin_summary": teacher_margin_summary,
         "teacher_curriculum": teacher_curriculum,
         "teacher_imitation": teacher_imitation,
+        "device": device_resolution.to_summary(),
     }
     result["warnings"] = _training_quality_warnings(result)
     return result
@@ -276,15 +288,15 @@ def _loss_record(
     teacher = losses.total_loss.detach().new_tensor(0.0) if teacher_loss is None else teacher_loss
     return {
         "epoch": int(epoch),
-        "loss": float(total.detach()),
-        "total_loss": float(total.detach()),
-        "ppo_total_loss": float(losses.total_loss.detach()),
-        "policy_loss": float(losses.policy_loss.detach()),
-        "value_loss": float(losses.value_loss.detach()),
-        "entropy": float(losses.entropy.detach()),
-        "teacher_imitation_loss": float(teacher.detach()),
+        "loss": _tensor_float(total),
+        "total_loss": _tensor_float(total),
+        "ppo_total_loss": _tensor_float(losses.total_loss),
+        "policy_loss": _tensor_float(losses.policy_loss),
+        "value_loss": _tensor_float(losses.value_loss),
+        "entropy": _tensor_float(losses.entropy),
+        "teacher_imitation_loss": _tensor_float(teacher),
         "teacher_imitation_weight": float(teacher_imitation_weight),
-        "teacher_imitation_weighted_loss": float((teacher * teacher_imitation_weight).detach()),
+        "teacher_imitation_weighted_loss": _tensor_float(teacher * teacher_imitation_weight),
     }
 
 
@@ -412,6 +424,10 @@ def _safe_float(value: Any) -> float:
     return numeric if isfinite(numeric) else 0.0
 
 
+def _tensor_float(value) -> float:
+    return float(value.detach().cpu())
+
+
 def _validate_transition_shapes(transitions: tuple[RolloutTransition, ...]) -> None:
     first = transitions[0].observation
     candidate_feature_count = len(first.candidate_feature_names)
@@ -430,6 +446,7 @@ def _transitions_to_batch(
     return_mode: str,
     discount_factor: float,
     teacher_margin_weighting: dict[str, Any],
+    device: str | None = None,
 ) -> dict[str, Any]:
     torch = _load_torch()
     observations = tuple(transition.observation for transition in transitions)
@@ -449,52 +466,64 @@ def _transitions_to_batch(
         "candidate_features": torch.tensor(
             [_padded_candidate_features(observation, action_count) for observation in observations],
             dtype=torch.float32,
+            device=device,
         ),
         "global_features": torch.tensor(
             [observation.global_features for observation in observations],
             dtype=torch.float32,
+            device=device,
         ),
         "action_mask": torch.tensor(
             [_padded_action_mask(observation, action_count) for observation in observations],
             dtype=torch.bool,
+            device=device,
         ),
         "candidate_missing_indicators": torch.tensor(
             [_padded_missing_indicators(observation, action_count) for observation in observations],
             dtype=torch.float32,
+            device=device,
         ),
         "actions": torch.tensor(
             [transition.action_index for transition in transitions],
             dtype=torch.long,
+            device=device,
         ),
         "teacher_actions": torch.tensor(
             [0 if record["label"] is None else record["label"] for record in teacher_records],
             dtype=torch.long,
+            device=device,
         ),
         "teacher_action_valid_mask": torch.tensor(
             [bool(record["supervision_valid"]) for record in teacher_records],
             dtype=torch.bool,
+            device=device,
         ),
         "teacher_label_candidate_valid_mask": torch.tensor(
             [bool(record["label_valid"]) for record in teacher_records],
             dtype=torch.bool,
+            device=device,
         ),
         "teacher_action_weights": torch.tensor(
             [float(record["supervision_weight"]) for record in teacher_records],
             dtype=torch.float32,
+            device=device,
         ),
         "teacher_label_buckets": tuple(str(record["bucket"]) for record in teacher_records),
         "teacher_label_records": teacher_records,
         "old_log_probs": torch.tensor(
             [0.0 if transition.log_prob is None else transition.log_prob for transition in transitions],
             dtype=torch.float32,
+            device=device,
         ),
         "returns": torch.tensor(
             return_advantage_batch.returns,
             dtype=torch.float32,
+            device=device,
         ),
         "advantages": torch.tensor(
             return_advantage_batch.advantages,
             dtype=torch.float32,
+            device=device,
         ),
     }
 
@@ -790,11 +819,12 @@ def _save_policy_checkpoint(
     teacher_imitation: dict[str, Any],
     teacher_margin_summary: dict[str, Any],
     teacher_curriculum: dict[str, Any],
+    device_summary: dict[str, Any] | None = None,
 ) -> None:
     torch = _load_torch()
     torch.save(
         {
-            "state_dict": network.state_dict(),
+            "state_dict": _cpu_state_dict(network.state_dict()),
             "hidden_size": hidden_size,
             "candidate_feature_names": tuple(candidate_feature_names),
             "global_feature_names": tuple(global_feature_names),
@@ -821,10 +851,18 @@ def _save_policy_checkpoint(
                 "teacher_imitation": dict(teacher_imitation),
                 "teacher_margin_summary": dict(teacher_margin_summary),
                 "teacher_curriculum": dict(teacher_curriculum),
+                "device": dict(device_summary or {}),
             },
         },
         Path(path),
     )
+
+
+def _cpu_state_dict(state_dict: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value.detach().cpu() if hasattr(value, "detach") else value
+        for key, value in state_dict.items()
+    }
 
 
 def _load_torch():
