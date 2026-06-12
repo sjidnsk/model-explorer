@@ -1,0 +1,1870 @@
+{
+  "schema_version": "model-explorer-quasi-real-evaluation/v1",
+  "name": "qreal-safe-better-opportunity-v1",
+  "run_id": "safe-better-opportunity-v1",
+  "dataset_manifest": "/home/kai/WS/lunar-path-planning/model-explorer/data/manifests/lunar_south_pole_lro_lola_gdr_875s_20m.json",
+  "output_root": "../processed/qreal_safe_better_opportunity_v1",
+  "candidate_count": 6,
+  "episode_count": 1,
+  "seed": 20260612,
+  "source_matrix_manifest": "/home/kai/WS/lunar-path-planning/model-explorer/data/manifests/lunar_south_pole_lro_lola_selection_matrix_v1.json",
+  "rois": [
+    {
+      "name": "smooth_high_confidence",
+      "split": "train",
+      "roi_x": 3700,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260601,
+      "start_cell": [
+        0,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_train_r000_s00",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_train_r000_s00-seed-20260601-start-0-0"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "train",
+      "roi_x": 3708,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260702,
+      "start_cell": [
+        0,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_train_r000_s01",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_train_r000_s01-seed-20260702-start-0-31"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "train",
+      "roi_x": 3700,
+      "roi_y": 3708,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260803,
+      "start_cell": [
+        31,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_train_r000_s02",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_train_r000_s02-seed-20260803-start-31-0"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "train",
+      "roi_x": 3708,
+      "roi_y": 3708,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260904,
+      "start_cell": [
+        31,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_train_r000_s03",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_train_r000_s03-seed-20260904-start-31-31"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "train",
+      "roi_x": 3700,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261005,
+      "start_cell": [
+        16,
+        16
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_train_r000_s04",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_train_r000_s04-seed-20261005-start-16-16"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "train",
+      "roi_x": 3708,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261106,
+      "start_cell": [
+        8,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_train_r000_s05",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_train_r000_s05-seed-20261106-start-8-8"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "train",
+      "roi_x": 3700,
+      "roi_y": 3708,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261207,
+      "start_cell": [
+        8,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_train_r000_s06",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_train_r000_s06-seed-20261207-start-8-24"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "train",
+      "roi_x": 3708,
+      "roi_y": 3708,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261308,
+      "start_cell": [
+        24,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_train_r000_s07",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_train_r000_s07-seed-20261308-start-24-8"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "train",
+      "roi_x": 3700,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261409,
+      "start_cell": [
+        24,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_train_r000_s08",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_train_r000_s08-seed-20261409-start-24-24"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "validation",
+      "roi_x": 3740,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260602,
+      "start_cell": [
+        0,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s00",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s00-seed-20260602-start-0-0"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "validation",
+      "roi_x": 3748,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260703,
+      "start_cell": [
+        0,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s01",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s01-seed-20260703-start-0-31"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "validation",
+      "roi_x": 3740,
+      "roi_y": 3708,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260804,
+      "start_cell": [
+        31,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s02",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s02-seed-20260804-start-31-0"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "validation",
+      "roi_x": 3748,
+      "roi_y": 3708,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260905,
+      "start_cell": [
+        31,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s03",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s03-seed-20260905-start-31-31"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "validation",
+      "roi_x": 3740,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261006,
+      "start_cell": [
+        16,
+        16
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s04",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s04-seed-20261006-start-16-16"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "validation",
+      "roi_x": 3748,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261107,
+      "start_cell": [
+        8,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s05",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s05-seed-20261107-start-8-8"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "validation",
+      "roi_x": 3740,
+      "roi_y": 3708,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261208,
+      "start_cell": [
+        8,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s06",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s06-seed-20261208-start-8-24"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "validation",
+      "roi_x": 3748,
+      "roi_y": 3708,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261309,
+      "start_cell": [
+        24,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s07",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s07-seed-20261309-start-24-8"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "validation",
+      "roi_x": 3740,
+      "roi_y": 3700,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261410,
+      "start_cell": [
+        24,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s08",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_validation_r001_s08-seed-20261410-start-24-24"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "test",
+      "roi_x": 3700,
+      "roi_y": 3740,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260603,
+      "start_cell": [
+        0,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_test_r002_s00",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_test_r002_s00-seed-20260603-start-0-0"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "test",
+      "roi_x": 3708,
+      "roi_y": 3740,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260704,
+      "start_cell": [
+        0,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_test_r002_s01",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_test_r002_s01-seed-20260704-start-0-31"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "test",
+      "roi_x": 3700,
+      "roi_y": 3748,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260805,
+      "start_cell": [
+        31,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_test_r002_s02",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_test_r002_s02-seed-20260805-start-31-0"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "test",
+      "roi_x": 3708,
+      "roi_y": 3748,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260906,
+      "start_cell": [
+        31,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_test_r002_s03",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_test_r002_s03-seed-20260906-start-31-31"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "test",
+      "roi_x": 3700,
+      "roi_y": 3740,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261007,
+      "start_cell": [
+        16,
+        16
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_test_r002_s04",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_test_r002_s04-seed-20261007-start-16-16"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "test",
+      "roi_x": 3708,
+      "roi_y": 3740,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261108,
+      "start_cell": [
+        8,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_test_r002_s05",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_test_r002_s05-seed-20261108-start-8-8"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "test",
+      "roi_x": 3700,
+      "roi_y": 3748,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261209,
+      "start_cell": [
+        8,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_test_r002_s06",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_test_r002_s06-seed-20261209-start-8-24"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "test",
+      "roi_x": 3708,
+      "roi_y": 3748,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261310,
+      "start_cell": [
+        24,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_test_r002_s07",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_test_r002_s07-seed-20261310-start-24-8"
+    },
+    {
+      "name": "smooth_high_confidence",
+      "split": "test",
+      "roi_x": 3700,
+      "roi_y": 3740,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261411,
+      "start_cell": [
+        24,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_smooth_high_confidence_test_r002_s08",
+      "scenario_variant_id": "qreal_safe_better_smooth_high_confidence_test_r002_s08-seed-20261411-start-24-24"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "train",
+      "roi_x": 3900,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260604,
+      "start_cell": [
+        0,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s00",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s00-seed-20260604-start-0-0"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "train",
+      "roi_x": 3908,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260705,
+      "start_cell": [
+        0,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s01",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s01-seed-20260705-start-0-31"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "train",
+      "roi_x": 3900,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260806,
+      "start_cell": [
+        31,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s02",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s02-seed-20260806-start-31-0"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "train",
+      "roi_x": 3908,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260907,
+      "start_cell": [
+        31,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s03",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s03-seed-20260907-start-31-31"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "train",
+      "roi_x": 3900,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261008,
+      "start_cell": [
+        16,
+        16
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s04",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s04-seed-20261008-start-16-16"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "train",
+      "roi_x": 3908,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261109,
+      "start_cell": [
+        8,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s05",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s05-seed-20261109-start-8-8"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "train",
+      "roi_x": 3900,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261210,
+      "start_cell": [
+        8,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s06",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s06-seed-20261210-start-8-24"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "train",
+      "roi_x": 3908,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261311,
+      "start_cell": [
+        24,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s07",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s07-seed-20261311-start-24-8"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "train",
+      "roi_x": 3900,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261412,
+      "start_cell": [
+        24,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s08",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_train_r003_s08-seed-20261412-start-24-24"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "validation",
+      "roi_x": 3940,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260605,
+      "start_cell": [
+        0,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s00",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s00-seed-20260605-start-0-0"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "validation",
+      "roi_x": 3948,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260706,
+      "start_cell": [
+        0,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s01",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s01-seed-20260706-start-0-31"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "validation",
+      "roi_x": 3940,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260807,
+      "start_cell": [
+        31,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s02",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s02-seed-20260807-start-31-0"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "validation",
+      "roi_x": 3948,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260908,
+      "start_cell": [
+        31,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s03",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s03-seed-20260908-start-31-31"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "validation",
+      "roi_x": 3940,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261009,
+      "start_cell": [
+        16,
+        16
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s04",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s04-seed-20261009-start-16-16"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "validation",
+      "roi_x": 3948,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261110,
+      "start_cell": [
+        8,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s05",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s05-seed-20261110-start-8-8"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "validation",
+      "roi_x": 3940,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261211,
+      "start_cell": [
+        8,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s06",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s06-seed-20261211-start-8-24"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "validation",
+      "roi_x": 3948,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261312,
+      "start_cell": [
+        24,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s07",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s07-seed-20261312-start-24-8"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "validation",
+      "roi_x": 3940,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261413,
+      "start_cell": [
+        24,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s08",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_validation_r004_s08-seed-20261413-start-24-24"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "test",
+      "roi_x": 3900,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260606,
+      "start_cell": [
+        0,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s00",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s00-seed-20260606-start-0-0"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "test",
+      "roi_x": 3908,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260707,
+      "start_cell": [
+        0,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s01",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s01-seed-20260707-start-0-31"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "test",
+      "roi_x": 3900,
+      "roi_y": 3948,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260808,
+      "start_cell": [
+        31,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s02",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s02-seed-20260808-start-31-0"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "test",
+      "roi_x": 3908,
+      "roi_y": 3948,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260909,
+      "start_cell": [
+        31,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s03",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s03-seed-20260909-start-31-31"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "test",
+      "roi_x": 3900,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261010,
+      "start_cell": [
+        16,
+        16
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s04",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s04-seed-20261010-start-16-16"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "test",
+      "roi_x": 3908,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261111,
+      "start_cell": [
+        8,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s05",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s05-seed-20261111-start-8-8"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "test",
+      "roi_x": 3900,
+      "roi_y": 3948,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261212,
+      "start_cell": [
+        8,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s06",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s06-seed-20261212-start-8-24"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "test",
+      "roi_x": 3908,
+      "roi_y": 3948,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261313,
+      "start_cell": [
+        24,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s07",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s07-seed-20261313-start-24-8"
+    },
+    {
+      "name": "rim_or_steep_slope",
+      "split": "test",
+      "roi_x": 3900,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261414,
+      "start_cell": [
+        24,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s08",
+      "scenario_variant_id": "qreal_safe_better_rim_or_steep_slope_test_r005_s08-seed-20261414-start-24-24"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "train",
+      "roi_x": 20,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260607,
+      "start_cell": [
+        0,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_train_r006_s00",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_train_r006_s00-seed-20260607-start-0-0"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "train",
+      "roi_x": 28,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260708,
+      "start_cell": [
+        0,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_train_r006_s01",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_train_r006_s01-seed-20260708-start-0-31"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "train",
+      "roi_x": 20,
+      "roi_y": 28,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260809,
+      "start_cell": [
+        31,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_train_r006_s02",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_train_r006_s02-seed-20260809-start-31-0"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "train",
+      "roi_x": 28,
+      "roi_y": 28,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260910,
+      "start_cell": [
+        31,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_train_r006_s03",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_train_r006_s03-seed-20260910-start-31-31"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "train",
+      "roi_x": 20,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261011,
+      "start_cell": [
+        16,
+        16
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_train_r006_s04",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_train_r006_s04-seed-20261011-start-16-16"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "train",
+      "roi_x": 28,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261112,
+      "start_cell": [
+        8,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_train_r006_s05",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_train_r006_s05-seed-20261112-start-8-8"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "train",
+      "roi_x": 20,
+      "roi_y": 28,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261213,
+      "start_cell": [
+        8,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_train_r006_s06",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_train_r006_s06-seed-20261213-start-8-24"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "train",
+      "roi_x": 28,
+      "roi_y": 28,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261314,
+      "start_cell": [
+        24,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_train_r006_s07",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_train_r006_s07-seed-20261314-start-24-8"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "train",
+      "roi_x": 20,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261415,
+      "start_cell": [
+        24,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_train_r006_s08",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_train_r006_s08-seed-20261415-start-24-24"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "validation",
+      "roi_x": 60,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260608,
+      "start_cell": [
+        0,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_validation_r007_s00",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_validation_r007_s00-seed-20260608-start-0-0"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "validation",
+      "roi_x": 68,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260709,
+      "start_cell": [
+        0,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_validation_r007_s01",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_validation_r007_s01-seed-20260709-start-0-31"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "validation",
+      "roi_x": 60,
+      "roi_y": 28,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260810,
+      "start_cell": [
+        31,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_validation_r007_s02",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_validation_r007_s02-seed-20260810-start-31-0"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "validation",
+      "roi_x": 68,
+      "roi_y": 28,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260911,
+      "start_cell": [
+        31,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_validation_r007_s03",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_validation_r007_s03-seed-20260911-start-31-31"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "validation",
+      "roi_x": 60,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261012,
+      "start_cell": [
+        16,
+        16
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_validation_r007_s04",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_validation_r007_s04-seed-20261012-start-16-16"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "validation",
+      "roi_x": 68,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261113,
+      "start_cell": [
+        8,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_validation_r007_s05",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_validation_r007_s05-seed-20261113-start-8-8"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "validation",
+      "roi_x": 60,
+      "roi_y": 28,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261214,
+      "start_cell": [
+        8,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_validation_r007_s06",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_validation_r007_s06-seed-20261214-start-8-24"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "validation",
+      "roi_x": 68,
+      "roi_y": 28,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261315,
+      "start_cell": [
+        24,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_validation_r007_s07",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_validation_r007_s07-seed-20261315-start-24-8"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "validation",
+      "roi_x": 60,
+      "roi_y": 20,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261416,
+      "start_cell": [
+        24,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_validation_r007_s08",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_validation_r007_s08-seed-20261416-start-24-24"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "test",
+      "roi_x": 20,
+      "roi_y": 60,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260609,
+      "start_cell": [
+        0,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_test_r008_s00",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_test_r008_s00-seed-20260609-start-0-0"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "test",
+      "roi_x": 28,
+      "roi_y": 60,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260710,
+      "start_cell": [
+        0,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_test_r008_s01",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_test_r008_s01-seed-20260710-start-0-31"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "test",
+      "roi_x": 20,
+      "roi_y": 68,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260811,
+      "start_cell": [
+        31,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_test_r008_s02",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_test_r008_s02-seed-20260811-start-31-0"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "test",
+      "roi_x": 28,
+      "roi_y": 68,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260912,
+      "start_cell": [
+        31,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_test_r008_s03",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_test_r008_s03-seed-20260912-start-31-31"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "test",
+      "roi_x": 20,
+      "roi_y": 60,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261013,
+      "start_cell": [
+        16,
+        16
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_test_r008_s04",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_test_r008_s04-seed-20261013-start-16-16"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "test",
+      "roi_x": 28,
+      "roi_y": 60,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261114,
+      "start_cell": [
+        8,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_test_r008_s05",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_test_r008_s05-seed-20261114-start-8-8"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "test",
+      "roi_x": 20,
+      "roi_y": 68,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261215,
+      "start_cell": [
+        8,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_test_r008_s06",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_test_r008_s06-seed-20261215-start-8-24"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "test",
+      "roi_x": 28,
+      "roi_y": 68,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261316,
+      "start_cell": [
+        24,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_test_r008_s07",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_test_r008_s07-seed-20261316-start-24-8"
+    },
+    {
+      "name": "low_observation_count",
+      "split": "test",
+      "roi_x": 20,
+      "roi_y": 60,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261417,
+      "start_cell": [
+        24,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_low_observation_count_test_r008_s08",
+      "scenario_variant_id": "qreal_safe_better_low_observation_count_test_r008_s08-seed-20261417-start-24-24"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "train",
+      "roi_x": 3600,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260610,
+      "start_cell": [
+        0,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_train_r009_s00",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_train_r009_s00-seed-20260610-start-0-0"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "train",
+      "roi_x": 3608,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260711,
+      "start_cell": [
+        0,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_train_r009_s01",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_train_r009_s01-seed-20260711-start-0-31"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "train",
+      "roi_x": 3600,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260812,
+      "start_cell": [
+        31,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_train_r009_s02",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_train_r009_s02-seed-20260812-start-31-0"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "train",
+      "roi_x": 3608,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260913,
+      "start_cell": [
+        31,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_train_r009_s03",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_train_r009_s03-seed-20260913-start-31-31"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "train",
+      "roi_x": 3600,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261014,
+      "start_cell": [
+        16,
+        16
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_train_r009_s04",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_train_r009_s04-seed-20261014-start-16-16"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "train",
+      "roi_x": 3608,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261115,
+      "start_cell": [
+        8,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_train_r009_s05",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_train_r009_s05-seed-20261115-start-8-8"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "train",
+      "roi_x": 3600,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261216,
+      "start_cell": [
+        8,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_train_r009_s06",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_train_r009_s06-seed-20261216-start-8-24"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "train",
+      "roi_x": 3608,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261317,
+      "start_cell": [
+        24,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_train_r009_s07",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_train_r009_s07-seed-20261317-start-24-8"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "train",
+      "roi_x": 3600,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261418,
+      "start_cell": [
+        24,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_train_r009_s08",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_train_r009_s08-seed-20261418-start-24-24"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "validation",
+      "roi_x": 3640,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260611,
+      "start_cell": [
+        0,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_validation_r010_s00",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_validation_r010_s00-seed-20260611-start-0-0"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "validation",
+      "roi_x": 3648,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260712,
+      "start_cell": [
+        0,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_validation_r010_s01",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_validation_r010_s01-seed-20260712-start-0-31"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "validation",
+      "roi_x": 3640,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260813,
+      "start_cell": [
+        31,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_validation_r010_s02",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_validation_r010_s02-seed-20260813-start-31-0"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "validation",
+      "roi_x": 3648,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260914,
+      "start_cell": [
+        31,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_validation_r010_s03",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_validation_r010_s03-seed-20260914-start-31-31"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "validation",
+      "roi_x": 3640,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261015,
+      "start_cell": [
+        16,
+        16
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_validation_r010_s04",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_validation_r010_s04-seed-20261015-start-16-16"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "validation",
+      "roi_x": 3648,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261116,
+      "start_cell": [
+        8,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_validation_r010_s05",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_validation_r010_s05-seed-20261116-start-8-8"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "validation",
+      "roi_x": 3640,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261217,
+      "start_cell": [
+        8,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_validation_r010_s06",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_validation_r010_s06-seed-20261217-start-8-24"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "validation",
+      "roi_x": 3648,
+      "roi_y": 3908,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261318,
+      "start_cell": [
+        24,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_validation_r010_s07",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_validation_r010_s07-seed-20261318-start-24-8"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "validation",
+      "roi_x": 3640,
+      "roi_y": 3900,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261419,
+      "start_cell": [
+        24,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_validation_r010_s08",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_validation_r010_s08-seed-20261419-start-24-24"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "test",
+      "roi_x": 3600,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260612,
+      "start_cell": [
+        0,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_test_r011_s00",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_test_r011_s00-seed-20260612-start-0-0"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "test",
+      "roi_x": 3608,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260713,
+      "start_cell": [
+        0,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_test_r011_s01",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_test_r011_s01-seed-20260713-start-0-31"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "test",
+      "roi_x": 3600,
+      "roi_y": 3948,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260814,
+      "start_cell": [
+        31,
+        0
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_test_r011_s02",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_test_r011_s02-seed-20260814-start-31-0"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "test",
+      "roi_x": 3608,
+      "roi_y": 3948,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20260915,
+      "start_cell": [
+        31,
+        31
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_test_r011_s03",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_test_r011_s03-seed-20260915-start-31-31"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "test",
+      "roi_x": 3600,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261016,
+      "start_cell": [
+        16,
+        16
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_test_r011_s04",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_test_r011_s04-seed-20261016-start-16-16"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "test",
+      "roi_x": 3608,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261117,
+      "start_cell": [
+        8,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_test_r011_s05",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_test_r011_s05-seed-20261117-start-8-8"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "test",
+      "roi_x": 3600,
+      "roi_y": 3948,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261218,
+      "start_cell": [
+        8,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_test_r011_s06",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_test_r011_s06-seed-20261218-start-8-24"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "test",
+      "roi_x": 3608,
+      "roi_y": 3948,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261319,
+      "start_cell": [
+        24,
+        8
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_test_r011_s07",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_test_r011_s07-seed-20261319-start-24-8"
+    },
+    {
+      "name": "mixed_risk",
+      "split": "test",
+      "roi_x": 3600,
+      "roi_y": 3940,
+      "roi_width": 32,
+      "roi_height": 32,
+      "candidate_count": 6,
+      "episode_count": 1,
+      "seed": 20261420,
+      "start_cell": [
+        24,
+        24
+      ],
+      "scenario_id": "qreal_safe_better_mixed_risk_test_r011_s08",
+      "scenario_variant_id": "qreal_safe_better_mixed_risk_test_r011_s08-seed-20261420-start-24-24"
+    }
+  ],
+  "mask_stress": {
+    "enabled": false
+  },
+  "selection": {
+    "enabled": false
+  },
+  "dataset_validation": {
+    "min_trainable_transition_count": 0,
+    "require_finite_reward": true,
+    "min_roi_group_count": 4
+  },
+  "train": {
+    "seed": 20260612,
+    "architectures": [
+      "mlp_v1"
+    ],
+    "hidden_size": 16,
+    "learning_rate": 0.001,
+    "epochs": 1,
+    "evaluate_trained_policy": false
+  }
+}

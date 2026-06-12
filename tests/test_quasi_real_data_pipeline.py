@@ -546,6 +546,20 @@ class QuasiRealEvaluationMatrixTests(unittest.TestCase):
         for roi_name in ("smooth_high_confidence", "rim_or_steep_slope", "low_observation_count", "mixed_risk"):
             self.assertGreaterEqual(roi_counts.get(roi_name, 0), 2)
 
+    def test_manifest_roi_start_cell_is_optional_and_defaults_to_origin(self):
+        from model_explorer.data.evaluation_matrix import load_quasi_real_evaluation_manifest
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            matrix_manifest = _write_fixture_matrix_manifest(Path(tmpdir))
+            payload = json.loads(matrix_manifest.read_text(encoding="utf-8"))
+            payload["rois"][0]["start_cell"] = [2, 3]
+            matrix_manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+            manifest = load_quasi_real_evaluation_manifest(matrix_manifest)
+
+        self.assertEqual(manifest.rois[0].start_cell, (2, 3))
+        self.assertEqual(manifest.rois[1].start_cell, (0, 0))
+
     def test_evaluation_manifest_validate_and_dry_run_do_not_write_outputs(self):
         from model_explorer.data.evaluation_matrix import (
             dry_run_quasi_real_evaluation_manifest,

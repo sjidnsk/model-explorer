@@ -36,6 +36,7 @@ class RoiSpec:
     seed: int
     candidate_count: int
     episode_count: int
+    start_cell: tuple[int, int] = (0, 0)
 
     @property
     def bounds(self) -> dict[str, int]:
@@ -116,11 +117,13 @@ def run_quasi_real_evaluation_manifest(path: str | Path) -> dict[str, Any]:
             candidate_count=roi.candidate_count,
             episode_count=roi.episode_count,
             seed=roi.seed,
+            start_cell=roi.start_cell,
         )
         metadata_extra = {
             "roi_name": roi.name,
             "split": roi.split,
             "roi": roi.bounds,
+            "start_cell": [roi.start_cell[0], roi.start_cell[1]],
         }
         if _mask_stress_enabled(manifest.mask_stress_config):
             metadata_extra.update(_mask_stress_metadata(manifest.mask_stress_config))
@@ -140,6 +143,7 @@ def run_quasi_real_evaluation_manifest(path: str | Path) -> dict[str, Any]:
                 candidate_count=roi.candidate_count,
                 episode_count=roi.episode_count,
                 seed=roi.seed,
+                start_cell=roi.start_cell,
             ),
             source_config=source_config,
             metadata_extra=metadata_extra,
@@ -250,9 +254,25 @@ def _roi_specs(
                 seed=int(item.get("seed", seed + index)),
                 candidate_count=int(item.get("candidate_count", candidate_count)),
                 episode_count=int(item.get("episode_count", episode_count)),
+                start_cell=_start_cell(item.get("start_cell"), width=width, height=height),
             )
         )
     return tuple(specs)
+
+
+def _start_cell(value: Any, *, width: int, height: int) -> tuple[int, int]:
+    if value is None:
+        return (0, 0)
+    if (
+        not isinstance(value, (list, tuple))
+        or len(value) != 2
+    ):
+        raise ValueError("roi.start_cell must be a two-item [x, y] cell")
+    x = int(value[0])
+    y = int(value[1])
+    if x < 0 or y < 0 or x >= width or y >= height:
+        raise ValueError("roi.start_cell must be inside the ROI bounds")
+    return (x, y)
 
 
 def _validate_roi_coverage(rois: tuple[RoiSpec, ...]) -> None:
