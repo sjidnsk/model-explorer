@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +16,19 @@ class PolicyNetworkOutput:
     masked_logits: torch.Tensor
     action_probs: torch.Tensor
     value: torch.Tensor
+
+
+@dataclass(frozen=True)
+class PolicyScoreDetail:
+    logits: tuple[float, ...]
+    masked_logits: tuple[float, ...]
+    action_probs: tuple[float, ...]
+    value: float
+    selected_action_index: int
+    selected_probability: float
+    selected_rank: int
+    finite_outputs: bool
+    latency_ms: float
 
 
 class MaskedCandidatePolicyNetwork(nn.Module):
@@ -202,12 +216,42 @@ class TorchPolicyScorer:
         self.network = network
 
     def score(self, observation: PolicyObservation) -> tuple[float, ...]:
+        return self.score_detail(observation).masked_logits
+
+    def score_detail(self, observation: PolicyObservation) -> PolicyScoreDetail:
         device = next(self.network.parameters()).device
         tensors = observation_to_tensors(observation, device=device)
         self.network.eval()
+        started = time.perf_counter()
         with torch.no_grad():
             output = self.network(**tensors)
-        return tuple(float(value) for value in output.masked_logits[0].detach().cpu())
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        logits = output.logits[0].detach().cpu()
+        masked_logits = output.masked_logits[0].detach().cpu()
+        action_probs = output.action_probs[0].detach().cpu()
+        value = output.value[0].detach().cpu()
+        selected_action = int(torch.argmax(action_probs).item())
+        selected_probability = float(action_probs[selected_action])
+        sorted_indices = torch.argsort(action_probs, descending=True)
+        rank_matches = (sorted_indices == selected_action).nonzero(as_tuple=False)
+        selected_rank = int(rank_matches[0].item()) + 1 if int(rank_matches.numel()) else 0
+        finite_outputs = bool(
+            torch.isfinite(logits).all()
+            and torch.isfinite(masked_logits).all()
+            and torch.isfinite(action_probs).all()
+            and torch.isfinite(value)
+        )
+        return PolicyScoreDetail(
+            logits=tuple(float(item) for item in logits),
+            masked_logits=tuple(float(item) for item in masked_logits),
+            action_probs=tuple(float(item) for item in action_probs),
+            value=float(value),
+            selected_action_index=selected_action,
+            selected_probability=selected_probability,
+            selected_rank=selected_rank,
+            finite_outputs=finite_outputs,
+            latency_ms=latency_ms,
+        )
 
 
 def observation_to_tensors(

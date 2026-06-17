@@ -898,6 +898,44 @@ class TorchPolicyNetworkTests(unittest.TestCase):
         self.assertIsNotNone(decision.selected_goal)
         self.assertNotEqual(decision.selected_goal.cell, (1, 1))
 
+    def test_torch_policy_scorer_score_detail_exposes_full_masked_inference_result(self):
+        import torch
+
+        from model_explorer.policy.features import extract_policy_observation
+        from model_explorer.policy.torch_policy import MaskedCandidatePolicyNetwork, TorchPolicyScorer
+
+        contract = load_contract_from_dict(
+            minimal_contract(
+                goals=[
+                    {"cell": [0, 0], "utility": 0.5, "reachable": True},
+                    {"cell": [1, 1], "utility": 9.0, "reachable": False},
+                    {"cell": [2, 1], "utility": 0.4, "reachable": True},
+                ]
+            )
+        )
+        observation = extract_policy_observation(contract, max_candidates=3)
+        network = MaskedCandidatePolicyNetwork(
+            candidate_feature_count=len(observation.candidate_feature_names),
+            global_feature_count=len(observation.global_feature_names),
+            hidden_size=16,
+        )
+        scorer = TorchPolicyScorer(network)
+
+        detail = scorer.score_detail(observation)
+        legacy_scores = scorer.score(observation)
+
+        self.assertEqual(detail.masked_logits, legacy_scores)
+        self.assertEqual(len(detail.logits), 3)
+        self.assertEqual(len(detail.masked_logits), 3)
+        self.assertEqual(len(detail.action_probs), 3)
+        self.assertTrue(detail.finite_outputs)
+        self.assertNotEqual(detail.selected_action_index, 1)
+        self.assertGreaterEqual(detail.selected_probability, 0.0)
+        self.assertLessEqual(detail.selected_probability, 1.0)
+        self.assertGreaterEqual(detail.selected_rank, 1)
+        self.assertGreaterEqual(detail.latency_ms, 0.0)
+        self.assertTrue(torch.isfinite(torch.tensor(detail.value)))
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is not available")
 class MaskedPpoTests(unittest.TestCase):
