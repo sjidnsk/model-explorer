@@ -9,6 +9,7 @@ from ..io.scenario import Scenario
 from .execution import ExecutionFeasibilityAdapter, ExecutionFeasibilityRequest
 from .features import extract_policy_observation
 from .feedback_selection import select_goal_with_path_feedback
+from .canonical_reward import load_canonical_reward_profile
 from .planning import (
     AnchorProjectionCandidateConfig,
     ContractCostPlanner,
@@ -208,6 +209,14 @@ def collect_dynamic_rollout_episode(
         total_risk += reward_info.risk
         if selected_goal is not None:
             selected_count += 1
+        if reward_info.reward_components:
+            extra_info["reward_components"] = dict(reward_info.reward_components)
+        if reward_info.profile_id is not None:
+            extra_info["profile_id"] = reward_info.profile_id
+        if reward_info.profile_version is not None:
+            extra_info["profile_version"] = reward_info.profile_version
+        if reward_info.profile_hash is not None:
+            extra_info["profile_hash"] = reward_info.profile_hash
 
         reached_step_limit = step_limit is not None and step_index + 1 >= step_limit
         next_contract = None if reached_step_limit else provider_result.next_contract
@@ -465,11 +474,18 @@ def _dedupe_strings(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(result)
 
 
-def _reward_kwargs(config: dict[str, Any] | None) -> dict[str, float]:
+def _reward_kwargs(config: dict[str, Any] | None) -> dict[str, Any]:
     allowed = ("path_cost_weight", "path_cost_normalizer", "risk_weight", "failure_penalty")
     if config is None:
         return {}
-    return {key: float(config[key]) for key in allowed if key in config}
+    kwargs: dict[str, Any] = {key: float(config[key]) for key in allowed if key in config}
+    if "canonical_profile" in config:
+        kwargs["canonical_profile"] = config["canonical_profile"]
+    elif "canonical_profile_path" in config:
+        kwargs["canonical_profile"] = load_canonical_reward_profile(config["canonical_profile_path"])
+    elif "canonical_reward_profile" in config:
+        kwargs["canonical_profile"] = load_canonical_reward_profile(config["canonical_reward_profile"])
+    return kwargs
 
 
 def _rollout_metadata_info(metadata: dict[str, Any] | None) -> dict[str, Any]:

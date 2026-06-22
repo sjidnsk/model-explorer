@@ -7,6 +7,7 @@ from typing import Any
 from ..core.interfaces import GoalCandidate, ModelExplorerContract
 from ..decision.selector import select_goal
 from ..io.scenario import Scenario
+from .canonical_reward import load_canonical_reward_profile
 from .features import extract_policy_observation
 from .feedback_selection import select_goal_with_path_feedback
 from .planning import PathPlanRequest, PathPlanningAdapter
@@ -18,6 +19,7 @@ def evaluate_policy_baselines(
     *,
     torch_policy=None,
     planning_adapter: PathPlanningAdapter | None = None,
+    reward_config: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     snapshots = (
         scenario_or_snapshots.snapshots
@@ -25,11 +27,18 @@ def evaluate_policy_baselines(
         else tuple(scenario_or_snapshots)
     )
 
-    utility_metrics = _evaluate_strategy(snapshots, _select_utility_goal, planning_adapter=planning_adapter)
+    reward_kwargs = _reward_kwargs(reward_config)
+    utility_metrics = _evaluate_strategy(
+        snapshots,
+        _select_utility_goal,
+        planning_adapter=planning_adapter,
+        reward_kwargs=reward_kwargs,
+    )
     coverage_metrics = _evaluate_strategy(
         snapshots,
         lambda contract: select_goal(contract).selected_goal,
         planning_adapter=planning_adapter,
+        reward_kwargs=reward_kwargs,
     )
     report = {
         "utility": utility_metrics,
@@ -41,6 +50,7 @@ def evaluate_policy_baselines(
             snapshots,
             _select_no_goal,
             planning_adapter=planning_adapter,
+            reward_kwargs=reward_kwargs,
             selection_result_factory=lambda contract, current_cell, step_index: _feedback_aware_selection_result(
                 contract,
                 planning_adapter=planning_adapter,
@@ -54,6 +64,7 @@ def evaluate_policy_baselines(
             snapshots,
             lambda contract: select_goal(contract, policy=torch_policy).selected_goal,
             planning_adapter=planning_adapter,
+            reward_kwargs=reward_kwargs,
         )
         if feedback_metrics is not None:
             torch_metrics.update(_policy_agreement_metrics(torch_metrics, feedback_metrics, "feedback_aware"))
@@ -78,12 +89,14 @@ def evaluate_policy_baseline_scenarios(
     *,
     torch_policy=None,
     planning_adapter: PathPlanningAdapter | None = None,
+    reward_config: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     reports = [
         evaluate_policy_baselines(
             scenario_or_snapshots,
             torch_policy=torch_policy,
             planning_adapter=planning_adapter,
+            reward_config=reward_config,
         )
         for scenario_or_snapshots in scenarios_or_snapshots
     ]
@@ -249,13 +262,29 @@ def _aggregate_margin_bucket_agreement(reports: tuple[dict[str, Any], ...]) -> d
     return result
 
 
+def _reward_kwargs(config: dict[str, Any] | None) -> dict[str, Any]:
+    allowed = ("path_cost_weight", "path_cost_normalizer", "risk_weight", "failure_penalty")
+    if config is None:
+        return {}
+    kwargs: dict[str, Any] = {key: float(config[key]) for key in allowed if key in config}
+    if "canonical_profile" in config:
+        kwargs["canonical_profile"] = config["canonical_profile"]
+    elif "canonical_profile_path" in config:
+        kwargs["canonical_profile"] = load_canonical_reward_profile(config["canonical_profile_path"])
+    elif "canonical_reward_profile" in config:
+        kwargs["canonical_profile"] = load_canonical_reward_profile(config["canonical_reward_profile"])
+    return kwargs
+
+
 def _evaluate_strategy(
     snapshots: tuple[ModelExplorerContract, ...],
     selector,
     *,
     planning_adapter: PathPlanningAdapter | None,
+    reward_kwargs: dict[str, Any] | None = None,
     selection_result_factory=None,
 ) -> dict[str, Any]:
+    reward_kwargs = reward_kwargs or {}
     selected_cells: list[list[int] | None] = []
     selected_action_indices: list[int | None] = []
     cumulative_coverage_rate_delta = 0.0
@@ -352,6 +381,7 @@ def _evaluate_strategy(
             contract.observation_update,
             path_cost_override=None if planning_result is None else planning_result.path_cost,
             risk_override=None if planning_result is None else planning_result.risk,
+            **reward_kwargs,
         )
         selected_cells.append([selected_goal.cell[0], selected_goal.cell[1]])
         cumulative_coverage_rate_delta += reward_info.coverage_rate_delta
@@ -453,6 +483,11 @@ def _evaluate_strategy(
     }
     if any(teacher_diagnostics):
         metrics.update(_teacher_diagnostics_summary(teacher_diagnostics))
+    if reward_kwargs.get("canonical_profile") is not None:
+        profile = reward_kwargs["canonical_profile"]
+        metrics["profile_id"] = profile.profile_id
+        metrics["profile_version"] = profile.profile_version
+        metrics["profile_hash"] = profile.profile_hash
     return metrics
 
 
