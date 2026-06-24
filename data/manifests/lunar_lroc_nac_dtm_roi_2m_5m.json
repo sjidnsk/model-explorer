@@ -1,0 +1,17 @@
+{
+  "schema_version": "model-explorer-data-manifest/v1",
+  "dataset_id": "lunar_lroc_nac_dtm_roi_2m_5m",
+  "data_class": "high_resolution_terrain_catalog",
+  "target_body": "Moon",
+  "region": "roi_dependent",
+  "preferred_for_stage23": false,
+  "source_priority": "roi_enhancement_lroc_nac_dtm",
+  "source_url": "https://ode.rsl.wustl.edu/moon/pagehelp/Content/Missions_Instruments/LRO/LROC/SDR/Intro.htm",
+  "license": "NASA PDS / LROC ODE product terms; verify per selected DTM product",
+  "source_notes": [
+    "LROC NAC DTM products are 2-5 m/pixel local stereo terrain products.",
+    "Stage23.2A does not automatically replace the default map with NAC DTM unless a specific ROI-overlapping product is selected.",
+    "A selected product should provide DEM/DTM and preferably slope or quality companion products."
+  ],
+  "products": []
+}

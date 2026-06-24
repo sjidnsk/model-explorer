@@ -1,0 +1,54 @@
+{
+  "schema_version": "model-explorer-data-manifest/v1",
+  "dataset_id": "lunar_south_pole_usgs_lro_dem_slope_4m",
+  "data_class": "high_resolution_terrain",
+  "target_body": "Moon",
+  "region": "lunar_south_pole",
+  "preferred_for_stage23": true,
+  "source_priority": "primary_usgs_4m",
+  "source_url": "https://astrogeology.usgs.gov/search/map/moon_lro_south_pole_dem_slope_map",
+  "product_id": "MOON_LRO_NAC_DEM_SLOPE_89S210E_4mp",
+  "projection": {
+    "name": "south_pole_stereographic",
+    "map_scale_meters_per_pixel": 4.0,
+    "metadata_source": "USGS Astrogeology product page and PDS labels"
+  },
+  "license": "USGS public domain unless product notes state otherwise",
+  "source_notes": [
+    "USGS Astrogeology Moon LRO South Pole DEM and slope products.",
+    "Stage23 uses slope values only as slope_blocked_as_obstacle_proxy, not physical rock or crack labels."
+  ],
+  "products": [
+    {
+      "product_id": "MOON_LRO_NAC_DEM_89S210E_4mp",
+      "role": "dem",
+      "resolution_m": 4.0,
+      "source_url": "https://astrogeology.usgs.gov/search/map/moon_lro_south_pole_dem",
+      "source_hash_policy": "runtime_sha256",
+      "files": [
+        {
+          "name": "MOON_LRO_NAC_DEM_89S210E_4mp.tif",
+          "url": "https://asc-astropedia.s3.us-west-2.amazonaws.com/Moon/LRO/MOON_LRO_NAC_DEM_89S210E_4mp.tif",
+          "label_url": "https://astrogeology.usgs.gov/ckan/dataset/61d426ba-9e84-47cd-b2dc-8b73282a0ae1/resource/304ef7f2-50f2-4250-8ba6-4275069093e9/download/moon_lro_nac_dem_89s210e_4mp.lbl",
+          "expected_bytes": 310140246
+        }
+      ]
+    },
+    {
+      "product_id": "MOON_LRO_NAC_Slope_89S210E_4mp",
+      "role": "slope_map",
+      "resolution_m": 4.0,
+      "source_url": "https://astrogeology.usgs.gov/search/map/moon_lro_south_pole_dem_slope_map",
+      "source_hash_policy": "runtime_sha256",
+      "value_encoding": "rgb_visual_slope_map_not_scalar_degrees",
+      "files": [
+        {
+          "name": "MOON_LRO_NAC_Slope_89S210E_4mp.tif",
+          "url": "https://asc-astropedia.s3.us-west-2.amazonaws.com/Moon/LRO/MOON_LRO_NAC_Slope_89S210E_4mp.tif",
+          "label_url": "https://astrogeology.usgs.gov/ckan/dataset/ae25c2c4-2d44-425c-afd5-4d0d8a6eccf5/resource/91696c35-7210-4967-9249-886f9bb255da/download/moon_lro_nac_slope_89s210e_4mp.lbl",
+          "expected_bytes": 70131711
+        }
+      ]
+    }
+  ]
+}
