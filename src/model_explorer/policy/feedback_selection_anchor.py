@@ -4,7 +4,7 @@ from collections import Counter
 from typing import Any
 
 from .path_feedback_manifest import cell_tuple as _cell_tuple
-from .planning_anchor import anchor_projection_candidate_config_from_mapping
+from .planning_anchor_projection import anchor_projection_candidate_config_from_mapping
 from .planning_types import AnchorProjectionCandidateConfig
 
 

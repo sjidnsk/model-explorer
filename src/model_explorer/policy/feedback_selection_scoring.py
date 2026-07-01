@@ -5,10 +5,8 @@ from typing import Any
 
 from ..core.interfaces import ExplorerDecision, GoalCandidate, ModelExplorerContract
 from .feedback_selection_types import FeedbackAwareSelection, FeedbackAwareSelectionConfig
-from .planning_anchor import (
-    anchor_projection_candidate_config_from_mapping,
-    evaluate_candidate_paths,
-)
+from .planning_anchor_evaluation import evaluate_candidate_paths
+from .planning_anchor_projection import anchor_projection_candidate_config_from_mapping
 from .planning_types import (
     AnchorProjectionCandidateConfig,
     PathCandidateEvaluation,

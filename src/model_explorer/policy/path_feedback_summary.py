@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .path_feedback_manifest import PathFeedbackManifest
-from .planning_anchor import anchor_projection_candidate_config_from_mapping
+from .planning_anchor_projection import anchor_projection_candidate_config_from_mapping
 
 
 PATH_FEEDBACK_SUMMARY_SCHEMA_VERSION = "path-feedback-summary/v1"

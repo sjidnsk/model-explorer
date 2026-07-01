@@ -5,7 +5,7 @@ from typing import Any
 from ..core.interfaces import GoalCandidate, ModelExplorerContract
 from .feedback_selection_anchor import _candidate_generation_for_selection
 from .path_feedback_manifest import cell_tuple as _cell_tuple
-from .planning_anchor import anchor_projection_candidate_config_from_mapping
+from .planning_anchor_projection import anchor_projection_candidate_config_from_mapping
 from .planning_types import AnchorProjectionCandidateConfig, PathCandidateEvaluation
 
 

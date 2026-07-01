@@ -7,8 +7,12 @@ from importlib import import_module as _import_module
 _PUBLIC_MODULES = (
     "planning_types",
     "planning_routes",
-    "planning_diagnostics",
-    "planning_anchor",
+    "planning_backend_summaries",
+    "planning_platform_feasibility",
+    "planning_diagnostic_interpretation",
+    "planning_anchor_evaluation",
+    "planning_anchor_projection",
+    "planning_anchor_grid",
     "planning_adapters",
     "planning_utils",
 )

@@ -282,15 +282,12 @@ def test_verification_architecture_static_check_reports_target_governance_red_st
 
     assert result["returncode"] == 1
     assert rule_counts == {
-        "target_facade_line_limit": 3,
-        "target_split_module_exists": 10,
-        "no_target_facade_private_production_import": 50,
-        "no_dynamic_all_in_governed_module": 2,
+        "target_facade_line_limit": 1,
+        "target_split_module_exists": 4,
+        "no_target_facade_private_production_import": 22,
         "giant_test_line_limit": 2,
     }
     assert oversized_targets == {
-        "src/model_explorer/policy/planning_anchor.py",
-        "src/model_explorer/policy/planning_diagnostics.py",
         "src/model_explorer/experiments/quasi_real_matrix/selection.py",
     }
     assert giant_tests == {

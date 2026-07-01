@@ -67,20 +67,21 @@ class PathCandidateEvaluation:
     candidate_generation: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        from .planning_diagnostics import (
+        from .planning_backend_summaries import (
             _convex_region_summary,
             _gcs_candidate_summary,
             _gcs_curvature_constrained_candidate_summary,
             _gcs_motion_feasibility_summary,
             _gcs_trajectory_summary,
-            _input_source_summary,
             _iris_region_summary,
             _optimization_summary,
             _planning_backend_summary,
-            _platform_goal_feasibility,
             _postprocess_summary,
             _region_graph_summary,
-            _report_present,
+        )
+        from .planning_diagnostic_interpretation import _input_source_summary, _report_present
+        from .planning_platform_feasibility import (
+            _platform_goal_feasibility,
             _with_projected_anchor_feasibility,
         )
         from .planning_utils import _cell_pair

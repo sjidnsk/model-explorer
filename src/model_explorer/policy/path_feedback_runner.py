@@ -71,8 +71,9 @@ from .path_feedback_summary import (
     validate_path_feedback_summary_contract,
 )
 from .planning_adapters import PathPlannerRouteAdapter, planner_from_config
-from .planning_anchor import anchor_projection_candidate_config_from_mapping, evaluate_candidate_paths
-from .planning_diagnostics import path_feedback_summary
+from .planning_anchor_evaluation import evaluate_candidate_paths
+from .planning_anchor_projection import anchor_projection_candidate_config_from_mapping
+from .planning_backend_summaries import path_feedback_summary
 from .planning_routes import load_path_planner_sidecar
 from .planning_types import (
     AnchorProjectionCandidateConfig,

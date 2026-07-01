@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from .planning_diagnostics import (
+from .planning_backend_summaries import (
     _convex_region_route_report,
     _gcs_candidate_route_report,
     _gcs_curvature_constrained_candidate_route_report,
