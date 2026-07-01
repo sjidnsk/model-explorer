@@ -7,6 +7,7 @@ from ..io.scenario import Scenario, load_scenario
 from ..policy.collector import collect_rollout_episode
 from ..policy.evaluation import evaluate_policy_baseline_scenarios, evaluate_policy_baselines
 from ..policy.rollout import RolloutEpisode
+from .manifest import ExperimentManifest, ExperimentScenarioGroup
 
 
 def _reward_ablations(value: Any) -> tuple[dict[str, Any], ...]:

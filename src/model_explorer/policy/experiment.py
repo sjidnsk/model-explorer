@@ -1,12 +1,15 @@
 """Legacy compatibility facade for experiment orchestration APIs."""
 
-from ..experiments import experiment_impl as _impl
+from importlib import import_module as _import_module
 
-for _name in dir(_impl):
-    if not _name.startswith("__"):
-        globals()[_name] = getattr(_impl, _name)
+_impl = _import_module("model_explorer.experiments.experiment_impl")
+_EXPORT_NAMES = tuple(getattr(_impl, "__all__", ()))
+_exports = {name: getattr(_impl, name) for name in _EXPORT_NAMES}
 
-del _name
+globals().update(_exports)
+__all__ = _EXPORT_NAMES
+
+del _EXPORT_NAMES
+del _exports
+del _import_module
 del _impl
-
-__all__ = [_name for _name in globals() if not _name.startswith("__")]

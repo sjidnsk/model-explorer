@@ -5,9 +5,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .evaluation import _all_split_scenarios, _reward_ablations
-
-
 EXPERIMENT_SCHEMA_VERSION = "model-explorer-experiment/v1"
 
 
@@ -53,6 +50,8 @@ class ExperimentManifest:
 
 
 def load_experiment_manifest(path: str | Path) -> ExperimentManifest:
+    from .evaluation import _reward_ablations
+
     manifest_path = Path(path)
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -327,6 +326,8 @@ def _manifest_inspection_summary(
     split_scenarios: dict[str, tuple[Scenario, ...]],
     status: str,
 ) -> dict[str, Any]:
+    from .evaluation import _all_split_scenarios
+
     scenarios = _all_split_scenarios(split_scenarios)
     return {
         "status": status,

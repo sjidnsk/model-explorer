@@ -23,6 +23,7 @@ from .evaluation import (
     _grouped_evaluation,
 )
 from .manifest import (
+    ExperimentScenarioGroup,
     _ensure_parent_dir,
     _resolve_path,
     _system_calibration_config,
