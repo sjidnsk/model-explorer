@@ -36,3 +36,13 @@
 - Path feedback 的诊断、artifact、selection 入口分别暴露在 `path_feedback_diagnostics.py`、`path_feedback_artifacts.py` 和 `feedback_selection.py`。
 - Experiment selection、training matrix、report、environment helper 使用 `experiments.*` 入口；旧 `policy.experiment` 只作为兼容 facade。
 - Quasi-real matrix 的 manifest、runner、scenario generation、selection、reports 使用 `experiments.quasi_real_matrix.*` 入口；旧 `data.evaluation_matrix` 只作为兼容 facade。
+
+## 第三轮 runner 职责收敛状态
+
+第三轮后，三个 runner 只保留入口编排、I/O glue 和高层流程控制：
+
+- `model_explorer.policy.path_feedback_runner`：保留 validate、dry-run、run、单 scenario orchestration。manifest 解析在 `path_feedback_manifest.py`，summary 合同在 `path_feedback_summary.py`，Markdown 在 `path_feedback_reports.py`，诊断在 `path_feedback_diagnostics.py`，artifact 和 triage 在 `path_feedback_artifacts.py`，反馈选择在 `feedback_selection.py`。
+- `model_explorer.experiments.runner`：保留实验 manifest validate、dry-run、run 的 orchestration。manifest、training matrix、selection、evaluation、report、environment metadata 分别由同名目标模块承接。
+- `model_explorer.experiments.quasi_real_matrix.runner`：保留 quasi-real matrix 的高层 validate、dry-run、run。ROI manifest、scenario generation、selection、metrics、report 分别由目标模块承接。
+
+兼容层仍保留旧 public import 路径，但真实业务逻辑不得回流到 legacy facade 或 `*_impl.py`。当前 verification 对 runner 行数设硬限制：path feedback 和 experiment runner 不超过 800 行，quasi-real runner 不超过 700 行；目标模块也不得静态导入自己的 runner。

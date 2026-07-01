@@ -16,10 +16,13 @@ _TEMPORARY_EXPORT_NAMES = {
     "Any",
     "Counter",
     "Path",
+    "annotations",
+    "dataclass",
     "defaultdict",
     "field",
     "isfinite",
     "json",
+    "load_scenario",
 }
 
 _LEGACY_PRIVATE_EXPORTS = {

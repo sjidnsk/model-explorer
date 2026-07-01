@@ -2,11 +2,12 @@
 
 from . import planning_impl as _impl
 
-for _name in dir(_impl):
-    if not _name.startswith("__"):
-        globals()[_name] = getattr(_impl, _name)
+_EXPORT_NAMES = tuple(getattr(_impl, "__all__", ()))
+_exports = {_name: getattr(_impl, _name) for _name in _EXPORT_NAMES}
 
-del _name
+globals().update(_exports)
+__all__ = _EXPORT_NAMES
+
+del _EXPORT_NAMES
+del _exports
 del _impl
-
-__all__ = [_name for _name in globals() if not _name.startswith("__")]

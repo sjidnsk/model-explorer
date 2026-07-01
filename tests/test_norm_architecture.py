@@ -217,6 +217,170 @@ def test_impl_modules_are_only_compatibility_shims() -> None:
     assert oversized == {}
 
 
+def test_legacy_facade_exports_do_not_leak_temporary_names() -> None:
+    from model_explorer.policy import path_feedback, planning
+    from model_explorer.policy import path_feedback_impl, planning_impl
+
+    forbidden = {
+        "Any",
+        "Counter",
+        "Path",
+        "Protocol",
+        "Sequence",
+        "annotations",
+        "ceil",
+        "dataclass",
+        "deque",
+        "field",
+        "heappop",
+        "heappush",
+        "hypot",
+        "json",
+        "load_scenario",
+        "os",
+        "subprocess",
+        "sys",
+        "tempfile",
+    }
+
+    for module in (planning, planning_impl, path_feedback, path_feedback_impl):
+        assert forbidden.isdisjoint(set(module.__all__))
+
+    assert "PathPlanRequest" in planning.__all__
+    assert "evaluate_candidate_paths" in planning.__all__
+    assert "run_path_feedback_manifest" in path_feedback.__all__
+    assert "_selected_after_feedback" in path_feedback.__all__
+
+
+def test_runner_modules_are_only_orchestration_layers() -> None:
+    runner_limits = {
+        SRC_ROOT / "policy" / "path_feedback_runner.py": 800,
+        SRC_ROOT / "experiments" / "runner.py": 800,
+        SRC_ROOT / "experiments" / "quasi_real_matrix" / "runner.py": 700,
+    }
+
+    oversized = {
+        path.relative_to(MODEL_ROOT).as_posix(): len(path.read_text(encoding="utf-8").splitlines())
+        for path, limit in runner_limits.items()
+        if len(path.read_text(encoding="utf-8").splitlines()) > limit
+    }
+
+    assert oversized == {}
+
+
+def test_split_modules_do_not_import_their_runner() -> None:
+    runner_splits = {
+        "model_explorer.policy.path_feedback_runner": [
+            SRC_ROOT / "policy" / "feedback_selection.py",
+            SRC_ROOT / "policy" / "path_feedback_artifacts.py",
+            SRC_ROOT / "policy" / "path_feedback_diagnostics.py",
+            SRC_ROOT / "policy" / "path_feedback_manifest.py",
+            SRC_ROOT / "policy" / "path_feedback_reports.py",
+            SRC_ROOT / "policy" / "path_feedback_summary.py",
+        ],
+        "model_explorer.experiments.runner": [
+            SRC_ROOT / "experiments" / "environment.py",
+            SRC_ROOT / "experiments" / "evaluation.py",
+            SRC_ROOT / "experiments" / "manifest.py",
+            SRC_ROOT / "experiments" / "reports.py",
+            SRC_ROOT / "experiments" / "selection.py",
+            SRC_ROOT / "experiments" / "training_matrix.py",
+        ],
+        "model_explorer.experiments.quasi_real_matrix.runner": [
+            SRC_ROOT / "experiments" / "quasi_real_matrix" / "manifest.py",
+            SRC_ROOT / "experiments" / "quasi_real_matrix" / "metrics.py",
+            SRC_ROOT / "experiments" / "quasi_real_matrix" / "reports.py",
+            SRC_ROOT / "experiments" / "quasi_real_matrix" / "scenario_generation.py",
+            SRC_ROOT / "experiments" / "quasi_real_matrix" / "selection.py",
+        ],
+    }
+    violations: list[str] = []
+    for runner_module, paths in runner_splits.items():
+        for path in paths:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name == runner_module:
+                            violations.append(f"{path.relative_to(MODEL_ROOT)}:{node.lineno}")
+                elif isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    if module == runner_module or module.endswith(runner_module):
+                        violations.append(f"{path.relative_to(MODEL_ROOT)}:{node.lineno}")
+                    if node.level and module == "runner":
+                        violations.append(f"{path.relative_to(MODEL_ROOT)}:{node.lineno}")
+
+    assert violations == []
+
+
+def test_verification_catches_nested_legacy_and_private_runner_imports(tmp_path) -> None:
+    from model_explorer.verification import _run_architecture_static_check
+
+    required_files = [
+        "src/model_explorer/policy/planning.py",
+        "src/model_explorer/policy/path_feedback.py",
+        "src/model_explorer/policy/experiment.py",
+        "src/model_explorer/data/evaluation_matrix.py",
+        "src/model_explorer/policy/planning_impl.py",
+        "src/model_explorer/policy/path_feedback_impl.py",
+        "src/model_explorer/experiments/experiment_impl.py",
+        "src/model_explorer/experiments/quasi_real_matrix/evaluation_matrix_impl.py",
+        "src/model_explorer/policy/path_feedback_runner.py",
+        "src/model_explorer/experiments/runner.py",
+        "src/model_explorer/experiments/quasi_real_matrix/runner.py",
+        "src/model_explorer/policy/path_feedback_artifacts.py",
+        "src/model_explorer/policy/path_feedback_diagnostics.py",
+        "src/model_explorer/policy/path_feedback_manifest.py",
+        "src/model_explorer/policy/path_feedback_reports.py",
+        "src/model_explorer/policy/path_feedback_summary.py",
+        "src/model_explorer/policy/feedback_selection.py",
+        "src/model_explorer/experiments/environment.py",
+        "src/model_explorer/experiments/evaluation.py",
+        "src/model_explorer/experiments/manifest.py",
+        "src/model_explorer/experiments/reports.py",
+        "src/model_explorer/experiments/selection.py",
+        "src/model_explorer/experiments/training_matrix.py",
+        "src/model_explorer/experiments/quasi_real_matrix/manifest.py",
+        "src/model_explorer/experiments/quasi_real_matrix/metrics.py",
+        "src/model_explorer/experiments/quasi_real_matrix/reports.py",
+        "src/model_explorer/experiments/quasi_real_matrix/scenario_generation.py",
+        "src/model_explorer/experiments/quasi_real_matrix/selection.py",
+    ]
+    for relative in required_files:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# compatibility test fixture\n", encoding="utf-8")
+
+    offender = tmp_path / "src/model_explorer/offender.py"
+    offender.write_text(
+        "\n".join(
+            [
+                "def nested_legacy_import():",
+                "    from model_explorer.policy.path_feedback import run_path_feedback_manifest",
+                "    return run_path_feedback_manifest",
+                "",
+                "def private_runner_import():",
+                "    from model_explorer.policy.path_feedback_runner import _run_feedback_scenario",
+                "    return _run_feedback_scenario",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_architecture_static_check(tmp_path)
+    rule_targets = {(violation["rule"], violation.get("target")) for violation in result["violations"]}
+
+    assert (
+        "no_business_code_legacy_import",
+        "model_explorer.policy.path_feedback",
+    ) in rule_targets
+    assert (
+        "no_business_code_private_runner_import",
+        "model_explorer.policy.path_feedback_runner",
+    ) in rule_targets
+
+
 def test_decision_package_has_no_static_policy_imports() -> None:
     violations: list[str] = []
     for path in sorted((SRC_ROOT / "decision").glob("*.py")):
@@ -242,6 +406,9 @@ def test_tests_do_not_import_private_legacy_symbols() -> None:
         "model_explorer.policy.path_feedback",
         "model_explorer.policy.experiment",
         "model_explorer.data.evaluation_matrix",
+        "model_explorer.policy.path_feedback_runner",
+        "model_explorer.experiments.runner",
+        "model_explorer.experiments.quasi_real_matrix.runner",
     }
     violations: list[str] = []
     for path in sorted((MODEL_ROOT / "tests").rglob("*.py")):

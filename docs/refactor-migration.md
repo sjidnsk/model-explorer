@@ -34,3 +34,10 @@
 - 旧 private helper 若仍需覆盖，应通过新的目标模块暴露无下划线 API 后再测试。
 - `data` 和 `decision` 层不得顶层静态导入 `policy`；需要策略 observation 时使用 `contracts.observations`。
 - `*_impl.py` 与旧 facade 文件必须保持小型 compatibility shim，不承载新的业务实现。
+
+## 第三轮 runner 迁移规则
+
+- runner 私有 helper 不再作为测试入口。新增测试应从目标模块导入 public/internal API，例如 path feedback summary、report、diagnostics、artifacts，experiments selection、evaluation、report，quasi-real metrics、selection、report。
+- 旧 facade 和 `*_impl.py` 只承担兼容 re-export。需要保留历史私有符号时，使用显式 `__all__` 与 allowlist shim，不得通过 `dir()` 广泛泄漏临时变量或导入对象。
+- 生产代码不得从 legacy facade、`*_impl.py` 或 runner 回流导入已迁出的职责 helper。目标模块之间按职责依赖，目标模块不得静态导入自己的 runner。
+- verification 已收紧 runner 行数限制、split module 反向导入检查和测试 private import 检查。新增 runner 逻辑前，应先判断它是否应下沉到 manifest、summary、reports、selection、metrics、diagnostics、artifacts、training matrix 或 evaluation 模块。

@@ -2,36 +2,54 @@
 
 from __future__ import annotations
 
-from . import planning_adapters as _planning_adapters
-from . import planning_anchor as _planning_anchor
-from . import planning_diagnostics as _planning_diagnostics
-from . import planning_routes as _planning_routes
-from . import planning_types as _planning_types
-from . import planning_utils as _planning_utils
+from importlib import import_module as _import_module
 
-_MODULES = (
-    _planning_types,
-    _planning_routes,
-    _planning_diagnostics,
-    _planning_anchor,
-    _planning_adapters,
-    _planning_utils,
+_PUBLIC_MODULES = (
+    "planning_types",
+    "planning_routes",
+    "planning_diagnostics",
+    "planning_anchor",
+    "planning_adapters",
+    "planning_utils",
 )
 
-for _module in _MODULES:
-    for _name in dir(_module):
-        if _name.startswith("__"):
+_TEMPORARY_EXPORT_NAMES = {
+    "Any",
+    "Counter",
+    "Path",
+    "Protocol",
+    "Sequence",
+    "annotations",
+    "ceil",
+    "dataclass",
+    "deque",
+    "field",
+    "heappop",
+    "heappush",
+    "hypot",
+    "json",
+    "os",
+    "subprocess",
+    "sys",
+    "tempfile",
+}
+
+_exports = {}
+for _module_name in _PUBLIC_MODULES:
+    _module = _import_module(f"{__package__}.{_module_name}")
+    for _name in getattr(_module, "__all__", ()):
+        if _name in _TEMPORARY_EXPORT_NAMES:
             continue
-        globals()[_name] = getattr(_module, _name)
+        if hasattr(_module, _name):
+            _exports.setdefault(_name, getattr(_module, _name))
+
+globals().update(_exports)
+__all__ = tuple(sorted(_exports))
 
 del _module
+del _module_name
 del _name
-del _MODULES
-del _planning_adapters
-del _planning_anchor
-del _planning_diagnostics
-del _planning_routes
-del _planning_types
-del _planning_utils
-
-__all__ = [_name for _name in globals() if not _name.startswith("__")]
+del _exports
+del _import_module
+del _PUBLIC_MODULES
+del _TEMPORARY_EXPORT_NAMES

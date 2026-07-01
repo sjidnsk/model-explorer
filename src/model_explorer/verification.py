@@ -30,11 +30,45 @@ _IMPL_FILES = (
     "src/model_explorer/experiments/experiment_impl.py",
     "src/model_explorer/experiments/quasi_real_matrix/evaluation_matrix_impl.py",
 )
+_RUNNER_LINE_LIMITS = {
+    "src/model_explorer/policy/path_feedback_runner.py": 800,
+    "src/model_explorer/experiments/runner.py": 800,
+    "src/model_explorer/experiments/quasi_real_matrix/runner.py": 700,
+}
+_RUNNER_SPLIT_MODULES = {
+    "model_explorer.policy.path_feedback_runner": (
+        "src/model_explorer/policy/path_feedback_artifacts.py",
+        "src/model_explorer/policy/path_feedback_diagnostics.py",
+        "src/model_explorer/policy/path_feedback_manifest.py",
+        "src/model_explorer/policy/path_feedback_reports.py",
+        "src/model_explorer/policy/path_feedback_summary.py",
+        "src/model_explorer/policy/feedback_selection.py",
+    ),
+    "model_explorer.experiments.runner": (
+        "src/model_explorer/experiments/environment.py",
+        "src/model_explorer/experiments/evaluation.py",
+        "src/model_explorer/experiments/manifest.py",
+        "src/model_explorer/experiments/reports.py",
+        "src/model_explorer/experiments/selection.py",
+        "src/model_explorer/experiments/training_matrix.py",
+    ),
+    "model_explorer.experiments.quasi_real_matrix.runner": (
+        "src/model_explorer/experiments/quasi_real_matrix/manifest.py",
+        "src/model_explorer/experiments/quasi_real_matrix/metrics.py",
+        "src/model_explorer/experiments/quasi_real_matrix/reports.py",
+        "src/model_explorer/experiments/quasi_real_matrix/scenario_generation.py",
+        "src/model_explorer/experiments/quasi_real_matrix/selection.py",
+    ),
+}
+_RUNNER_IMPORT_TARGET_MODULES = set(_RUNNER_SPLIT_MODULES)
 _PRIVATE_IMPORT_TARGET_MODULES = {
     "model_explorer.policy.planning",
     "model_explorer.policy.path_feedback",
     "model_explorer.policy.experiment",
     "model_explorer.data.evaluation_matrix",
+    "model_explorer.policy.path_feedback_runner",
+    "model_explorer.experiments.runner",
+    "model_explorer.experiments.quasi_real_matrix.runner",
 }
 _LEGACY_IMPORT_TARGET_MODULES = {
     "model_explorer.policy.planning",
@@ -98,6 +132,9 @@ def _planned_steps(project_root: Path, *, skip_benchmark_smoke: bool) -> list[di
             "facade_line_limit": _FACADE_LINE_LIMIT,
             "facades": [str(project_root / name) for name in _FACADE_FILES],
             "impls": [str(project_root / name) for name in _IMPL_FILES],
+            "runner_line_limits": {
+                str(project_root / name): limit for name, limit in _RUNNER_LINE_LIMITS.items()
+            },
         },
         {"name": "git_diff_check", "kind": "subprocess", "command": ["git", "diff", "--check"]},
     ]
@@ -243,7 +280,7 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
             scanned_files += 1
             module_name = _module_name_for_source_path(root, path)
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            for node in tree.body:
+            for node in ast.walk(tree):
                 for target in _legacy_import_targets(
                     node,
                     current_module=module_name,
@@ -256,6 +293,27 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                             "line": node.lineno,
                             "text": _import_text(node),
                             "target": target,
+                        }
+                    )
+                if not isinstance(node, ast.ImportFrom):
+                    continue
+                imported_module = _resolve_import_from_module(
+                    module_name,
+                    node,
+                    current_is_package=path.name == "__init__.py",
+                )
+                if imported_module not in _RUNNER_IMPORT_TARGET_MODULES:
+                    continue
+                for alias in node.names:
+                    if not alias.name.startswith("_"):
+                        continue
+                    violations.append(
+                        {
+                            "rule": "no_business_code_private_runner_import",
+                            "path": relative_path,
+                            "line": node.lineno,
+                            "text": f"from {imported_module} import {alias.name}",
+                            "target": imported_module,
                         }
                     )
 
@@ -281,6 +339,62 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                     "text": f"{line_count} lines > {_FACADE_LINE_LIMIT}",
                 }
             )
+
+    for relative_path, limit in _RUNNER_LINE_LIMITS.items():
+        path = root / relative_path
+        if not path.exists():
+            violations.append(
+                {
+                    "rule": "runner_module_exists",
+                    "path": relative_path,
+                    "line": None,
+                    "text": "missing runner module",
+                }
+            )
+            continue
+        line_count = len(path.read_text(encoding="utf-8").splitlines())
+        if line_count > limit:
+            violations.append(
+                {
+                    "rule": "runner_module_line_limit",
+                    "path": relative_path,
+                    "line": None,
+                    "text": f"{line_count} lines > {limit}",
+                }
+            )
+
+    for runner_module, split_paths in _RUNNER_SPLIT_MODULES.items():
+        for relative_path in split_paths:
+            path = root / relative_path
+            if not path.exists():
+                violations.append(
+                    {
+                        "rule": "split_module_exists",
+                        "path": relative_path,
+                        "line": None,
+                        "text": "missing split module",
+                    }
+                )
+                continue
+            scanned_files += 1
+            module_name = _module_name_for_source_path(root, path)
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                for target in _static_import_targets(
+                    node,
+                    current_module=module_name,
+                    current_is_package=path.name == "__init__.py",
+                    target_modules={runner_module},
+                ):
+                    violations.append(
+                        {
+                            "rule": "no_split_module_runner_import",
+                            "path": relative_path,
+                            "line": node.lineno,
+                            "text": _import_text(node),
+                            "target": target,
+                        }
+                    )
 
     tests_root = root / "tests"
     if tests_root.exists():
@@ -310,6 +424,7 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
         "scanned_files": scanned_files,
         "facade_line_limit": _FACADE_LINE_LIMIT,
         "impl_line_limit": _FACADE_LINE_LIMIT,
+        "runner_line_limits": dict(_RUNNER_LINE_LIMITS),
         "violations": violations,
     }
 
@@ -338,11 +453,26 @@ def _legacy_import_targets(
     current_module: str,
     current_is_package: bool,
 ) -> list[str]:
+    return _static_import_targets(
+        node,
+        current_module=current_module,
+        current_is_package=current_is_package,
+        target_modules=_LEGACY_IMPORT_TARGET_MODULES,
+    )
+
+
+def _static_import_targets(
+    node: ast.stmt,
+    *,
+    current_module: str,
+    current_is_package: bool,
+    target_modules: set[str],
+) -> list[str]:
     if isinstance(node, ast.Import):
         return [
             alias.name
             for alias in node.names
-            if alias.name in _LEGACY_IMPORT_TARGET_MODULES
+            if alias.name in target_modules
         ]
     if not isinstance(node, ast.ImportFrom):
         return []
@@ -353,11 +483,11 @@ def _legacy_import_targets(
         current_is_package=current_is_package,
     )
     targets: list[str] = []
-    if module in _LEGACY_IMPORT_TARGET_MODULES:
+    if module in target_modules:
         targets.append(module)
     for alias in node.names:
         candidate = f"{module}.{alias.name}" if module else alias.name
-        if candidate in _LEGACY_IMPORT_TARGET_MODULES:
+        if candidate in target_modules:
             targets.append(candidate)
     return targets
 
