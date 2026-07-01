@@ -1,6 +1,6 @@
 """Training matrix helpers for experiment manifests."""
 
-from .experiment_impl import (
+from .runner import (
     _run_training as run_training,
     _training_architectures as training_architectures,
     _training_distillation_matrix as training_distillation_matrix,

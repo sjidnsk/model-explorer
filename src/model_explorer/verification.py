@@ -24,26 +24,29 @@ _FACADE_FILES = (
     "src/model_explorer/policy/experiment.py",
     "src/model_explorer/data/evaluation_matrix.py",
 )
+_IMPL_FILES = (
+    "src/model_explorer/policy/planning_impl.py",
+    "src/model_explorer/policy/path_feedback_impl.py",
+    "src/model_explorer/experiments/experiment_impl.py",
+    "src/model_explorer/experiments/quasi_real_matrix/evaluation_matrix_impl.py",
+)
 _PRIVATE_IMPORT_TARGET_MODULES = {
     "model_explorer.policy.planning",
     "model_explorer.policy.path_feedback",
     "model_explorer.policy.experiment",
     "model_explorer.data.evaluation_matrix",
 }
-_LEGACY_PRIVATE_TEST_IMPORTS = {
-    ("tests/test_model_explorer.py", "model_explorer.policy.path_feedback", "_channel_aware_astar_diagnostics"),
-    ("tests/test_model_explorer.py", "model_explorer.policy.path_feedback", "_selected_after_feedback"),
-    ("tests/test_model_explorer.py", "model_explorer.policy.experiment", "_baseline_deltas"),
-    ("tests/test_quasi_real_data_pipeline.py", "model_explorer.data.evaluation_matrix", "_decision_diagnostics_summary"),
-    ("tests/test_quasi_real_data_pipeline.py", "model_explorer.data.evaluation_matrix", "_sample_discriminativeness_summary"),
-    ("tests/test_quasi_real_data_pipeline.py", "model_explorer.data.evaluation_matrix", "_selection_decision"),
-    ("tests/test_system_calibration.py", "model_explorer.policy.experiment", "_run_training"),
-    ("tests/test_training_closure.py", "model_explorer.policy.experiment", "_best_selection_record"),
-    ("tests/test_training_closure.py", "model_explorer.policy.experiment", "_calibration_recommendation"),
-    ("tests/test_training_closure.py", "model_explorer.policy.experiment", "_distillation_stability_summary"),
-    ("tests/test_training_closure.py", "model_explorer.policy.experiment", "_select_best_training_run"),
-    ("tests/test_training_closure.py", "model_explorer.policy.experiment", "_training_distillation_matrix"),
+_LEGACY_IMPORT_TARGET_MODULES = {
+    "model_explorer.policy.planning",
+    "model_explorer.policy.path_feedback",
+    "model_explorer.policy.experiment",
+    "model_explorer.data.evaluation_matrix",
+    "model_explorer.policy.planning_impl",
+    "model_explorer.policy.path_feedback_impl",
+    "model_explorer.experiments.experiment_impl",
+    "model_explorer.experiments.quasi_real_matrix.evaluation_matrix_impl",
 }
+_LEGACY_IMPORT_ALLOWLIST = set(_FACADE_FILES)
 
 
 def run_verification(
@@ -94,6 +97,7 @@ def _planned_steps(project_root: Path, *, skip_benchmark_smoke: bool) -> list[di
             "kind": "python_scan",
             "facade_line_limit": _FACADE_LINE_LIMIT,
             "facades": [str(project_root / name) for name in _FACADE_FILES],
+            "impls": [str(project_root / name) for name in _IMPL_FILES],
         },
         {"name": "git_diff_check", "kind": "subprocess", "command": ["git", "diff", "--check"]},
     ]
@@ -214,15 +218,56 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                         }
                     )
 
-    for relative_path in _FACADE_FILES:
+    decision_root = root / "src" / "model_explorer" / "decision"
+    if decision_root.exists():
+        for path in sorted(decision_root.rglob("*.py")):
+            scanned_files += 1
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in tree.body:
+                if _is_policy_import(node):
+                    violations.append(
+                        {
+                            "rule": "no_decision_to_policy_static_import",
+                            "path": str(path.relative_to(root)),
+                            "line": node.lineno,
+                            "text": _import_text(node),
+                        }
+                    )
+
+    source_root = root / "src" / "model_explorer"
+    if source_root.exists():
+        for path in sorted(source_root.rglob("*.py")):
+            relative_path = path.relative_to(root).as_posix()
+            if relative_path in _LEGACY_IMPORT_ALLOWLIST:
+                continue
+            scanned_files += 1
+            module_name = _module_name_for_source_path(root, path)
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in tree.body:
+                for target in _legacy_import_targets(
+                    node,
+                    current_module=module_name,
+                    current_is_package=path.name == "__init__.py",
+                ):
+                    violations.append(
+                        {
+                            "rule": "no_business_code_legacy_import",
+                            "path": relative_path,
+                            "line": node.lineno,
+                            "text": _import_text(node),
+                            "target": target,
+                        }
+                    )
+
+    for relative_path in (*_FACADE_FILES, *_IMPL_FILES):
         path = root / relative_path
         if not path.exists():
             violations.append(
                 {
-                    "rule": "facade_exists",
+                    "rule": "compatibility_module_exists",
                     "path": relative_path,
                     "line": None,
-                    "text": "missing facade",
+                    "text": "missing compatibility module",
                 }
             )
             continue
@@ -230,7 +275,7 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
         if line_count > _FACADE_LINE_LIMIT:
             violations.append(
                 {
-                    "rule": "facade_line_limit",
+                    "rule": "compatibility_module_line_limit",
                     "path": relative_path,
                     "line": None,
                     "text": f"{line_count} lines > {_FACADE_LINE_LIMIT}",
@@ -249,16 +294,14 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                 for alias in node.names:
                     if not alias.name.startswith("_"):
                         continue
-                    key = (relative_path, node.module, alias.name)
-                    if key not in _LEGACY_PRIVATE_TEST_IMPORTS:
-                        violations.append(
-                            {
-                                "rule": "no_new_private_test_imports",
-                                "path": relative_path,
-                                "line": node.lineno,
-                                "text": f"from {node.module} import {alias.name}",
-                            }
-                        )
+                    violations.append(
+                        {
+                            "rule": "no_private_legacy_test_imports",
+                            "path": relative_path,
+                            "line": node.lineno,
+                            "text": f"from {node.module} import {alias.name}",
+                        }
+                    )
 
     return {
         "name": "architecture_static_check",
@@ -266,6 +309,7 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
         "returncode": 1 if violations else 0,
         "scanned_files": scanned_files,
         "facade_line_limit": _FACADE_LINE_LIMIT,
+        "impl_line_limit": _FACADE_LINE_LIMIT,
         "violations": violations,
     }
 
@@ -277,6 +321,63 @@ def _is_policy_import(node: ast.stmt) -> bool:
     if isinstance(node, ast.Import):
         return any(alias.name.startswith("model_explorer.policy") for alias in node.names)
     return False
+
+
+def _module_name_for_source_path(root: Path, path: Path) -> str:
+    source_root = root / "src"
+    relative = path.relative_to(source_root).with_suffix("")
+    parts = list(relative.parts)
+    if parts[-1] == "__init__":
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def _legacy_import_targets(
+    node: ast.stmt,
+    *,
+    current_module: str,
+    current_is_package: bool,
+) -> list[str]:
+    if isinstance(node, ast.Import):
+        return [
+            alias.name
+            for alias in node.names
+            if alias.name in _LEGACY_IMPORT_TARGET_MODULES
+        ]
+    if not isinstance(node, ast.ImportFrom):
+        return []
+
+    module = _resolve_import_from_module(
+        current_module,
+        node,
+        current_is_package=current_is_package,
+    )
+    targets: list[str] = []
+    if module in _LEGACY_IMPORT_TARGET_MODULES:
+        targets.append(module)
+    for alias in node.names:
+        candidate = f"{module}.{alias.name}" if module else alias.name
+        if candidate in _LEGACY_IMPORT_TARGET_MODULES:
+            targets.append(candidate)
+    return targets
+
+
+def _resolve_import_from_module(
+    current_module: str,
+    node: ast.ImportFrom,
+    *,
+    current_is_package: bool,
+) -> str:
+    if node.level == 0:
+        return node.module or ""
+
+    parts = current_module.split(".")
+    package_parts = parts if current_is_package else parts[:-1]
+    keep = max(0, len(package_parts) - node.level + 1)
+    resolved_parts = package_parts[:keep]
+    if node.module:
+        resolved_parts.extend(node.module.split("."))
+    return ".".join(resolved_parts)
 
 
 def _import_text(node: ast.stmt) -> str:

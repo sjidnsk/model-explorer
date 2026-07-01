@@ -198,3 +198,62 @@ def test_verification_architecture_static_check_passes() -> None:
 
     assert result["returncode"] == 0
     assert result["violations"] == []
+
+
+def test_impl_modules_are_only_compatibility_shims() -> None:
+    impl_paths = [
+        SRC_ROOT / "policy" / "planning_impl.py",
+        SRC_ROOT / "policy" / "path_feedback_impl.py",
+        SRC_ROOT / "experiments" / "experiment_impl.py",
+        SRC_ROOT / "experiments" / "quasi_real_matrix" / "evaluation_matrix_impl.py",
+    ]
+
+    oversized = {
+        path.relative_to(MODEL_ROOT).as_posix(): len(path.read_text(encoding="utf-8").splitlines())
+        for path in impl_paths
+        if len(path.read_text(encoding="utf-8").splitlines()) > 250
+    }
+
+    assert oversized == {}
+
+
+def test_decision_package_has_no_static_policy_imports() -> None:
+    violations: list[str] = []
+    for path in sorted((SRC_ROOT / "decision").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                if module.startswith("model_explorer.policy") or (
+                    node.level >= 2 and (module == "policy" or module.startswith("policy."))
+                ):
+                    violations.append(f"{path.relative_to(MODEL_ROOT)}:{node.lineno}")
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.startswith("model_explorer.policy"):
+                        violations.append(f"{path.relative_to(MODEL_ROOT)}:{node.lineno}")
+
+    assert violations == []
+
+
+def test_tests_do_not_import_private_legacy_symbols() -> None:
+    target_modules = {
+        "model_explorer.policy.planning",
+        "model_explorer.policy.path_feedback",
+        "model_explorer.policy.experiment",
+        "model_explorer.data.evaluation_matrix",
+    }
+    violations: list[str] = []
+    for path in sorted((MODEL_ROOT / "tests").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.module not in target_modules:
+                continue
+            for alias in node.names:
+                if alias.name.startswith("_"):
+                    violations.append(
+                        f"{path.relative_to(MODEL_ROOT).as_posix()}:{node.lineno}: "
+                        f"from {node.module} import {alias.name}"
+                    )
+
+    assert violations == []

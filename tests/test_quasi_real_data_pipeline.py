@@ -794,7 +794,7 @@ class QuasiRealEvaluationMatrixTests(unittest.TestCase):
             self.assertIn(text, report)
 
     def test_selection_decision_is_inconclusive_when_margin_is_within_seed_variance(self):
-        from model_explorer.data.evaluation_matrix import _selection_decision
+        from model_explorer.experiments.quasi_real_matrix.selection import selection_decision as _selection_decision
 
         decision = _selection_decision(
             {
@@ -813,7 +813,7 @@ class QuasiRealEvaluationMatrixTests(unittest.TestCase):
         self.assertIn("within seed variance", decision["reason"])
 
     def test_sample_discriminativeness_warns_when_candidate_spread_is_low(self):
-        from model_explorer.data.evaluation_matrix import _sample_discriminativeness_summary
+        from model_explorer.experiments.quasi_real_matrix.selection import sample_discriminativeness_summary as _sample_discriminativeness_summary
 
         runs = [
             {
@@ -848,7 +848,7 @@ class QuasiRealEvaluationMatrixTests(unittest.TestCase):
         self.assertEqual(summary["status"], "warning")
 
     def test_decision_diagnostics_warn_when_policies_match_heuristic_and_actions_are_identical(self):
-        from model_explorer.data.evaluation_matrix import _decision_diagnostics_summary
+        from model_explorer.experiments.quasi_real_matrix.selection import decision_diagnostics_summary as _decision_diagnostics_summary
 
         runs = [
             {

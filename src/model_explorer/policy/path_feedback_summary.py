@@ -1,6 +1,6 @@
 """Path-feedback summary contract API."""
 
-from .path_feedback_impl import (
+from .path_feedback_runner import (
     PATH_FEEDBACK_SUMMARY_REQUIRED_KEYS,
     compact_path_feedback_summary,
     validate_path_feedback_manifest,

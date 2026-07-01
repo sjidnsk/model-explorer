@@ -10,7 +10,7 @@ from ..io.scenario import Scenario
 from .canonical_reward import load_canonical_reward_profile
 from .features import extract_policy_observation
 from .feedback_selection import select_goal_with_path_feedback
-from .planning import PathPlanRequest, PathPlanningAdapter
+from .planning_types import PathPlanRequest, PathPlanningAdapter
 from .reward import compute_step_reward
 
 

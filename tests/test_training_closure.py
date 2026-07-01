@@ -447,7 +447,7 @@ class ExperimentManifestValidationTests(unittest.TestCase):
 
 class BestCheckpointSelectionTests(unittest.TestCase):
     def test_best_checkpoint_selection_prefers_highest_validation_metric(self):
-        from model_explorer.policy.experiment import _select_best_training_run
+        from model_explorer.experiments.selection import select_best_training_run as _select_best_training_run
 
         runs = [
             {
@@ -468,7 +468,10 @@ class BestCheckpointSelectionTests(unittest.TestCase):
         self.assertEqual(best["checkpoint"], "seed-13/checkpoint.pt")
 
     def test_best_checkpoint_selection_skips_failed_teacher_quality_gate_by_default(self):
-        from model_explorer.policy.experiment import _best_selection_record, _select_best_training_run
+        from model_explorer.experiments.selection import (
+            best_selection_record as _best_selection_record,
+            select_best_training_run as _select_best_training_run,
+        )
 
         runs = [
             {
@@ -504,7 +507,10 @@ class BestCheckpointSelectionTests(unittest.TestCase):
         self.assertEqual(record["excluded_runs"][0]["reason_codes"], ["teacher_quality_gate_failed"])
 
     def test_best_checkpoint_selection_keeps_legacy_behavior_without_teacher_quality_gates(self):
-        from model_explorer.policy.experiment import _best_selection_record, _select_best_training_run
+        from model_explorer.experiments.selection import (
+            best_selection_record as _best_selection_record,
+            select_best_training_run as _select_best_training_run,
+        )
 
         runs = [
             {
@@ -533,7 +539,10 @@ class BestCheckpointSelectionTests(unittest.TestCase):
         self.assertEqual(record["excluded_run_count"], 0)
 
     def test_calibration_recommendation_can_preserve_legacy_best_run_without_profile_matrix(self):
-        from model_explorer.policy.experiment import _calibration_recommendation, _select_best_training_run
+        from model_explorer.experiments.selection import (
+            calibration_recommendation as _calibration_recommendation,
+            select_best_training_run as _select_best_training_run,
+        )
 
         runs = [
             {
@@ -573,10 +582,10 @@ class BestCheckpointSelectionTests(unittest.TestCase):
         self.assertIn("legacy_best_run_selection", recommendation["profile_selection_reason_codes"])
 
     def test_distillation_matrix_records_selection_and_exclusion_reasons(self):
-        from model_explorer.policy.experiment import (
-            _distillation_stability_summary,
-            _select_best_training_run,
-            _training_distillation_matrix,
+        from model_explorer.experiments.selection import (
+            distillation_stability_summary as _distillation_stability_summary,
+            select_best_training_run as _select_best_training_run,
+            training_distillation_matrix as _training_distillation_matrix,
         )
 
         runs = [
@@ -670,7 +679,7 @@ class BestCheckpointSelectionTests(unittest.TestCase):
         )
 
     def test_calibration_recommendation_selects_gate_passing_profile_before_checkpoint(self):
-        from model_explorer.policy.experiment import _calibration_recommendation
+        from model_explorer.experiments.selection import calibration_recommendation as _calibration_recommendation
 
         runs = [
             {
@@ -720,7 +729,7 @@ class BestCheckpointSelectionTests(unittest.TestCase):
         )
 
     def test_calibration_recommendation_marks_all_failed_profile_selection(self):
-        from model_explorer.policy.experiment import _calibration_recommendation
+        from model_explorer.experiments.selection import calibration_recommendation as _calibration_recommendation
 
         runs = [
             {
@@ -756,7 +765,9 @@ class BestCheckpointSelectionTests(unittest.TestCase):
         self.assertEqual(recommendation["eligible_profile_count"], 0)
 
     def test_distillation_stability_summary_groups_by_curriculum_profile_and_confidence(self):
-        from model_explorer.policy.experiment import _distillation_stability_summary
+        from model_explorer.experiments.selection import (
+            distillation_stability_summary as _distillation_stability_summary,
+        )
 
         runs = [
             {

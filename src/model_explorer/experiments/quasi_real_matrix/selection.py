@@ -1,6 +1,6 @@
 """Architecture selection helpers for quasi-real evaluation matrices."""
 
-from .evaluation_matrix_impl import (
+from .runner import (
     _architecture_selection_summary as architecture_selection_summary,
     _decision_diagnostics_summary as decision_diagnostics_summary,
     _sample_discriminativeness_summary as sample_discriminativeness_summary,

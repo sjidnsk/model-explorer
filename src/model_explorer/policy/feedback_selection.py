@@ -5,13 +5,16 @@ from math import isfinite
 from typing import Any
 
 from ..core.interfaces import ExplorerDecision, GoalCandidate, ModelExplorerContract
-from .planning import (
-    AnchorProjectionCandidateConfig,
-    PathCandidateEvaluation,
-    PathPlanningAdapter,
+from .planning_anchor import (
     anchor_projection_candidate_config_from_mapping,
     evaluate_candidate_paths,
 )
+from .planning_types import (
+    AnchorProjectionCandidateConfig,
+    PathCandidateEvaluation,
+    PathPlanningAdapter,
+)
+from .path_feedback_runner import _selected_after_feedback as selected_after_feedback
 
 
 @dataclass(frozen=True)

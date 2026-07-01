@@ -376,7 +376,7 @@ class SystemCalibrationSummaryTests(unittest.TestCase):
         self.assertTrue(all(isinstance(reason, str) for reason in record["reason_codes"]))
 
     def test_training_sample_quality_is_explicit_and_preserves_legacy_default(self) -> None:
-        from model_explorer.policy.experiment import _run_training
+        from model_explorer.experiments.training_matrix import run_training as _run_training
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -644,7 +644,7 @@ class SystemCalibrationSummaryTests(unittest.TestCase):
         self.assertTrue(path_fail["not_real_world_performance_claim"])
 
     def test_training_system_calibration_config_controls_best_checkpoint_and_writes_json_summary(self) -> None:
-        from model_explorer.policy.experiment import _run_training
+        from model_explorer.experiments.training_matrix import run_training as _run_training
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

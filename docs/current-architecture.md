@@ -28,3 +28,11 @@
 - 旧 facade 只承担兼容和迁移说明职责，不继续承载新的核心实现。
 - 新增代码优先导入目标模块；只有维护旧调用方时才使用旧 public 路径。
 - 删除旧路径前必须先有迁移说明、验证覆盖和调用方审计结果。
+
+## 第二轮架构债收口状态
+
+- `policy/planning_impl.py`、`policy/path_feedback_impl.py`、`experiments/experiment_impl.py` 和 `experiments/quasi_real_matrix/evaluation_matrix_impl.py` 已退化为兼容 re-export 层，真实实现位于目标职责模块。
+- `decision` 层不再静态依赖 `policy`；策略 observation 提取能力下沉到 `contracts.observations`，`policy.features` 仅保留兼容导出。
+- Path feedback 的诊断、artifact、selection 入口分别暴露在 `path_feedback_diagnostics.py`、`path_feedback_artifacts.py` 和 `feedback_selection.py`。
+- Experiment selection、training matrix、report、environment helper 使用 `experiments.*` 入口；旧 `policy.experiment` 只作为兼容 facade。
+- Quasi-real matrix 的 manifest、runner、scenario generation、selection、reports 使用 `experiments.quasi_real_matrix.*` 入口；旧 `data.evaluation_matrix` 只作为兼容 facade。

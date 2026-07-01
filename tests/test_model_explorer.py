@@ -1853,7 +1853,7 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(generation["trainability_gate"]["reason_codes"], [])
 
     def test_contract_aware_selection_rejects_quality_regression_before_preference(self):
-        from model_explorer.policy.path_feedback import _selected_after_feedback
+        from model_explorer.policy.feedback_selection import selected_after_feedback as _selected_after_feedback
         from model_explorer.policy.planning import (
             AnchorProjectionCandidateConfig,
             PathCandidateEvaluation,
@@ -1912,7 +1912,7 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertIs(selected, alternative)
 
     def test_planner_validated_selection_can_prefer_distance_exception_without_quality_regression(self):
-        from model_explorer.policy.path_feedback import _selected_after_feedback
+        from model_explorer.policy.feedback_selection import selected_after_feedback as _selected_after_feedback
         from model_explorer.policy.planning import (
             AnchorProjectionCandidateConfig,
             PathCandidateEvaluation,
@@ -2471,7 +2471,7 @@ class PathPlanningAdapterTests(unittest.TestCase):
         self.assertEqual(projection["reject_reason"], "source_selection_quality_regression")
 
     def test_anchor_projection_selection_bonus_is_opt_in_and_bounded_to_projected_candidates(self):
-        from model_explorer.policy.path_feedback import _selected_after_feedback
+        from model_explorer.policy.feedback_selection import selected_after_feedback as _selected_after_feedback
         from model_explorer.policy.planning import (
             AnchorProjectionCandidateConfig,
             PathPlanResult,
@@ -2979,7 +2979,7 @@ class PathPlanningAdapterTests(unittest.TestCase):
             evaluate_candidate_paths,
             path_feedback_summary,
         )
-        from model_explorer.policy.path_feedback import _channel_aware_astar_diagnostics
+        from model_explorer.policy.path_feedback_diagnostics import channel_aware_astar_diagnostics as _channel_aware_astar_diagnostics
 
         contract = load_contract_from_dict(
             minimal_contract(goals=[{"cell": [2, 1], "utility": 0.4, "reachable": True}])
@@ -4325,7 +4325,7 @@ class BaselineEvaluationTests(unittest.TestCase):
 
     def test_torch_policy_reports_feedback_aware_agreement_and_baseline_delta(self):
         from model_explorer.policy.evaluation import evaluate_policy_baselines
-        from model_explorer.policy.experiment import _baseline_deltas
+        from model_explorer.experiments.selection import baseline_deltas as _baseline_deltas
         from model_explorer.policy.planning import PathPlanResult
 
         class FixedPlanner:

@@ -5,8 +5,8 @@ from math import isfinite
 from typing import Any
 
 from ..contracts.fields import CANDIDATE_BENEFIT_FIELDS, CANDIDATE_COST_FIELDS
+from ..contracts.observations import extract_policy_observation
 from ..core.interfaces import ExplorerDecision, GoalCandidate, ModelExplorerContract
-from ..policy.features import extract_policy_observation
 
 
 _SCORE_WEIGHTS = {
