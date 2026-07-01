@@ -82,6 +82,84 @@ _LEGACY_IMPORT_TARGET_MODULES = {
 }
 _LEGACY_IMPORT_ALLOWLIST = set(_FACADE_FILES)
 
+_TARGET_FACADE_LINE_LIMIT = 250
+_TARGET_FACADE_FILES = (
+    "src/model_explorer/policy/path_feedback_diagnostics.py",
+    "src/model_explorer/policy/feedback_selection.py",
+    "src/model_explorer/policy/planning_anchor.py",
+    "src/model_explorer/policy/planning_diagnostics.py",
+    "src/model_explorer/experiments/quasi_real_matrix/selection.py",
+)
+_TARGET_SPLIT_MODULE_LINE_LIMIT = 800
+_TARGET_SPLIT_MODULE_GROUPS = {
+    "model_explorer.policy.path_feedback_diagnostics": {
+        "runner": "model_explorer.policy.path_feedback_runner",
+        "impl": "model_explorer.policy.path_feedback_impl",
+        "paths": (
+            "src/model_explorer/policy/path_feedback_diagnostic_aggregate.py",
+            "src/model_explorer/policy/path_feedback_diagnostic_interpretation.py",
+            "src/model_explorer/policy/path_feedback_backend_diagnostics.py",
+            "src/model_explorer/policy/path_feedback_candidate_audits.py",
+        ),
+    },
+    "model_explorer.policy.feedback_selection": {
+        "runner": "model_explorer.policy.path_feedback_runner",
+        "impl": "model_explorer.policy.path_feedback_impl",
+        "paths": (
+            "src/model_explorer/policy/feedback_selection_types.py",
+            "src/model_explorer/policy/feedback_selection_scoring.py",
+            "src/model_explorer/policy/feedback_selection_channel.py",
+            "src/model_explorer/policy/feedback_selection_trainability.py",
+            "src/model_explorer/policy/feedback_selection_anchor.py",
+            "src/model_explorer/policy/feedback_selection_sources.py",
+        ),
+    },
+    "model_explorer.policy.planning_anchor": {
+        "runner": "model_explorer.policy.path_feedback_runner",
+        "impl": "model_explorer.policy.planning_impl",
+        "paths": (
+            "src/model_explorer/policy/planning_anchor_evaluation.py",
+            "src/model_explorer/policy/planning_anchor_projection.py",
+            "src/model_explorer/policy/planning_anchor_grid.py",
+        ),
+    },
+    "model_explorer.policy.planning_diagnostics": {
+        "runner": "model_explorer.policy.path_feedback_runner",
+        "impl": "model_explorer.policy.planning_impl",
+        "paths": (
+            "src/model_explorer/policy/planning_backend_summaries.py",
+            "src/model_explorer/policy/planning_platform_feasibility.py",
+            "src/model_explorer/policy/planning_diagnostic_interpretation.py",
+        ),
+    },
+    "model_explorer.experiments.quasi_real_matrix.selection": {
+        "runner": "model_explorer.experiments.quasi_real_matrix.runner",
+        "impl": "model_explorer.experiments.quasi_real_matrix.evaluation_matrix_impl",
+        "paths": (
+            "src/model_explorer/experiments/quasi_real_matrix/quality_gates.py",
+            "src/model_explorer/experiments/quasi_real_matrix/decision_diagnostics.py",
+            "src/model_explorer/experiments/quasi_real_matrix/architecture_selection.py",
+            "src/model_explorer/experiments/quasi_real_matrix/stability.py",
+        ),
+    },
+}
+_TARGET_SPLIT_MODULES = tuple(
+    path
+    for group in _TARGET_SPLIT_MODULE_GROUPS.values()
+    for path in group["paths"]
+)
+_TARGET_FACADE_MODULES = frozenset(_TARGET_SPLIT_MODULE_GROUPS)
+_TARGET_GOVERNED_PRODUCTION_FILES = (*_TARGET_FACADE_FILES, *_TARGET_SPLIT_MODULES)
+_TARGET_SPLIT_MODULE_IMPORT_TARGETS = {
+    path: tuple(sorted({facade_module, group["runner"], group["impl"]}))
+    for facade_module, group in _TARGET_SPLIT_MODULE_GROUPS.items()
+    for path in group["paths"]
+}
+_GIANT_TEST_LINE_LIMITS = {
+    "tests/test_model_explorer.py": 5600,
+    "tests/test_quasi_real_data_pipeline.py": 1050,
+}
+
 
 def run_verification(
     root: str | Path,
@@ -134,6 +212,13 @@ def _planned_steps(project_root: Path, *, skip_benchmark_smoke: bool) -> list[di
             "impls": [str(project_root / name) for name in _IMPL_FILES],
             "runner_line_limits": {
                 str(project_root / name): limit for name, limit in _RUNNER_LINE_LIMITS.items()
+            },
+            "target_facade_line_limit": _TARGET_FACADE_LINE_LIMIT,
+            "target_facades": [str(project_root / name) for name in _TARGET_FACADE_FILES],
+            "target_split_module_line_limit": _TARGET_SPLIT_MODULE_LINE_LIMIT,
+            "target_split_modules": [str(project_root / name) for name in _TARGET_SPLIT_MODULES],
+            "giant_test_line_limits": {
+                str(project_root / name): limit for name, limit in _GIANT_TEST_LINE_LIMITS.items()
             },
         },
         {"name": "git_diff_check", "kind": "subprocess", "command": ["git", "diff", "--check"]},
@@ -280,6 +365,17 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
             scanned_files += 1
             module_name = _module_name_for_source_path(root, path)
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            if relative_path in _TARGET_GOVERNED_PRODUCTION_FILES:
+                for node in ast.walk(tree):
+                    if _is_dynamic_globals_all_assignment(node):
+                        violations.append(
+                            {
+                                "rule": "no_dynamic_all_in_governed_module",
+                                "path": relative_path,
+                                "line": node.lineno,
+                                "text": _assignment_text(node),
+                            }
+                        )
             for node in ast.walk(tree):
                 for target in _legacy_import_targets(
                     node,
@@ -292,6 +388,21 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                             "path": relative_path,
                             "line": node.lineno,
                             "text": _import_text(node),
+                            "target": target,
+                        }
+                    )
+                for target, imported_name in _private_import_targets(
+                    node,
+                    current_module=module_name,
+                    current_is_package=path.name == "__init__.py",
+                    target_modules=_TARGET_FACADE_MODULES,
+                ):
+                    violations.append(
+                        {
+                            "rule": "no_target_facade_private_production_import",
+                            "path": relative_path,
+                            "line": node.lineno,
+                            "text": f"from {target} import {imported_name}",
                             "target": target,
                         }
                     )
@@ -396,6 +507,87 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                         }
                     )
 
+    for relative_path in _TARGET_FACADE_FILES:
+        path = root / relative_path
+        if not path.exists():
+            violations.append(
+                {
+                    "rule": "target_facade_exists",
+                    "path": relative_path,
+                    "line": None,
+                    "text": "missing target facade",
+                }
+            )
+            continue
+        line_count = len(path.read_text(encoding="utf-8").splitlines())
+        if line_count > _TARGET_FACADE_LINE_LIMIT:
+            violations.append(
+                {
+                    "rule": "target_facade_line_limit",
+                    "path": relative_path,
+                    "line": None,
+                    "text": f"{line_count} lines > {_TARGET_FACADE_LINE_LIMIT}",
+                }
+            )
+
+    for relative_path in _TARGET_SPLIT_MODULES:
+        path = root / relative_path
+        if not path.exists():
+            violations.append(
+                {
+                    "rule": "target_split_module_exists",
+                    "path": relative_path,
+                    "line": None,
+                    "text": "missing target split module",
+                }
+            )
+            continue
+        line_count = len(path.read_text(encoding="utf-8").splitlines())
+        if line_count > _TARGET_SPLIT_MODULE_LINE_LIMIT:
+            violations.append(
+                {
+                    "rule": "target_split_module_line_limit",
+                    "path": relative_path,
+                    "line": None,
+                    "text": f"{line_count} lines > {_TARGET_SPLIT_MODULE_LINE_LIMIT}",
+                }
+            )
+        scanned_files += 1
+        module_name = _module_name_for_source_path(root, path)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        forbidden_targets = set(_TARGET_SPLIT_MODULE_IMPORT_TARGETS[relative_path])
+        for node in ast.walk(tree):
+            for target in _static_import_targets(
+                node,
+                current_module=module_name,
+                current_is_package=path.name == "__init__.py",
+                target_modules=forbidden_targets,
+            ):
+                violations.append(
+                    {
+                        "rule": "no_target_split_module_forbidden_import",
+                        "path": relative_path,
+                        "line": node.lineno,
+                        "text": _import_text(node),
+                        "target": target,
+                    }
+                )
+
+    for relative_path, limit in _GIANT_TEST_LINE_LIMITS.items():
+        path = root / relative_path
+        if not path.exists():
+            continue
+        line_count = len(path.read_text(encoding="utf-8").splitlines())
+        if line_count > limit:
+            violations.append(
+                {
+                    "rule": "giant_test_line_limit",
+                    "path": relative_path,
+                    "line": None,
+                    "text": f"{line_count} lines > {limit}",
+                }
+            )
+
     tests_root = root / "tests"
     if tests_root.exists():
         for path in sorted(tests_root.rglob("*.py")):
@@ -403,6 +595,19 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
             relative_path = path.relative_to(root).as_posix()
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module in _TARGET_FACADE_MODULES:
+                    for alias in node.names:
+                        if not alias.name.startswith("_"):
+                            continue
+                        violations.append(
+                            {
+                                "rule": "no_target_facade_private_test_import",
+                                "path": relative_path,
+                                "line": node.lineno,
+                                "text": f"from {node.module} import {alias.name}",
+                                "target": node.module,
+                            }
+                        )
                 if not isinstance(node, ast.ImportFrom) or node.module not in _PRIVATE_IMPORT_TARGET_MODULES:
                     continue
                 for alias in node.names:
@@ -425,8 +630,61 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
         "facade_line_limit": _FACADE_LINE_LIMIT,
         "impl_line_limit": _FACADE_LINE_LIMIT,
         "runner_line_limits": dict(_RUNNER_LINE_LIMITS),
+        "target_facade_line_limit": _TARGET_FACADE_LINE_LIMIT,
+        "target_facades": list(_TARGET_FACADE_FILES),
+        "target_split_module_line_limit": _TARGET_SPLIT_MODULE_LINE_LIMIT,
+        "target_split_modules": list(_TARGET_SPLIT_MODULES),
+        "giant_test_line_limits": dict(_GIANT_TEST_LINE_LIMITS),
         "violations": violations,
     }
+
+
+def _private_import_targets(
+    node: ast.stmt,
+    *,
+    current_module: str,
+    current_is_package: bool,
+    target_modules: set[str] | frozenset[str],
+) -> list[tuple[str, str]]:
+    if not isinstance(node, ast.ImportFrom):
+        return []
+
+    module = _resolve_import_from_module(
+        current_module,
+        node,
+        current_is_package=current_is_package,
+    )
+    if module not in target_modules:
+        return []
+    return [(module, alias.name) for alias in node.names if alias.name.startswith("_")]
+
+
+def _is_dynamic_globals_all_assignment(node: ast.AST) -> bool:
+    if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+        return False
+    if not _assignment_targets_name(node, "__all__"):
+        return False
+    value = node.value
+    if value is None:
+        return False
+    return any(
+        isinstance(child, ast.Call)
+        and isinstance(child.func, ast.Name)
+        and child.func.id == "globals"
+        for child in ast.walk(value)
+    )
+
+
+def _assignment_targets_name(node: ast.Assign | ast.AnnAssign, name: str) -> bool:
+    if isinstance(node, ast.Assign):
+        return any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+    return isinstance(node.target, ast.Name) and node.target.id == name
+
+
+def _assignment_text(node: ast.AST) -> str:
+    if isinstance(node, (ast.Assign, ast.AnnAssign)) and _assignment_targets_name(node, "__all__"):
+        return "__all__ = <dynamic globals export>"
+    return type(node).__name__
 
 
 def _is_policy_import(node: ast.stmt) -> bool:

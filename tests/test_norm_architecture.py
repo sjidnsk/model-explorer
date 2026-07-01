@@ -13,6 +13,78 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MODEL_ROOT = REPO_ROOT / "model-explorer"
 SRC_ROOT = MODEL_ROOT / "src" / "model_explorer"
 
+ARCHITECTURE_FIXTURE_FILES = (
+    "src/model_explorer/policy/planning.py",
+    "src/model_explorer/policy/path_feedback.py",
+    "src/model_explorer/policy/experiment.py",
+    "src/model_explorer/data/evaluation_matrix.py",
+    "src/model_explorer/policy/planning_impl.py",
+    "src/model_explorer/policy/path_feedback_impl.py",
+    "src/model_explorer/experiments/experiment_impl.py",
+    "src/model_explorer/experiments/quasi_real_matrix/evaluation_matrix_impl.py",
+    "src/model_explorer/policy/path_feedback_runner.py",
+    "src/model_explorer/experiments/runner.py",
+    "src/model_explorer/experiments/quasi_real_matrix/runner.py",
+    "src/model_explorer/policy/path_feedback_artifacts.py",
+    "src/model_explorer/policy/path_feedback_diagnostics.py",
+    "src/model_explorer/policy/path_feedback_manifest.py",
+    "src/model_explorer/policy/path_feedback_reports.py",
+    "src/model_explorer/policy/path_feedback_summary.py",
+    "src/model_explorer/policy/feedback_selection.py",
+    "src/model_explorer/policy/planning_anchor.py",
+    "src/model_explorer/policy/planning_diagnostics.py",
+    "src/model_explorer/experiments/environment.py",
+    "src/model_explorer/experiments/evaluation.py",
+    "src/model_explorer/experiments/manifest.py",
+    "src/model_explorer/experiments/reports.py",
+    "src/model_explorer/experiments/selection.py",
+    "src/model_explorer/experiments/training_matrix.py",
+    "src/model_explorer/experiments/quasi_real_matrix/manifest.py",
+    "src/model_explorer/experiments/quasi_real_matrix/metrics.py",
+    "src/model_explorer/experiments/quasi_real_matrix/reports.py",
+    "src/model_explorer/experiments/quasi_real_matrix/scenario_generation.py",
+    "src/model_explorer/experiments/quasi_real_matrix/selection.py",
+    "src/model_explorer/policy/path_feedback_diagnostic_aggregate.py",
+    "src/model_explorer/policy/path_feedback_diagnostic_interpretation.py",
+    "src/model_explorer/policy/path_feedback_backend_diagnostics.py",
+    "src/model_explorer/policy/path_feedback_candidate_audits.py",
+    "src/model_explorer/policy/feedback_selection_types.py",
+    "src/model_explorer/policy/feedback_selection_scoring.py",
+    "src/model_explorer/policy/feedback_selection_channel.py",
+    "src/model_explorer/policy/feedback_selection_trainability.py",
+    "src/model_explorer/policy/feedback_selection_anchor.py",
+    "src/model_explorer/policy/feedback_selection_sources.py",
+    "src/model_explorer/policy/planning_anchor_evaluation.py",
+    "src/model_explorer/policy/planning_anchor_projection.py",
+    "src/model_explorer/policy/planning_anchor_grid.py",
+    "src/model_explorer/policy/planning_backend_summaries.py",
+    "src/model_explorer/policy/planning_platform_feasibility.py",
+    "src/model_explorer/policy/planning_diagnostic_interpretation.py",
+    "src/model_explorer/experiments/quasi_real_matrix/quality_gates.py",
+    "src/model_explorer/experiments/quasi_real_matrix/decision_diagnostics.py",
+    "src/model_explorer/experiments/quasi_real_matrix/architecture_selection.py",
+    "src/model_explorer/experiments/quasi_real_matrix/stability.py",
+    "tests/test_model_explorer.py",
+    "tests/test_quasi_real_data_pipeline.py",
+)
+
+
+def _write_architecture_fixture(
+    tmp_path: Path,
+    *,
+    omit: set[str] | None = None,
+    overrides: dict[str, str] | None = None,
+) -> Path:
+    omitted = omit or set()
+    content_by_path = overrides or {}
+    for relative in ARCHITECTURE_FIXTURE_FILES:
+        if relative in omitted:
+            continue
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content_by_path.get(relative, "# architecture fixture\n"), encoding="utf-8")
+    return tmp_path
+
 
 def _contract_payload(**overrides):
     payload = {
@@ -200,6 +272,135 @@ def test_verification_architecture_static_check_passes() -> None:
     assert result["violations"] == []
 
 
+def test_verification_catches_oversized_target_facade(tmp_path: Path) -> None:
+    from model_explorer.verification import _run_architecture_static_check
+
+    target = "src/model_explorer/policy/feedback_selection.py"
+    oversized_module = "\n".join(f"line_{index} = None" for index in range(251)) + "\n"
+    _write_architecture_fixture(tmp_path, overrides={target: oversized_module})
+
+    result = _run_architecture_static_check(tmp_path)
+
+    assert {
+        (violation["rule"], violation["path"])
+        for violation in result["violations"]
+    } >= {("target_facade_line_limit", target)}
+
+
+def test_verification_catches_missing_planned_split_module(tmp_path: Path) -> None:
+    from model_explorer.verification import _run_architecture_static_check
+
+    missing = "src/model_explorer/policy/path_feedback_diagnostic_aggregate.py"
+    _write_architecture_fixture(tmp_path, omit={missing})
+
+    result = _run_architecture_static_check(tmp_path)
+
+    assert {
+        (violation["rule"], violation["path"])
+        for violation in result["violations"]
+    } >= {("target_split_module_exists", missing)}
+
+
+def test_verification_catches_split_module_importing_facade_runner_or_impl(tmp_path: Path) -> None:
+    from model_explorer.verification import _run_architecture_static_check
+
+    split_module = "src/model_explorer/policy/path_feedback_diagnostic_aggregate.py"
+    _write_architecture_fixture(
+        tmp_path,
+        overrides={
+            split_module: "\n".join(
+                [
+                    "from model_explorer.policy.path_feedback_diagnostics import channel_aware_astar_diagnostics",
+                    "from model_explorer.policy import path_feedback_runner",
+                    "from model_explorer.policy.path_feedback_impl import run_path_feedback_manifest",
+                    "",
+                ]
+            ),
+        },
+    )
+
+    result = _run_architecture_static_check(tmp_path)
+    forbidden_targets = {
+        violation["target"]
+        for violation in result["violations"]
+        if violation["rule"] == "no_target_split_module_forbidden_import"
+    }
+
+    assert forbidden_targets >= {
+        "model_explorer.policy.path_feedback_diagnostics",
+        "model_explorer.policy.path_feedback_runner",
+        "model_explorer.policy.path_feedback_impl",
+    }
+
+
+def test_verification_catches_production_private_import_from_target_facade(tmp_path: Path) -> None:
+    from model_explorer.verification import _run_architecture_static_check
+
+    _write_architecture_fixture(tmp_path)
+    offender = tmp_path / "src/model_explorer/policy/offender.py"
+    offender.write_text(
+        "from model_explorer.policy.feedback_selection import _score_evaluations\n",
+        encoding="utf-8",
+    )
+
+    result = _run_architecture_static_check(tmp_path)
+
+    assert {
+        (violation["rule"], violation.get("target"))
+        for violation in result["violations"]
+    } >= {("no_target_facade_private_production_import", "model_explorer.policy.feedback_selection")}
+
+
+def test_verification_catches_test_private_import_from_target_facade(tmp_path: Path) -> None:
+    from model_explorer.verification import _run_architecture_static_check
+
+    _write_architecture_fixture(tmp_path)
+    offender = tmp_path / "tests/test_private_target_import.py"
+    offender.write_text(
+        "from model_explorer.policy.feedback_selection import _score_evaluations\n",
+        encoding="utf-8",
+    )
+
+    result = _run_architecture_static_check(tmp_path)
+
+    assert {
+        (violation["rule"], violation.get("target"))
+        for violation in result["violations"]
+    } >= {("no_target_facade_private_test_import", "model_explorer.policy.feedback_selection")}
+
+
+def test_verification_catches_dynamic_globals_all_in_governed_modules(tmp_path: Path) -> None:
+    from model_explorer.verification import _run_architecture_static_check
+
+    target = "src/model_explorer/policy/planning_anchor_projection.py"
+    _write_architecture_fixture(
+        tmp_path,
+        overrides={target: "__all__ = [name for name in globals() if not name.startswith('__')]\n"},
+    )
+
+    result = _run_architecture_static_check(tmp_path)
+
+    assert {
+        (violation["rule"], violation["path"])
+        for violation in result["violations"]
+    } >= {("no_dynamic_all_in_governed_module", target)}
+
+
+def test_verification_catches_giant_test_budget_violation(tmp_path: Path) -> None:
+    from model_explorer.verification import _run_architecture_static_check
+
+    target = "tests/test_model_explorer.py"
+    oversized_test = "\n".join("# test budget fixture" for _ in range(5601)) + "\n"
+    _write_architecture_fixture(tmp_path, overrides={target: oversized_test})
+
+    result = _run_architecture_static_check(tmp_path)
+
+    assert {
+        (violation["rule"], violation["path"])
+        for violation in result["violations"]
+    } >= {("giant_test_line_limit", target)}
+
+
 def test_impl_modules_are_only_compatibility_shims() -> None:
     impl_paths = [
         SRC_ROOT / "policy" / "planning_impl.py",
@@ -316,40 +517,7 @@ def test_split_modules_do_not_import_their_runner() -> None:
 def test_verification_catches_nested_legacy_and_private_runner_imports(tmp_path) -> None:
     from model_explorer.verification import _run_architecture_static_check
 
-    required_files = [
-        "src/model_explorer/policy/planning.py",
-        "src/model_explorer/policy/path_feedback.py",
-        "src/model_explorer/policy/experiment.py",
-        "src/model_explorer/data/evaluation_matrix.py",
-        "src/model_explorer/policy/planning_impl.py",
-        "src/model_explorer/policy/path_feedback_impl.py",
-        "src/model_explorer/experiments/experiment_impl.py",
-        "src/model_explorer/experiments/quasi_real_matrix/evaluation_matrix_impl.py",
-        "src/model_explorer/policy/path_feedback_runner.py",
-        "src/model_explorer/experiments/runner.py",
-        "src/model_explorer/experiments/quasi_real_matrix/runner.py",
-        "src/model_explorer/policy/path_feedback_artifacts.py",
-        "src/model_explorer/policy/path_feedback_diagnostics.py",
-        "src/model_explorer/policy/path_feedback_manifest.py",
-        "src/model_explorer/policy/path_feedback_reports.py",
-        "src/model_explorer/policy/path_feedback_summary.py",
-        "src/model_explorer/policy/feedback_selection.py",
-        "src/model_explorer/experiments/environment.py",
-        "src/model_explorer/experiments/evaluation.py",
-        "src/model_explorer/experiments/manifest.py",
-        "src/model_explorer/experiments/reports.py",
-        "src/model_explorer/experiments/selection.py",
-        "src/model_explorer/experiments/training_matrix.py",
-        "src/model_explorer/experiments/quasi_real_matrix/manifest.py",
-        "src/model_explorer/experiments/quasi_real_matrix/metrics.py",
-        "src/model_explorer/experiments/quasi_real_matrix/reports.py",
-        "src/model_explorer/experiments/quasi_real_matrix/scenario_generation.py",
-        "src/model_explorer/experiments/quasi_real_matrix/selection.py",
-    ]
-    for relative in required_files:
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("# compatibility test fixture\n", encoding="utf-8")
+    _write_architecture_fixture(tmp_path)
 
     offender = tmp_path / "src/model_explorer/offender.py"
     offender.write_text(
