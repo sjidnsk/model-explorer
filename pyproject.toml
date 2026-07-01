@@ -10,6 +10,8 @@ requires-python = ">=3.12,<3.13"
 
 [project.optional-dependencies]
 training = ["torch>=2.0"]
+raster = ["Pillow>=10"]
+all = ["torch>=2.0", "Pillow>=10"]
 
 [project.scripts]
 model-explorer = "model_explorer.cli:main"

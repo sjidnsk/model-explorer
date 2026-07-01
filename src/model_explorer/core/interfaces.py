@@ -3,8 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
-MODEL_EXPLORER_SCHEMA_VERSION = "model-explorer-contract/v1"
+from ..contracts.versions import MODEL_EXPLORER_SCHEMA_VERSION
 
 
 class ContractValidationError(ValueError):

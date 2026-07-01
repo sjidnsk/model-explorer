@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass
 from math import hypot, isfinite
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..core.interfaces import (
     MODEL_EXPLORER_SCHEMA_VERSION,
@@ -16,11 +16,9 @@ from ..core.interfaces import (
     ModelExplorerContract,
 )
 from ..io.scenario import Scenario
-from ..policy.collector import collect_rollout_episode
-from ..policy.rollout import RolloutEpisode
-from ..policy.rollout_io import write_rollout_episodes_jsonl
-from .manifest import load_data_manifest, validate_data_manifest
-from .raster import read_raster_window
+
+if TYPE_CHECKING:
+    from ..policy.rollout import RolloutEpisode
 
 
 GENERATOR_VERSION = "lola-south-pole-rollout/v1"
@@ -99,7 +97,9 @@ def generate_lola_south_pole_rollout_episodes(
     source_config: LolaSouthPoleRoiConfig | None = None,
     metadata_extra: dict[str, Any] | None = None,
 ) -> tuple[RolloutEpisode, ...]:
-    scenarios = generate_lola_south_pole_scenarios(
+    from ..experiments.lola_rollouts import generate_lola_south_pole_rollout_episodes as _generate
+
+    return _generate(
         dem_values,
         observation_count_values,
         dataset_id=dataset_id,
@@ -109,10 +109,6 @@ def generate_lola_south_pole_rollout_episodes(
         config=config,
         source_config=source_config,
         metadata_extra=metadata_extra,
-    )
-    return tuple(
-        collect_rollout_episode(scenario, max_candidates=config.candidate_count)
-        for scenario in scenarios
     )
 
 
@@ -127,7 +123,10 @@ def write_lola_south_pole_rollouts_jsonl(
     resolution: float,
     config: LolaSouthPoleRoiConfig,
 ) -> tuple[RolloutEpisode, ...]:
-    episodes = generate_lola_south_pole_rollout_episodes(
+    from ..experiments.lola_rollouts import write_lola_south_pole_rollouts_jsonl as _write
+
+    return _write(
+        path,
         dem_values,
         observation_count_values,
         dataset_id=dataset_id,
@@ -136,10 +135,6 @@ def write_lola_south_pole_rollouts_jsonl(
         resolution=resolution,
         config=config,
     )
-    output_path = Path(path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    write_rollout_episodes_jsonl(output_path, episodes)
-    return episodes
 
 
 def write_lola_south_pole_scenarios_json(
@@ -182,51 +177,9 @@ def write_lola_south_pole_rollouts_from_manifest_jsonl(
     *,
     config: LolaSouthPoleRoiConfig,
 ) -> tuple[RolloutEpisode, ...]:
-    validation = validate_data_manifest(manifest_path)
-    validation.require_valid()
-    manifest = load_data_manifest(manifest_path)
-    raw_dir = Path(validation.raw_dir)
-    dem_file = _product_file_name(manifest, role="shape_map_radius")
-    count_file = _product_file_name(manifest, role="observation_count")
-    resolution = _manifest_resolution(manifest)
-    dem_window = read_raster_window(
-        raw_dir / dem_file,
-        x=config.roi_x,
-        y=config.roi_y,
-        width=config.roi_width,
-        height=config.roi_height,
-    )
-    count_window = read_raster_window(
-        raw_dir / count_file,
-        x=config.roi_x,
-        y=config.roi_y,
-        width=config.roi_width,
-        height=config.roi_height,
-    )
-    window_config = LolaSouthPoleRoiConfig(
-        roi_x=0,
-        roi_y=0,
-        roi_width=config.roi_width,
-        roi_height=config.roi_height,
-        candidate_count=config.candidate_count,
-        episode_count=config.episode_count,
-        seed=config.seed,
-        start_cell=config.start_cell,
-    )
-    episodes = generate_lola_south_pole_rollout_episodes(
-        dem_window.values,
-        count_window.values,
-        dataset_id=str(manifest.get("dataset_id", "unknown")),
-        data_class=str(manifest.get("data_class", "unknown")),
-        region=str(manifest.get("region", "unknown")),
-        resolution=resolution,
-        config=window_config,
-        source_config=config,
-    )
-    output = Path(output_path)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    write_rollout_episodes_jsonl(output, episodes)
-    return episodes
+    from ..experiments.lola_rollouts import write_lola_south_pole_rollouts_from_manifest_jsonl as _write
+
+    return _write(manifest_path, output_path, config=config)
 
 
 def _contract_from_roi(

@@ -3,52 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import hypot, isfinite, log1p
 
+from ..contracts.fields import (
+    CANDIDATE_BENEFIT_FIELDS,
+    CANDIDATE_COST_FIELDS,
+    CANDIDATE_FEATURE_NAMES,
+    EXPERIMENTAL_CANDIDATE_FIELDS,
+    GLOBAL_FEATURE_NAMES,
+    MISSING_INDICATOR_NAMES,
+)
 from ..core.interfaces import GoalCandidate, ModelExplorerContract
 
 
 OBSERVATION_SCHEMA_VERSION = "policy-observation/v1.1"
-
-CANDIDATE_FEATURE_NAMES = (
-    "cell_x",
-    "cell_y",
-    "relative_dx",
-    "relative_dy",
-    "relative_distance",
-    "utility",
-    "reachable",
-    "expected_coverage_rate_delta",
-    "expected_new_coverage_area",
-    "information_gain",
-    "confidence_gain",
-    "value",
-    "risk",
-    "path_cost",
-    "energy_cost",
-)
-
-GLOBAL_FEATURE_NAMES = (
-    "grid_width",
-    "grid_height",
-    "grid_resolution",
-    "passable_ratio",
-    "violation_count",
-    "coverage_rate",
-    "step_index",
-    "remaining_steps",
-)
-
-_BENEFIT_FIELDS = (
-    "expected_coverage_rate_delta",
-    "expected_new_coverage_area",
-    "information_gain",
-    "confidence_gain",
-    "value",
-)
-
-_COST_FIELDS = ("risk", "path_cost", "energy_cost")
-
-EXPERIMENTAL_CANDIDATE_FIELDS = _BENEFIT_FIELDS + _COST_FIELDS
-MISSING_INDICATOR_NAMES = tuple(f"{field}_missing" for field in EXPERIMENTAL_CANDIDATE_FIELDS)
 
 _GRID_SIZE_NORMALIZER = 1000.0
 
@@ -131,13 +97,13 @@ def _candidate_features(
         "utility": _clip_unit(goal.utility),
         "reachable": 1.0 if goal.reachable else 0.0,
     }
-    for field in _BENEFIT_FIELDS:
+    for field in CANDIDATE_BENEFIT_FIELDS:
         raw_value = _numeric_experimental(goal, field) or 0.0
         if field == "expected_new_coverage_area":
             values[field] = _clip_unit(raw_value / grid_area)
         else:
             values[field] = _clip_unit(raw_value)
-    for field in _COST_FIELDS:
+    for field in CANDIDATE_COST_FIELDS:
         raw_value = _numeric_experimental(goal, field)
         if raw_value is None:
             raw_value = cost_defaults[field]
@@ -169,7 +135,7 @@ def _global_features(contract: ModelExplorerContract, *, step_index: int, remain
 
 def _cost_defaults(goals: tuple[GoalCandidate, ...]) -> dict[str, float]:
     defaults: dict[str, float] = {}
-    for field in _COST_FIELDS:
+    for field in CANDIDATE_COST_FIELDS:
         values = tuple(value for goal in goals for value in [_numeric_experimental(goal, field)] if value is not None)
         defaults[field] = max(values) if values else 0.0
     return defaults

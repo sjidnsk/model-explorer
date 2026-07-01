@@ -4,12 +4,11 @@ from collections.abc import Sequence
 from math import isfinite
 from typing import Any
 
+from ..contracts.fields import CANDIDATE_BENEFIT_FIELDS, CANDIDATE_COST_FIELDS
 from ..core.interfaces import ExplorerDecision, GoalCandidate, ModelExplorerContract
 from ..policy.features import extract_policy_observation
 
 
-_BENEFIT_FIELDS = ("information_gain", "confidence_gain", "value")
-_COST_FIELDS = ("risk", "path_cost", "energy_cost")
 _SCORE_WEIGHTS = {
     "coverage": 0.35,
     "information_gain": 0.20,
@@ -91,10 +90,12 @@ def _normalized_feature_values(goals: tuple[GoalCandidate, ...]) -> dict[str, tu
         "coverage": tuple(_coverage_value(goal) or 0.0 for goal in goals),
     }
 
-    for field in _BENEFIT_FIELDS:
+    for field in CANDIDATE_BENEFIT_FIELDS:
+        if field.startswith("expected_coverage"):
+            continue
         raw_values[field] = tuple(_numeric_experimental(goal, field) or 0.0 for goal in goals)
 
-    for field in _COST_FIELDS:
+    for field in CANDIDATE_COST_FIELDS:
         available_values = tuple(
             value for goal in goals for value in [_numeric_experimental(goal, field)] if value is not None
         )

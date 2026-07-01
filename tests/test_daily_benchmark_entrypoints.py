@@ -575,11 +575,17 @@ class VerifyEntrypointTests(unittest.TestCase):
         self.assertEqual(summary["status"], "dry_run")
         self.assertEqual(
             [step["name"] for step in summary["steps"]],
-            ["unittest", "benchmark_smoke", "forbidden_import_check", "git_diff_check"],
+            [
+                "unittest",
+                "benchmark_smoke",
+                "forbidden_import_check",
+                "architecture_static_check",
+                "git_diff_check",
+            ],
         )
         self.assertEqual(
             [step["kind"] for step in summary["steps"]],
-            ["subprocess", "python", "python_scan", "subprocess"],
+            ["subprocess", "python", "python_scan", "python_scan", "subprocess"],
         )
 
     def test_verify_supports_json_output_and_skip_benchmark_smoke(self):
@@ -600,7 +606,7 @@ class VerifyEntrypointTests(unittest.TestCase):
         self.assertEqual(stdout_summary, file_summary)
         self.assertEqual(
             [step["name"] for step in stdout_summary["steps"]],
-            ["unittest", "forbidden_import_check", "git_diff_check"],
+            ["unittest", "forbidden_import_check", "architecture_static_check", "git_diff_check"],
         )
         self.assertEqual(stdout_summary["steps"][1]["forbidden_patterns"], ["a_gcs_ws", "dev-platform-constraints"])
 
