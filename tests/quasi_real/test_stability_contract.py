@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import unittest
 from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_stability_summary_groups_runs_by_architecture_and_baseline_delta() -> None:
@@ -72,3 +76,26 @@ def test_manifest_architecture_seed_helpers_preserve_manifest_defaults() -> None
         [{"architecture": "mlp_v1"}, {"architecture": "candidate_attention_v1"}],
         "mlp_v1",
     ) == 1
+
+
+class QuasiRealStabilityManifestTemplateTests(unittest.TestCase):
+    def test_stability_manifest_template_is_tracked_and_expands_roi_and_seed_coverage(self):
+        from model_explorer.experiments.quasi_real_matrix.manifest import load_quasi_real_evaluation_manifest
+
+        manifest_path = ROOT / "data" / "manifests" / "lunar_south_pole_lro_lola_stability_matrix_v1.json"
+
+        manifest = load_quasi_real_evaluation_manifest(manifest_path)
+        roi_counts: dict[str, int] = {}
+        for roi in manifest.rois:
+            roi_counts[roi.name] = roi_counts.get(roi.name, 0) + 1
+
+        self.assertTrue(manifest_path.exists())
+        self.assertEqual(manifest.dataset_manifest.name, "lunar_south_pole_lro_lola_gdr_875s_20m.json")
+        self.assertEqual(manifest.output_root.name, "qreal_stability_v1")
+        self.assertEqual(manifest.output_root.parent.name, "processed")
+        self.assertEqual(manifest.output_root.parent.parent.name, "data")
+        self.assertEqual(set(manifest.train_config["architectures"]), {"mlp_v1", "mlp_missing_v1", "candidate_attention_v1"})
+        self.assertGreaterEqual(len(manifest.train_config["seeds"]), 3)
+        self.assertGreaterEqual(set(roi.split for roi in manifest.rois), {"train", "validation", "test"})
+        for roi_name in ("smooth_high_confidence", "rim_or_steep_slope", "low_observation_count", "mixed_risk"):
+            self.assertGreaterEqual(roi_counts.get(roi_name, 0), 2)

@@ -41,3 +41,13 @@
 - 旧 facade 和 `*_impl.py` 只承担兼容 re-export。需要保留历史私有符号时，使用显式 `__all__` 与 allowlist shim，不得通过 `dir()` 广泛泄漏临时变量或导入对象。
 - 生产代码不得从 legacy facade、`*_impl.py` 或 runner 回流导入已迁出的职责 helper。目标模块之间按职责依赖，目标模块不得静态导入自己的 runner。
 - verification 已收紧 runner 行数限制、split module 反向导入检查和测试 private import 检查。新增 runner 逻辑前，应先判断它是否应下沉到 manifest、summary、reports、selection、metrics、diagnostics、artifacts、training matrix 或 evaluation 模块。
+
+## 第四轮目标模块与测试治理规则
+
+- 目标 facade 只保留兼容 re-export 和迁移说明，预算为 250 行；新拆出的职责模块预算为 800 行。超过预算前应继续按职责拆分，而不是压缩代码或把逻辑回流到 facade。
+- 新 production module 不得从自己的 facade、runner 或对应 `*_impl.py` 导入；跨模块依赖应指向真实职责模块。
+- 新测试不得从目标 facade 导入 `_private` helper。需要覆盖内部合同的，优先从 split module 导入无下划线 API；确需验证兼容私有符号时，只在专门的兼容性测试中断言 object identity。
+- 不再使用 `__all__ = [name for name in globals() ...]` 这类动态导出。facade 和 split module 都应使用显式 allowlist，避免临时导入对象泄漏为 API。
+- `tests/test_model_explorer.py` 只保留端到端 CLI、runner 和 integration smoke；path feedback selection、diagnostics、anchor projection 等 helper contract 放在 `tests/path_feedback/` 或 `tests/planning/`。
+- `tests/test_quasi_real_data_pipeline.py` 只保留 quasi-real pipeline/integration smoke；selection decision、sample discriminativeness、decision diagnostics、quality gates、stability 等 helper contract 放在 `tests/quasi_real/`。
+- `model_explorer verify` 已覆盖目标 facade 行数、split module 行数、反向导入、private import、动态 `__all__` 和巨型测试预算。新增模块或测试时应先跑 `python -m model_explorer verify`，再跑相关 pytest。

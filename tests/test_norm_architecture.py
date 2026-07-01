@@ -264,7 +264,7 @@ def test_scripts_are_thin_cli_wrappers() -> None:
     assert violations == []
 
 
-def test_verification_architecture_static_check_reports_target_governance_red_state() -> None:
+def test_verification_architecture_static_check_passes_target_governance_state() -> None:
     from model_explorer.verification import _run_architecture_static_check
 
     result = _run_architecture_static_check(MODEL_ROOT)
@@ -280,15 +280,10 @@ def test_verification_architecture_static_check_reports_target_governance_red_st
         if violation["rule"] == "giant_test_line_limit"
     }
 
-    assert result["returncode"] == 1
-    assert rule_counts == {
-        "giant_test_line_limit": 2,
-    }
+    assert result["returncode"] == 0
+    assert rule_counts == {}
     assert oversized_targets == set()
-    assert giant_tests == {
-        "tests/test_model_explorer.py",
-        "tests/test_quasi_real_data_pipeline.py",
-    }
+    assert giant_tests == set()
 
 
 def test_verification_catches_oversized_target_facade(tmp_path: Path) -> None:

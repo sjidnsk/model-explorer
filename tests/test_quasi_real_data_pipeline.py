@@ -482,27 +482,6 @@ class LolaSouthPoleGenerationTests(unittest.TestCase):
 
 
 class QuasiRealEvaluationMatrixTests(unittest.TestCase):
-    def test_stability_manifest_template_is_tracked_and_expands_roi_and_seed_coverage(self):
-        from model_explorer.data.evaluation_matrix import load_quasi_real_evaluation_manifest
-
-        manifest_path = ROOT / "data" / "manifests" / "lunar_south_pole_lro_lola_stability_matrix_v1.json"
-
-        manifest = load_quasi_real_evaluation_manifest(manifest_path)
-        roi_counts: dict[str, int] = {}
-        for roi in manifest.rois:
-            roi_counts[roi.name] = roi_counts.get(roi.name, 0) + 1
-
-        self.assertTrue(manifest_path.exists())
-        self.assertEqual(manifest.dataset_manifest.name, "lunar_south_pole_lro_lola_gdr_875s_20m.json")
-        self.assertEqual(manifest.output_root.name, "qreal_stability_v1")
-        self.assertEqual(manifest.output_root.parent.name, "processed")
-        self.assertEqual(manifest.output_root.parent.parent.name, "data")
-        self.assertEqual(set(manifest.train_config["architectures"]), {"mlp_v1", "mlp_missing_v1", "candidate_attention_v1"})
-        self.assertGreaterEqual(len(manifest.train_config["seeds"]), 3)
-        self.assertGreaterEqual(set(roi.split for roi in manifest.rois), {"train", "validation", "test"})
-        for roi_name in ("smooth_high_confidence", "rim_or_steep_slope", "low_observation_count", "mixed_risk"):
-            self.assertGreaterEqual(roi_counts.get(roi_name, 0), 2)
-
     def test_mask_stress_manifest_template_is_tracked_and_explicitly_augmented(self):
         from model_explorer.data.evaluation_matrix import load_quasi_real_evaluation_manifest
 
@@ -792,107 +771,6 @@ class QuasiRealEvaluationMatrixTests(unittest.TestCase):
             "not real-world generalization benchmark",
         ):
             self.assertIn(text, report)
-
-    def test_selection_decision_is_inconclusive_when_margin_is_within_seed_variance(self):
-        from model_explorer.experiments.quasi_real_matrix.selection import selection_decision as _selection_decision
-
-        decision = _selection_decision(
-            {
-                "mlp_v1": {"count": 3, "mean": 0.50, "std": 0.10, "min": 0.40, "max": 0.60},
-                "mlp_missing_v1": {"count": 3, "mean": 0.54, "std": 0.08, "min": 0.46, "max": 0.62},
-                "candidate_attention_v1": {"count": 3, "mean": 0.49, "std": 0.07, "min": 0.42, "max": 0.56},
-            },
-            metric="torch_policy.final_coverage_rate",
-            mode="max",
-            uncertainty_multiplier=1.0,
-        )
-
-        self.assertEqual(decision["status"], "inconclusive")
-        self.assertIsNone(decision["recommended_architecture"])
-        self.assertEqual(decision["decision"], "inconclusive")
-        self.assertIn("within seed variance", decision["reason"])
-
-    def test_sample_discriminativeness_warns_when_candidate_spread_is_low(self):
-        from model_explorer.experiments.quasi_real_matrix.selection import sample_discriminativeness_summary as _sample_discriminativeness_summary
-
-        runs = [
-            {
-                "architecture": "mlp_v1",
-                "seed": 1,
-                "validation_evaluation": {
-                    "per_scenario": [
-                        {
-                            "path": "/tmp/scenarios/validation/group-a/shared.json",
-                            "group": "group-a",
-                            "metrics": {
-                                "torch_policy": {
-                                    "sample_discriminativeness": {
-                                        "candidate_coverage_spread": 0.0,
-                                        "risk_spread": 0.0,
-                                        "path_cost_spread": 0.0,
-                                        "value_spread": 0.0,
-                                        "oracle_vs_heuristic_action_disagreement_rate": 0.0,
-                                    }
-                                }
-                            },
-                        }
-                    ]
-                },
-            }
-        ]
-
-        summary = _sample_discriminativeness_summary(runs)
-
-        self.assertIn("low_candidate_coverage_spread", summary["warnings"])
-        self.assertIn("low_risk_spread", summary["warnings"])
-        self.assertEqual(summary["status"], "warning")
-
-    def test_decision_diagnostics_warn_when_policies_match_heuristic_and_actions_are_identical(self):
-        from model_explorer.experiments.quasi_real_matrix.selection import decision_diagnostics_summary as _decision_diagnostics_summary
-
-        runs = [
-            {
-                "architecture": architecture,
-                "seed": 7,
-                "validation_evaluation": {
-                    "per_scenario": [
-                        {
-                            "path": "/tmp/scenarios/validation/group-a/shared.json",
-                            "group": "group-a",
-                            "metrics": {
-                                "torch_policy": {
-                                    "action_diagnostics": [
-                                        {
-                                            "step_index": 0,
-                                            "selected_cell": [2, 2],
-                                            "selected_index": 1,
-                                            "selected_action_mask_valid": True,
-                                            "max_masked_action_probability": 0.0,
-                                            "agrees_with_utility": False,
-                                            "agrees_with_coverage_heuristic": True,
-                                        }
-                                    ]
-                                }
-                            },
-                        }
-                    ]
-                },
-            }
-            for architecture in ("mlp_v1", "mlp_missing_v1", "candidate_attention_v1")
-        ]
-
-        diagnostics = _decision_diagnostics_summary(
-            runs,
-            architectures=["mlp_v1", "mlp_missing_v1", "candidate_attention_v1"],
-        )
-
-        self.assertTrue(diagnostics["all_architectures_identical"])
-        self.assertIn("all_architectures_identical", diagnostics["warnings"])
-        self.assertIn("all_trained_policies_match_coverage_heuristic", diagnostics["warnings"])
-        self.assertEqual(
-            diagnostics["architecture_baseline_agreement"]["mlp_v1"]["coverage_heuristic_agreement_rate"],
-            1.0,
-        )
 
     def test_matrix_report_warns_when_dataset_has_no_mask_stress_samples(self):
         try:

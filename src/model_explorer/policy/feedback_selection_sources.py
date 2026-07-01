@@ -174,7 +174,10 @@ def _path_cost_delta(before: float | None, after: float | None) -> float | None:
     return float(after - before)
 
 
+selected_after_feedback = _selected_after_feedback
+
 __all__ = (
+    "selected_after_feedback",
     "_selected_before_feedback",
     "_selected_after_feedback",
     "_source_selection_key",

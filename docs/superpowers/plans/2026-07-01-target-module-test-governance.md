@@ -47,4 +47,13 @@
 
 - `verification.py` 报告第四阶段治理 metadata 和 violations。
 - `tests/test_norm_architecture.py` 包含临时 fixture 测试，覆盖 oversized facade、missing split module、split module forbidden import、production/test private import、dynamic `__all__`、giant test budget。
-- 当前仓库保持预期 RED：真实目标文件 oversized，计划 split module 尚未存在，后续拆分任务负责转绿。
+- 当前仓库必须保持 GREEN：真实目标 facade 与 split module 均满足预算，`_run_architecture_static_check` 返回 0 且 violations 为空。
+
+## 完成状态
+
+- Path feedback diagnostics 已拆为 aggregate、interpretation、backend diagnostics、candidate audits，旧 `path_feedback_diagnostics.py` 为显式 facade。
+- Feedback selection 已拆为 types、scoring、channel、trainability、anchor、sources，旧 `feedback_selection.py` 为显式 facade；`feedback_selection_sources.py` 暴露 `selected_after_feedback` 作为目标模块测试入口。
+- Planning anchor/diagnostics 已拆为 evaluation、projection、grid、backend summaries、platform feasibility、diagnostic interpretation，旧目标模块保留 facade。
+- Quasi-real selection 已拆为 quality gates、decision diagnostics、architecture selection、stability，旧 `selection.py` 保留 facade。
+- 细粒度 helper contract 已从巨型测试迁移到 `tests/path_feedback/`、`tests/planning/`、`tests/quasi_real/`；`tests/test_model_explorer.py <= 5600`，`tests/test_quasi_real_data_pipeline.py <= 1050`。
+- `tests/test_norm_architecture.py` 的真实仓库静态检查已从 RED 预期改为 GREEN 预期，同时保留各规则的临时违规 fixture 测试。

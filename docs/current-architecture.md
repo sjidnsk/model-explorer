@@ -46,3 +46,16 @@
 - `model_explorer.experiments.quasi_real_matrix.runner`：保留 quasi-real matrix 的高层 validate、dry-run、run。ROI manifest、scenario generation、selection、metrics、report 分别由目标模块承接。
 
 兼容层仍保留旧 public import 路径，但真实业务逻辑不得回流到 legacy facade 或 `*_impl.py`。当前 verification 对 runner 行数设硬限制：path feedback 和 experiment runner 不超过 800 行，quasi-real runner 不超过 700 行；目标模块也不得静态导入自己的 runner。
+
+## 第四阶段目标模块与测试治理状态
+
+第四阶段后，前一轮拆出的目标大模块也退化为 thin facade 或低于预算，真实职责继续下沉到更小模块：
+
+- `model_explorer.policy.path_feedback_diagnostics` 只做兼容导出；aggregate、解释、后端诊断与 candidate audit 分别位于 `path_feedback_diagnostic_aggregate.py`、`path_feedback_diagnostic_interpretation.py`、`path_feedback_backend_diagnostics.py`、`path_feedback_candidate_audits.py`。
+- `model_explorer.policy.feedback_selection` 只做兼容导出；types、scoring、channel-aware evidence、trainability、anchor projection 与 source selection 分别位于 `feedback_selection_types.py`、`feedback_selection_scoring.py`、`feedback_selection_channel.py`、`feedback_selection_trainability.py`、`feedback_selection_anchor.py`、`feedback_selection_sources.py`。
+- `model_explorer.policy.planning_anchor` 与 `model_explorer.policy.planning_diagnostics` 保持 facade；anchor evaluation/projection/grid 与 backend summaries/platform feasibility/diagnostic interpretation 分别由对应 split module 承接。
+- `model_explorer.experiments.quasi_real_matrix.selection` 保持 facade；quality gates、decision diagnostics、architecture selection 与 stability 分别由 `quality_gates.py`、`decision_diagnostics.py`、`architecture_selection.py`、`stability.py` 承接。
+
+测试治理同步收口：`tests/test_model_explorer.py` 保留端到端 CLI、runner 和 integration smoke；path feedback selection、diagnostics 与 anchor projection helper contract 迁移到 `tests/path_feedback/` 和 `tests/planning/` 的聚焦文件。`tests/test_quasi_real_data_pipeline.py` 保留 quasi-real pipeline/integration smoke；selection decision、sample discriminativeness、decision diagnostics、quality gates 与 stability contract 迁移到 `tests/quasi_real/`。
+
+当前 `model_explorer verify` 会阻止目标 facade 重新膨胀、split module 反向导入 facade/runner/`*_impl.py`、动态 `globals()` 形式 `__all__`、production/test 从目标 facade 导入 `_private` helper，以及巨型测试文件超过预算。

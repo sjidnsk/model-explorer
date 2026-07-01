@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import unittest
 from pathlib import Path
 
 
@@ -103,3 +104,106 @@ def test_quasi_real_selection_facade_no_longer_defines_moved_private_helpers() -
     }
 
     assert defined.isdisjoint(moved_private_names)
+
+
+class QuasiRealSelectionBehaviorTests(unittest.TestCase):
+    def test_selection_decision_is_inconclusive_when_margin_is_within_seed_variance(self):
+        from model_explorer.experiments.quasi_real_matrix.architecture_selection import selection_decision
+
+        decision = selection_decision(
+            {
+                "mlp_v1": {"count": 3, "mean": 0.50, "std": 0.10, "min": 0.40, "max": 0.60},
+                "mlp_missing_v1": {"count": 3, "mean": 0.54, "std": 0.08, "min": 0.46, "max": 0.62},
+                "candidate_attention_v1": {"count": 3, "mean": 0.49, "std": 0.07, "min": 0.42, "max": 0.56},
+            },
+            metric="torch_policy.final_coverage_rate",
+            mode="max",
+            uncertainty_multiplier=1.0,
+        )
+
+        self.assertEqual(decision["status"], "inconclusive")
+        self.assertIsNone(decision["recommended_architecture"])
+        self.assertEqual(decision["decision"], "inconclusive")
+        self.assertIn("within seed variance", decision["reason"])
+
+    def test_sample_discriminativeness_warns_when_candidate_spread_is_low(self):
+        from model_explorer.experiments.quasi_real_matrix.decision_diagnostics import sample_discriminativeness_summary
+
+        runs = [
+            {
+                "architecture": "mlp_v1",
+                "seed": 1,
+                "validation_evaluation": {
+                    "per_scenario": [
+                        {
+                            "path": "/tmp/scenarios/validation/group-a/shared.json",
+                            "group": "group-a",
+                            "metrics": {
+                                "torch_policy": {
+                                    "sample_discriminativeness": {
+                                        "candidate_coverage_spread": 0.0,
+                                        "risk_spread": 0.0,
+                                        "path_cost_spread": 0.0,
+                                        "value_spread": 0.0,
+                                        "oracle_vs_heuristic_action_disagreement_rate": 0.0,
+                                    }
+                                }
+                            },
+                        }
+                    ]
+                },
+            }
+        ]
+
+        summary = sample_discriminativeness_summary(runs)
+
+        self.assertIn("low_candidate_coverage_spread", summary["warnings"])
+        self.assertIn("low_risk_spread", summary["warnings"])
+        self.assertEqual(summary["status"], "warning")
+
+    def test_decision_diagnostics_warn_when_policies_match_heuristic_and_actions_are_identical(self):
+        from model_explorer.experiments.quasi_real_matrix.decision_diagnostics import decision_diagnostics_summary
+
+        runs = [
+            {
+                "architecture": architecture,
+                "seed": 7,
+                "validation_evaluation": {
+                    "per_scenario": [
+                        {
+                            "path": "/tmp/scenarios/validation/group-a/shared.json",
+                            "group": "group-a",
+                            "metrics": {
+                                "torch_policy": {
+                                    "action_diagnostics": [
+                                        {
+                                            "step_index": 0,
+                                            "selected_cell": [2, 2],
+                                            "selected_index": 1,
+                                            "selected_action_mask_valid": True,
+                                            "max_masked_action_probability": 0.0,
+                                            "agrees_with_utility": False,
+                                            "agrees_with_coverage_heuristic": True,
+                                        }
+                                    ]
+                                }
+                            },
+                        }
+                    ]
+                },
+            }
+            for architecture in ("mlp_v1", "mlp_missing_v1", "candidate_attention_v1")
+        ]
+
+        diagnostics = decision_diagnostics_summary(
+            runs,
+            architectures=["mlp_v1", "mlp_missing_v1", "candidate_attention_v1"],
+        )
+
+        self.assertTrue(diagnostics["all_architectures_identical"])
+        self.assertIn("all_architectures_identical", diagnostics["warnings"])
+        self.assertIn("all_trained_policies_match_coverage_heuristic", diagnostics["warnings"])
+        self.assertEqual(
+            diagnostics["architecture_baseline_agreement"]["mlp_v1"]["coverage_heuristic_agreement_rate"],
+            1.0,
+        )
