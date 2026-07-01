@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from .feedback_selection_anchor import (
     SOURCE_SELECTION_BEST_ALTERNATIVE_SCOPE,
     _anchor_projection_adjusted_path_cost,

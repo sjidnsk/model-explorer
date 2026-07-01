@@ -80,6 +80,7 @@ def test_feedback_selection_split_modules_and_facade_contract() -> None:
 
     temporary_names = {"Any", "Counter", "dataclass", "field", "isfinite", "annotations"}
     assert temporary_names.isdisjoint(set(facade.__all__))
+    assert temporary_names.isdisjoint(vars(facade))
 
 
 def test_path_feedback_impl_private_compatibility_points_to_split_modules() -> None:
