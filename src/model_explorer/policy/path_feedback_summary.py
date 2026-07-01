@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .path_feedback_manifest import PathFeedbackManifest, validate_path_feedback_manifest
+from .path_feedback_manifest import PathFeedbackManifest
 from .planning_anchor import anchor_projection_candidate_config_from_mapping
 
 
@@ -549,7 +549,6 @@ __all__ = [
     'PATH_FEEDBACK_SUMMARY_SCHEMA_VERSION',
     'PATH_FEEDBACK_SUMMARY_ACCEPTANCE_METRICS',
     'PATH_FEEDBACK_SUMMARY_REQUIRED_KEYS',
-    'validate_path_feedback_manifest',
     'validate_path_feedback_summary_contract',
     'compact_path_feedback_summary',
     'acceptance_metadata',

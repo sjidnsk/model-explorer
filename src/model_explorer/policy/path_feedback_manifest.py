@@ -5,8 +5,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .planning_routes import load_path_planner_sidecar
-
 
 PATH_FEEDBACK_SCHEMA_VERSION = "path-feedback-manifest/v1"
 
@@ -83,6 +81,8 @@ def load_path_feedback_manifest(path: str | Path) -> PathFeedbackManifest:
 
 
 def validate_path_feedback_manifest(path: str | Path) -> dict[str, Any]:
+    from .planning_routes import load_path_planner_sidecar
+
     manifest = load_path_feedback_manifest(path)
     for scenario in manifest.scenarios:
         if not scenario.contract_path.exists():

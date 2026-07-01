@@ -252,7 +252,7 @@ def _run_path_feedback_command(args: argparse.Namespace) -> int:
             )
         )
     elif args.path_feedback_command == "validate":
-        from .policy.path_feedback_summary import validate_path_feedback_manifest
+        from .policy.path_feedback_manifest import validate_path_feedback_manifest
 
         _print_json(validate_path_feedback_manifest(args.manifest))
     elif args.path_feedback_command == "dry-run":
