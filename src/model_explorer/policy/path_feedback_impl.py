@@ -1,12 +1,23 @@
-"""Compatibility re-export for migrated implementation symbols."""
+"""Compatibility re-export for migrated path-feedback symbols."""
 
-from . import path_feedback_runner as _runner
+_MODULES = (
+    "path_feedback_manifest",
+    "path_feedback_summary",
+    "path_feedback_reports",
+    "path_feedback_diagnostics",
+    "path_feedback_artifacts",
+    "feedback_selection",
+    "path_feedback_runner",
+)
 
-for _name in dir(_runner):
-    if not _name.startswith("__"):
-        globals()[_name] = getattr(_runner, _name)
+for _module_name in _MODULES:
+    _module = __import__(f"{__package__}.{_module_name}", fromlist=["*"])
+    for _name in dir(_module):
+        if not _name.startswith("__"):
+            globals()[_name] = getattr(_module, _name)
 
+del _module
+del _module_name
 del _name
-del _runner
 
 __all__ = [_name for _name in globals() if not _name.startswith("__")]
