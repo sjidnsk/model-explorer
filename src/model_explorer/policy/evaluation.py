@@ -9,7 +9,7 @@ from ..decision.selector import select_goal
 from ..io.scenario import Scenario
 from .canonical_reward import load_canonical_reward_profile
 from .features import extract_policy_observation
-from .feedback_selection import select_goal_with_path_feedback
+from .feedback_selection_scoring import select_goal_with_path_feedback
 from .planning_types import PathPlanRequest, PathPlanningAdapter
 from .reward import compute_step_reward
 

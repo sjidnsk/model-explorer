@@ -7,13 +7,15 @@ from typing import Any
 from ..core.interfaces import ModelExplorerContract
 from ..io.scenario import load_scenario
 from .context_id import policy_context_id_metadata
-from .feedback_selection import (
+from .feedback_selection_anchor import (
     _anchor_projection_candidate_generation_summary,
+    annotate_source_selected_anchor_projection,
+)
+from .feedback_selection_sources import (
     _candidate_path_cost_for_cell,
     _path_cost_delta,
     _selected_after_feedback,
     _selected_before_feedback,
-    annotate_source_selected_anchor_projection,
 )
 from .path_feedback_artifacts import (
     _gcs_control_point_candidate_artifact_index,
