@@ -52,3 +52,32 @@ def test_quasi_real_compatibility_exports_are_explicit_and_clean() -> None:
     assert evaluation_matrix.load_quasi_real_evaluation_manifest is evaluation_matrix_impl.load_quasi_real_evaluation_manifest
     assert evaluation_matrix_impl._selection_decision is not None
     assert evaluation_matrix._selection_decision is evaluation_matrix_impl._selection_decision
+
+
+def test_quasi_real_metric_helpers_live_in_metrics_module() -> None:
+    from model_explorer.data import evaluation_matrix
+    from model_explorer.experiments.quasi_real_matrix import evaluation_matrix_impl
+    from model_explorer.experiments.quasi_real_matrix import metrics
+    from model_explorer.experiments.quasi_real_matrix import selection
+
+    public_helpers = {
+        "architecture_nested_metric_summary": "_architecture_nested_metric_summary",
+        "per_group_action_outcomes": "_per_group_action_outcomes",
+        "iter_policy_nested_sections": "_iter_policy_nested_sections",
+        "run_selection_metric": "_run_selection_metric",
+        "evaluation_metric": "_evaluation_metric",
+    }
+    for public_name, private_name in public_helpers.items():
+        assert public_name in metrics.__all__
+        assert private_name in metrics.__all__
+        assert getattr(metrics, public_name) is getattr(metrics, private_name)
+        assert getattr(selection, private_name) is getattr(metrics, private_name)
+        assert getattr(evaluation_matrix_impl, private_name) is getattr(metrics, private_name)
+        assert getattr(evaluation_matrix, private_name) is getattr(metrics, private_name)
+
+    selection_path = QUASI_REAL / "selection.py"
+    tree = ast.parse(selection_path.read_text(encoding="utf-8"))
+    defined_in_selection = {
+        node.name for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    assert not (set(public_helpers.values()) & defined_in_selection)

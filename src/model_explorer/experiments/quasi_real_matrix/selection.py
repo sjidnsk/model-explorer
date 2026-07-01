@@ -6,11 +6,17 @@ from typing import Any
 from .manifest import EVALUATION_SCOPE, QuasiRealEvaluationManifest, _normalize_selection_config
 from .metrics import (
     _append_metric,
+    _architecture_nested_metric_summary,
     _cell_tuple,
+    _evaluation_metric,
+    _evaluation_policy_metrics,
     _group_name_from_path,
     _int_value,
+    _iter_policy_nested_sections,
     _metric_value,
     _numeric_summary,
+    _per_group_action_outcomes,
+    _run_selection_metric,
     _training_runs,
 )
 
@@ -149,6 +155,7 @@ def _architecture_selection_summary(
         runs,
         architectures=architectures,
         uncertainty_multiplier=float(config["uncertainty_multiplier"]),
+        decision_fn=_selection_decision,
     )
     composite_decision = _selection_decision(
         composite_stats,
@@ -234,39 +241,6 @@ def _selection_composite_score(metrics: dict[str, Any], weights: dict[str, float
     return score if isfinite(score) else 0.0
 
 
-def _evaluation_policy_metrics(evaluation: Any, policy: str) -> dict[str, Any]:
-    if not isinstance(evaluation, dict):
-        return {}
-    if "aggregate" in evaluation and isinstance(evaluation["aggregate"], dict):
-        evaluation = evaluation["aggregate"]
-    metrics = evaluation.get(policy) if isinstance(evaluation, dict) else None
-    return metrics if isinstance(metrics, dict) else {}
-
-
-def _architecture_nested_metric_summary(
-    runs: list[dict[str, Any]],
-    *,
-    architectures: list[str],
-    section: str,
-) -> dict[str, dict[str, dict[str, float | int]]]:
-    values: dict[str, dict[str, list[float]]] = {architecture: {} for architecture in architectures}
-    for run in runs:
-        if not isinstance(run, dict):
-            continue
-        architecture = str(run.get("architecture", "unknown"))
-        architecture_values = values.setdefault(architecture, {})
-        for _, nested in _iter_policy_nested_sections(run, section, evaluation_keys=("validation_evaluation",)):
-            for metric, value in nested.items():
-                _append_metric(architecture_values, str(metric), value)
-    return {
-        architecture: {
-            metric: _numeric_summary(tuple(metric_values))
-            for metric, metric_values in metrics.items()
-        }
-        for architecture, metrics in values.items()
-    }
-
-
 def _sample_discriminativeness_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
     values: dict[str, list[float]] = {}
     for run in runs:
@@ -309,106 +283,6 @@ def _sample_discriminativeness_summary(runs: list[dict[str, Any]]) -> dict[str, 
         "metrics": metrics,
         "warnings": warnings,
     }
-
-
-def _per_group_action_outcomes(
-    runs: list[dict[str, Any]],
-    *,
-    architectures: list[str],
-    uncertainty_multiplier: float,
-) -> dict[str, Any]:
-    group_values: dict[str, dict[str, dict[str, list[float]]]] = {}
-    for run in runs:
-        if not isinstance(run, dict):
-            continue
-        architecture = str(run.get("architecture", "unknown"))
-        for context, regret_metrics in _iter_policy_nested_sections(
-            run,
-            "oracle_regret",
-            evaluation_keys=("validation_evaluation",),
-        ):
-            group_name = str(context.get("group", "unknown"))
-            architecture_values = group_values.setdefault(group_name, {}).setdefault(architecture, {})
-            for metric, value in regret_metrics.items():
-                _append_metric(architecture_values, str(metric), value)
-        for context, action_metrics in _iter_policy_nested_sections(
-            run,
-            "action_sensitive_metrics",
-            evaluation_keys=("validation_evaluation",),
-        ):
-            group_name = str(context.get("group", "unknown"))
-            architecture_values = group_values.setdefault(group_name, {}).setdefault(architecture, {})
-            for metric, value in action_metrics.items():
-                _append_metric(architecture_values, str(metric), value)
-
-    summary: dict[str, Any] = {}
-    for group_name, architecture_values in group_values.items():
-        architecture_stats = {
-            architecture: {
-                metric: _numeric_summary(tuple(metric_values))
-                for metric, metric_values in metrics.items()
-            }
-            for architecture, metrics in architecture_values.items()
-        }
-        coverage_regret_stats = {
-            architecture: metrics.get("coverage_regret", _numeric_summary(()))
-            for architecture, metrics in architecture_stats.items()
-        }
-        decision = _selection_decision(
-            coverage_regret_stats,
-            metric="coverage_regret",
-            mode="min",
-            uncertainty_multiplier=uncertainty_multiplier,
-        )
-        summary[group_name] = {
-            **decision,
-            "reason": (
-                f"lower coverage_regret is better; {decision.get('reason', '')}"
-                if decision.get("reason")
-                else "lower coverage_regret is better"
-            ),
-            "architectures": {
-                architecture: architecture_stats.get(architecture, {})
-                for architecture in architectures
-            },
-        }
-    return summary
-
-
-def _iter_policy_nested_sections(
-    run: dict[str, Any],
-    section: str,
-    *,
-    evaluation_keys: tuple[str, ...],
-):
-    for evaluation_key in evaluation_keys:
-        evaluation = run.get(evaluation_key, {})
-        if not isinstance(evaluation, dict):
-            continue
-        yielded_per_scenario = False
-        per_scenario = evaluation.get("per_scenario", [])
-        if isinstance(per_scenario, list):
-            for scenario in per_scenario:
-                if not isinstance(scenario, dict):
-                    continue
-                metrics = scenario.get("metrics", {})
-                torch_policy = metrics.get("torch_policy", {}) if isinstance(metrics, dict) else {}
-                nested = torch_policy.get(section) if isinstance(torch_policy, dict) else None
-                if not isinstance(nested, dict):
-                    continue
-                path = str(scenario.get("path", ""))
-                yielded_per_scenario = True
-                yield {
-                    "evaluation": evaluation_key,
-                    "path": path,
-                    "group": str(scenario.get("group") or _group_name_from_path(path)),
-                }, nested
-        if yielded_per_scenario:
-            continue
-        torch_policy = _evaluation_policy_metrics(evaluation, "torch_policy")
-        nested = torch_policy.get(section) if isinstance(torch_policy, dict) else None
-        if isinstance(nested, dict):
-            yield {"evaluation": evaluation_key, "group": "aggregate", "path": ""}, nested
 
 
 def _decision_diagnostics_summary(
@@ -765,29 +639,6 @@ def _architecture_run_count(runs: list[dict[str, Any]], architecture: str) -> in
     return sum(1 for run in runs if str(run.get("architecture", "unknown")) == architecture)
 
 
-def _run_selection_metric(run: dict[str, Any], metric: str) -> Any:
-    if metric in run:
-        return run.get(metric)
-    evaluation = run.get("validation_evaluation", {})
-    return _evaluation_metric(evaluation, metric)
-
-
-def _evaluation_metric(evaluation: Any, metric: str) -> Any:
-    if not isinstance(evaluation, dict):
-        return None
-    if "aggregate" in evaluation and isinstance(evaluation["aggregate"], dict):
-        evaluation = evaluation["aggregate"]
-    parts = metric.split(".")
-    if len(parts) == 1:
-        return evaluation.get(parts[0]) if isinstance(evaluation, dict) else None
-    current: Any = evaluation
-    for part in parts:
-        if not isinstance(current, dict):
-            return None
-        current = current.get(part)
-    return current
-
-
 def _selection_quality_gates(
     config: dict[str, Any],
     *,
@@ -1079,11 +930,7 @@ def _stability_summary(experiment: Any) -> dict[str, Any]:
 
 architecture_selection_summary = _architecture_selection_summary
 selection_composite_score = _selection_composite_score
-evaluation_policy_metrics = _evaluation_policy_metrics
-architecture_nested_metric_summary = _architecture_nested_metric_summary
 sample_discriminativeness_summary = _sample_discriminativeness_summary
-per_group_action_outcomes = _per_group_action_outcomes
-iter_policy_nested_sections = _iter_policy_nested_sections
 decision_diagnostics_summary = _decision_diagnostics_summary
 architecture_agreement_matrix = _architecture_agreement_matrix
 baseline_agreement_summary = _baseline_agreement_summary
@@ -1094,8 +941,6 @@ held_out_test_audit = _held_out_test_audit
 manifest_architectures = _manifest_architectures
 manifest_seeds = _manifest_seeds
 architecture_run_count = _architecture_run_count
-run_selection_metric = _run_selection_metric
-evaluation_metric = _evaluation_metric
 selection_quality_gates = _selection_quality_gates
 append_selection_min_violation = _append_selection_min_violation
 mask_stress_coverage = _mask_stress_coverage
@@ -1106,11 +951,7 @@ stability_summary = _stability_summary
 _PUBLIC_EXPORTS = [
     "architecture_selection_summary",
     "selection_composite_score",
-    "evaluation_policy_metrics",
-    "architecture_nested_metric_summary",
     "sample_discriminativeness_summary",
-    "per_group_action_outcomes",
-    "iter_policy_nested_sections",
     "decision_diagnostics_summary",
     "architecture_agreement_matrix",
     "baseline_agreement_summary",
@@ -1121,8 +962,6 @@ _PUBLIC_EXPORTS = [
     "manifest_architectures",
     "manifest_seeds",
     "architecture_run_count",
-    "run_selection_metric",
-    "evaluation_metric",
     "selection_quality_gates",
     "append_selection_min_violation",
     "mask_stress_coverage",
@@ -1133,11 +972,7 @@ _PUBLIC_EXPORTS = [
 _PRIVATE_COMPAT_EXPORTS = [
     "_architecture_selection_summary",
     "_selection_composite_score",
-    "_evaluation_policy_metrics",
-    "_architecture_nested_metric_summary",
     "_sample_discriminativeness_summary",
-    "_per_group_action_outcomes",
-    "_iter_policy_nested_sections",
     "_decision_diagnostics_summary",
     "_architecture_agreement_matrix",
     "_baseline_agreement_summary",
@@ -1148,8 +983,6 @@ _PRIVATE_COMPAT_EXPORTS = [
     "_manifest_architectures",
     "_manifest_seeds",
     "_architecture_run_count",
-    "_run_selection_metric",
-    "_evaluation_metric",
     "_selection_quality_gates",
     "_append_selection_min_violation",
     "_mask_stress_coverage",
