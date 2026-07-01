@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from collections import Counter
 import importlib
 import json
 from pathlib import Path
@@ -263,13 +264,41 @@ def test_scripts_are_thin_cli_wrappers() -> None:
     assert violations == []
 
 
-def test_verification_architecture_static_check_passes() -> None:
+def test_verification_architecture_static_check_reports_target_governance_red_state() -> None:
     from model_explorer.verification import _run_architecture_static_check
 
     result = _run_architecture_static_check(MODEL_ROOT)
+    rule_counts = Counter(violation["rule"] for violation in result["violations"])
+    oversized_targets = {
+        violation["path"]
+        for violation in result["violations"]
+        if violation["rule"] == "target_facade_line_limit"
+    }
+    giant_tests = {
+        violation["path"]
+        for violation in result["violations"]
+        if violation["rule"] == "giant_test_line_limit"
+    }
 
-    assert result["returncode"] == 0
-    assert result["violations"] == []
+    assert result["returncode"] == 1
+    assert rule_counts == {
+        "target_facade_line_limit": 5,
+        "target_split_module_exists": 20,
+        "no_target_facade_private_production_import": 79,
+        "no_dynamic_all_in_governed_module": 4,
+        "giant_test_line_limit": 2,
+    }
+    assert oversized_targets == {
+        "src/model_explorer/policy/path_feedback_diagnostics.py",
+        "src/model_explorer/policy/feedback_selection.py",
+        "src/model_explorer/policy/planning_anchor.py",
+        "src/model_explorer/policy/planning_diagnostics.py",
+        "src/model_explorer/experiments/quasi_real_matrix/selection.py",
+    }
+    assert giant_tests == {
+        "tests/test_model_explorer.py",
+        "tests/test_quasi_real_data_pipeline.py",
+    }
 
 
 def test_verification_catches_oversized_target_facade(tmp_path: Path) -> None:
