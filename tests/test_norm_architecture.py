@@ -282,14 +282,9 @@ def test_verification_architecture_static_check_reports_target_governance_red_st
 
     assert result["returncode"] == 1
     assert rule_counts == {
-        "target_facade_line_limit": 1,
-        "target_split_module_exists": 4,
-        "no_target_facade_private_production_import": 22,
         "giant_test_line_limit": 2,
     }
-    assert oversized_targets == {
-        "src/model_explorer/experiments/quasi_real_matrix/selection.py",
-    }
+    assert oversized_targets == set()
     assert giant_tests == {
         "tests/test_model_explorer.py",
         "tests/test_quasi_real_data_pipeline.py",
@@ -517,6 +512,10 @@ def test_split_modules_do_not_import_their_runner() -> None:
             SRC_ROOT / "experiments" / "quasi_real_matrix" / "reports.py",
             SRC_ROOT / "experiments" / "quasi_real_matrix" / "scenario_generation.py",
             SRC_ROOT / "experiments" / "quasi_real_matrix" / "selection.py",
+            SRC_ROOT / "experiments" / "quasi_real_matrix" / "quality_gates.py",
+            SRC_ROOT / "experiments" / "quasi_real_matrix" / "decision_diagnostics.py",
+            SRC_ROOT / "experiments" / "quasi_real_matrix" / "architecture_selection.py",
+            SRC_ROOT / "experiments" / "quasi_real_matrix" / "stability.py",
         ],
     }
     violations: list[str] = []

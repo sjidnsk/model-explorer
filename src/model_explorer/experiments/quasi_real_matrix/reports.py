@@ -15,7 +15,8 @@ from .manifest import (
     _split_counts,
 )
 from .metrics import _int_value
-from .selection import _architecture_selection_summary, _stability_summary
+from .architecture_selection import _architecture_selection_summary
+from .stability import _stability_summary
 
 
 def _inspection_summary(

@@ -48,6 +48,27 @@ from .reports import (
     _run_summary,
     _would_write,
 )
+from .architecture_selection import (
+    _architecture_selection_summary,
+    _held_out_test_audit,
+    _per_group_architecture_winners,
+    _selection_composite_score,
+    _selection_decision,
+)
+from .decision_diagnostics import (
+    _all_architectures_identical,
+    _apply_decision_signal_guards,
+    _architecture_agreement_matrix,
+    _baseline_agreement_summary,
+    _decision_diagnostics_summary,
+    _per_group_disagreement_summary,
+    _sample_discriminativeness_summary,
+)
+from .quality_gates import (
+    _append_selection_min_violation,
+    _mask_stress_coverage,
+    _selection_quality_gates,
+)
 from .runner import (
     dry_run_quasi_real_evaluation_manifest,
     run_quasi_real_evaluation_manifest,
@@ -58,25 +79,10 @@ from .scenario_generation import (
     _apply_mask_stress_to_scenario_json,
     _experiment_manifest_payload,
 )
-from .selection import (
-    _all_architectures_identical,
-    _apply_decision_signal_guards,
-    _architecture_agreement_matrix,
+from .stability import (
     _architecture_run_count,
-    _architecture_selection_summary,
-    _baseline_agreement_summary,
-    _decision_diagnostics_summary,
-    _held_out_test_audit,
     _manifest_architectures,
     _manifest_seeds,
-    _mask_stress_coverage,
-    _per_group_architecture_winners,
-    _per_group_disagreement_summary,
-    _sample_discriminativeness_summary,
-    _selection_composite_score,
-    _selection_decision,
-    _selection_quality_gates,
-    _append_selection_min_violation,
     _stability_summary,
 )
 

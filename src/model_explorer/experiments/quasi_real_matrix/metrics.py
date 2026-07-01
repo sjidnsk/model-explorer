@@ -67,7 +67,7 @@ def _per_group_action_outcomes(
     decision_fn: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if decision_fn is None:
-        from .selection import _selection_decision as decision_fn
+        from .architecture_selection import _selection_decision as decision_fn
 
     group_values: dict[str, dict[str, dict[str, list[float]]]] = {}
     for run in runs:

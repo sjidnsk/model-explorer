@@ -17,7 +17,17 @@ def test_quasi_real_runner_is_small_orchestration_layer() -> None:
 
 def test_quasi_real_split_modules_do_not_import_runner() -> None:
     violations: list[str] = []
-    split_modules = {"manifest.py", "metrics.py", "reports.py", "scenario_generation.py", "selection.py"}
+    split_modules = {
+        "manifest.py",
+        "metrics.py",
+        "reports.py",
+        "scenario_generation.py",
+        "selection.py",
+        "quality_gates.py",
+        "decision_diagnostics.py",
+        "architecture_selection.py",
+        "stability.py",
+    }
     for path in sorted(QUASI_REAL.glob("*.py")):
         if path.name not in split_modules:
             continue
