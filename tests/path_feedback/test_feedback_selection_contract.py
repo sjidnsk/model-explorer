@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import importlib
+from pathlib import Path
 
 
 SPLIT_MODULES = (
@@ -58,6 +60,23 @@ PRIVATE_COMPATIBILITY_SYMBOLS = {
 }
 
 
+def _feedback_selection_legacy_private_exports() -> dict[str, str]:
+    impl = importlib.import_module("model_explorer.policy.path_feedback_impl")
+    tree = ast.parse(Path(impl.__file__).read_text(encoding="utf-8"))
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == "_LEGACY_PRIVATE_EXPORTS" for target in node.targets):
+            continue
+        exports = ast.literal_eval(node.value)
+        return {
+            symbol: module_name
+            for symbol, module_name in exports.items()
+            if module_name.startswith("feedback_selection_")
+        }
+    raise AssertionError("_LEGACY_PRIVATE_EXPORTS not found")
+
+
 def test_feedback_selection_split_modules_and_facade_contract() -> None:
     modules = {
         name: importlib.import_module(f"model_explorer.policy.{name}")
@@ -89,3 +108,12 @@ def test_path_feedback_impl_private_compatibility_points_to_split_modules() -> N
     for symbol, module_name in PRIVATE_COMPATIBILITY_SYMBOLS.items():
         module = importlib.import_module(f"model_explorer.policy.{module_name}")
         assert getattr(impl, symbol) is getattr(module, symbol)
+
+
+def test_path_feedback_impl_feedback_selection_private_exports_are_exhaustive() -> None:
+    legacy_exports = _feedback_selection_legacy_private_exports()
+
+    assert legacy_exports == PRIVATE_COMPATIBILITY_SYMBOLS
+    for symbol, module_name in legacy_exports.items():
+        module = importlib.import_module(f"model_explorer.policy.{module_name}")
+        assert hasattr(module, symbol)

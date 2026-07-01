@@ -96,7 +96,6 @@ _LEGACY_PRIVATE_EXPORTS = {
     "_list_text": "path_feedback_diagnostic_interpretation",
     "_min_max_normalize": "feedback_selection_scoring",
     "_non_positive_number": "path_feedback_artifacts",
-    "_normalization_features": "feedback_selection_scoring",
     "_normalized_features": "feedback_selection_scoring",
     "_numeric_experimental": "feedback_selection_scoring",
     "_numeric_experimental_optional": "feedback_selection_scoring",
