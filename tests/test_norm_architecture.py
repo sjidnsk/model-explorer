@@ -119,6 +119,11 @@ EXPECTED_FUNCTION_LINE_LIMITS = {
         "_architecture_selection_summary",
     ): 180,
 }
+EXPECTED_CURRENT_FUNCTION_LINE_VIOLATIONS = {
+    target: limit
+    for target, limit in EXPECTED_FUNCTION_LINE_LIMITS.items()
+    if target != ("src/model_explorer/verification.py", "_run_architecture_static_check")
+}
 
 
 def _write_architecture_fixture(
@@ -342,12 +347,16 @@ def test_verification_architecture_static_check_passes_target_governance_state()
     }
 
     assert result["returncode"] == 1
-    assert rule_counts == Counter({"function_line_limit": len(EXPECTED_FUNCTION_LINE_LIMITS)})
+    assert rule_counts == Counter({"function_line_limit": len(EXPECTED_CURRENT_FUNCTION_LINE_VIOLATIONS)})
     assert dynamic_globals_all_violations == set()
     assert function_limit_violations == {
         (path, function_name, limit)
-        for (path, function_name), limit in EXPECTED_FUNCTION_LINE_LIMITS.items()
+        for (path, function_name), limit in EXPECTED_CURRENT_FUNCTION_LINE_VIOLATIONS.items()
     }
+    assert (
+        "src/model_explorer/verification.py::_run_architecture_static_check"
+        in result["function_line_limits"]
+    )
     assert target_facade_violations == set()
     assert giant_test_violations == set()
 

@@ -344,6 +344,45 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
     violations: list[dict[str, Any]] = []
     scanned_files: set[Path] = set()
 
+    _scan_data_policy_imports(root, violations, scanned_files)
+    _scan_decision_policy_imports(root, violations, scanned_files)
+    _scan_source_governance(root, violations, scanned_files)
+    _scan_compatibility_modules(root, violations)
+    _scan_runner_modules(root, violations)
+    _scan_runner_split_modules(root, violations, scanned_files)
+    _scan_target_facades(root, violations)
+    _scan_target_split_modules(root, violations, scanned_files)
+    _scan_giant_tests(root, violations)
+    _scan_function_line_budgets(root, violations)
+    _scan_test_governance(root, violations, scanned_files)
+
+    return {
+        "name": "architecture_static_check",
+        "kind": "python_scan",
+        "returncode": 1 if violations else 0,
+        "scanned_files": len(scanned_files),
+        "facade_line_limit": _FACADE_LINE_LIMIT,
+        "impl_line_limit": _FACADE_LINE_LIMIT,
+        "runner_line_limits": dict(_RUNNER_LINE_LIMITS),
+        "target_facade_line_limit": _TARGET_FACADE_LINE_LIMIT,
+        "target_facades": list(_TARGET_FACADE_FILES),
+        "target_split_module_line_limit": _TARGET_SPLIT_MODULE_LINE_LIMIT,
+        "target_split_modules": list(_TARGET_SPLIT_MODULES),
+        "giant_test_line_limits": dict(_GIANT_TEST_LINE_LIMITS),
+        "no_dynamic_globals_all_root": "src/model_explorer",
+        "function_line_limits": {
+            f"{relative_path}::{function_name}": limit
+            for (relative_path, function_name), limit in _FUNCTION_LINE_LIMITS.items()
+        },
+        "violations": violations,
+    }
+
+
+def _scan_data_policy_imports(
+    root: Path,
+    violations: list[dict[str, Any]],
+    scanned_files: set[Path],
+) -> None:
     data_root = root / "src" / "model_explorer" / "data"
     if data_root.exists():
         for path in sorted(data_root.rglob("*.py")):
@@ -360,6 +399,12 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                         }
                     )
 
+
+def _scan_decision_policy_imports(
+    root: Path,
+    violations: list[dict[str, Any]],
+    scanned_files: set[Path],
+) -> None:
     decision_root = root / "src" / "model_explorer" / "decision"
     if decision_root.exists():
         for path in sorted(decision_root.rglob("*.py")):
@@ -376,6 +421,12 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                         }
                     )
 
+
+def _scan_source_governance(
+    root: Path,
+    violations: list[dict[str, Any]],
+    scanned_files: set[Path],
+) -> None:
     source_root = root / "src" / "model_explorer"
     if source_root.exists():
         for path in sorted(source_root.rglob("*.py")):
@@ -447,6 +498,8 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                         }
                     )
 
+
+def _scan_compatibility_modules(root: Path, violations: list[dict[str, Any]]) -> None:
     for relative_path in (*_FACADE_FILES, *_IMPL_FILES):
         path = root / relative_path
         if not path.exists():
@@ -470,6 +523,8 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                 }
             )
 
+
+def _scan_runner_modules(root: Path, violations: list[dict[str, Any]]) -> None:
     for relative_path, limit in _RUNNER_LINE_LIMITS.items():
         path = root / relative_path
         if not path.exists():
@@ -493,6 +548,12 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                 }
             )
 
+
+def _scan_runner_split_modules(
+    root: Path,
+    violations: list[dict[str, Any]],
+    scanned_files: set[Path],
+) -> None:
     for runner_module, split_paths in _RUNNER_SPLIT_MODULES.items():
         for relative_path in split_paths:
             path = root / relative_path
@@ -526,6 +587,8 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                         }
                     )
 
+
+def _scan_target_facades(root: Path, violations: list[dict[str, Any]]) -> None:
     for relative_path in _TARGET_FACADE_FILES:
         path = root / relative_path
         if not path.exists():
@@ -549,6 +612,12 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                 }
             )
 
+
+def _scan_target_split_modules(
+    root: Path,
+    violations: list[dict[str, Any]],
+    scanned_files: set[Path],
+) -> None:
     for relative_path in _TARGET_SPLIT_MODULES:
         path = root / relative_path
         if not path.exists():
@@ -592,6 +661,8 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                     }
                 )
 
+
+def _scan_giant_tests(root: Path, violations: list[dict[str, Any]]) -> None:
     for relative_path, limit in _GIANT_TEST_LINE_LIMITS.items():
         path = root / relative_path
         if not path.exists():
@@ -607,6 +678,8 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                 }
             )
 
+
+def _scan_function_line_budgets(root: Path, violations: list[dict[str, Any]]) -> None:
     for (relative_path, function_name), limit in _FUNCTION_LINE_LIMITS.items():
         path = root / relative_path
         if not path.exists():
@@ -653,6 +726,12 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                 }
             )
 
+
+def _scan_test_governance(
+    root: Path,
+    violations: list[dict[str, Any]],
+    scanned_files: set[Path],
+) -> None:
     tests_root = root / "tests"
     if tests_root.exists():
         for path in sorted(tests_root.rglob("*.py")):
@@ -686,27 +765,6 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                             "text": f"from {node.module} import {alias.name}",
                         }
                     )
-
-    return {
-        "name": "architecture_static_check",
-        "kind": "python_scan",
-        "returncode": 1 if violations else 0,
-        "scanned_files": len(scanned_files),
-        "facade_line_limit": _FACADE_LINE_LIMIT,
-        "impl_line_limit": _FACADE_LINE_LIMIT,
-        "runner_line_limits": dict(_RUNNER_LINE_LIMITS),
-        "target_facade_line_limit": _TARGET_FACADE_LINE_LIMIT,
-        "target_facades": list(_TARGET_FACADE_FILES),
-        "target_split_module_line_limit": _TARGET_SPLIT_MODULE_LINE_LIMIT,
-        "target_split_modules": list(_TARGET_SPLIT_MODULES),
-        "giant_test_line_limits": dict(_GIANT_TEST_LINE_LIMITS),
-        "no_dynamic_globals_all_root": "src/model_explorer",
-        "function_line_limits": {
-            f"{relative_path}::{function_name}": limit
-            for (relative_path, function_name), limit in _FUNCTION_LINE_LIMITS.items()
-        },
-        "violations": violations,
-    }
 
 
 def _private_import_targets(
