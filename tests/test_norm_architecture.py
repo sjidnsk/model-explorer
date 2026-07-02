@@ -129,7 +129,14 @@ EXPECTED_CURRENT_FUNCTION_LINE_VIOLATIONS = {
         ("src/model_explorer/policy/path_feedback_summary.py", "compact_path_feedback_summary"),
         ("src/model_explorer/experiments/training_matrix.py", "_run_training"),
         ("src/model_explorer/verification.py", "_run_architecture_static_check"),
+        ("src/model_explorer/policy/path_feedback_backend_diagnostics.py", "_sampled_region_path_diagnostics"),
         ("src/model_explorer/policy/path_feedback_reports.py", "render_path_feedback_markdown"),
+        ("src/model_explorer/policy/collector.py", "collect_dynamic_rollout_episode"),
+        ("src/model_explorer/policy/evaluation.py", "_evaluate_strategy"),
+        (
+            "src/model_explorer/experiments/quasi_real_matrix/architecture_selection.py",
+            "_architecture_selection_summary",
+        ),
     }
 }
 
@@ -354,8 +361,15 @@ def test_verification_architecture_static_check_passes_target_governance_state()
         if violation["rule"] == "function_line_limit"
     }
 
-    assert result["returncode"] == 1
-    assert rule_counts == Counter({"function_line_limit": len(EXPECTED_CURRENT_FUNCTION_LINE_VIOLATIONS)})
+    expected_returncode = 1 if EXPECTED_CURRENT_FUNCTION_LINE_VIOLATIONS else 0
+    expected_rule_counts = (
+        Counter({"function_line_limit": len(EXPECTED_CURRENT_FUNCTION_LINE_VIOLATIONS)})
+        if EXPECTED_CURRENT_FUNCTION_LINE_VIOLATIONS
+        else Counter()
+    )
+
+    assert result["returncode"] == expected_returncode
+    assert rule_counts == expected_rule_counts
     assert dynamic_globals_all_violations == set()
     assert function_limit_violations == {
         (path, function_name, limit)

@@ -463,305 +463,333 @@ def _channel_aware_astar_prefixed_fields(summary: dict[str, Any]) -> dict[str, A
     high_cost = summary.get('high_cost_exposure_delta') if isinstance(summary.get('high_cost_exposure_delta'), dict) else {}
     return {'channel_aware_astar_report_count': _int_value(summary.get('report_count')), 'channel_aware_astar_selected_count': _int_value(summary.get('selected_count')), 'channel_aware_astar_fallback_count': _int_value(summary.get('fallback_count')), 'channel_aware_astar_requested_backend_counts': dict(summary.get('requested_backend_counts', {})), 'channel_aware_astar_selected_backend_counts': dict(summary.get('selected_backend_counts', {})), 'channel_aware_astar_status_counts': dict(summary.get('status_counts', {})), 'channel_aware_astar_fallback_reason_counts': dict(summary.get('fallback_reason_counts', {})), 'channel_aware_astar_blocker_class_counts': dict(summary.get('blocker_class_counts', {})), 'channel_aware_astar_platform_goal_feasibility_class_counts': dict(summary.get('platform_goal_feasibility_class_counts', {})), 'channel_aware_astar_platform_goal_contract_mismatch_count': _int_value(summary.get('platform_goal_contract_mismatch_count')), 'channel_aware_astar_platform_goal_anchor_available_count': _int_value(summary.get('platform_goal_anchor_available_count')), 'channel_aware_astar_platform_goal_unresolved_count': _int_value(summary.get('platform_goal_unresolved_count')), 'channel_aware_astar_path_changed_count': _int_value(summary.get('path_changed_count')), 'channel_aware_astar_path_changed_rate': float(summary.get('path_changed_rate') or 0.0), 'channel_aware_astar_path_cost_delta_count': _int_value(path_cost.get('count')), 'channel_aware_astar_path_cost_delta_min': path_cost.get('min'), 'channel_aware_astar_path_cost_delta_max': path_cost.get('max'), 'channel_aware_astar_path_cost_delta_mean': path_cost.get('mean'), 'channel_aware_astar_channel_cost_delta_count': _int_value(channel_cost.get('count')), 'channel_aware_astar_channel_cost_delta_min': channel_cost.get('min'), 'channel_aware_astar_channel_cost_delta_max': channel_cost.get('max'), 'channel_aware_astar_channel_cost_delta_mean': channel_cost.get('mean'), 'channel_aware_astar_high_cost_exposure_delta_count': _int_value(high_cost.get('count')), 'channel_aware_astar_high_cost_exposure_delta_min': high_cost.get('min'), 'channel_aware_astar_high_cost_exposure_delta_max': high_cost.get('max'), 'channel_aware_astar_high_cost_exposure_delta_mean': high_cost.get('mean'), 'channel_aware_astar_candidate_audit': list(summary.get('candidate_audit', []))}
 
-def _sampled_region_path_diagnostics(evaluations) -> dict[str, Any]:
-    status_counts: Counter[str] = Counter()
-    source_counts: Counter[str] = Counter()
-    fallback_reasons: Counter[str] = Counter()
-    start_classification_counts: Counter[str] = Counter()
-    goal_classification_counts: Counter[str] = Counter()
-    connector_strategy_counts: Counter[str] = Counter()
-    bridge_aware_connector_status_counts: Counter[str] = Counter()
-    bridge_aware_fallback_reasons: Counter[str] = Counter()
-    bridge_corridor_status_counts: Counter[str] = Counter()
-    bridge_corridor_fallback_reasons: Counter[str] = Counter()
-    bridge_corridor_radius_counts: Counter[str] = Counter()
-    reachable_component_status_counts: Counter[str] = Counter()
-    reachable_component_reason_counts: Counter[str] = Counter()
-    anchor_closure_status_counts: Counter[str] = Counter()
-    anchor_closure_reason_counts: Counter[str] = Counter()
-    anchor_closure_connection_kind_counts: Counter[str] = Counter()
-    terminal_adjustment_status_counts: Counter[str] = Counter()
-    terminal_adjustment_reason_counts: Counter[str] = Counter()
-    execution_tie_break_status_counts: Counter[str] = Counter()
-    execution_tie_break_reason_counts: Counter[str] = Counter()
-    complexity_reason_counts: Counter[str] = Counter()
-    selected_count = 0
-    fallback_count = 0
-    sample_attempt_count = 0
-    candidate_ranking_count = 0
-    anchor_region_added_count = 0
-    anchor_region_connected_count = 0
-    anchor_closure_attempt_count = 0
-    anchor_closure_connected_count = 0
-    connector_attempt_count = 0
-    bridge_aware_connector_attempt_count = 0
-    bridge_aware_connector_available_count = 0
-    bridge_aware_connector_selected_count = 0
-    bridge_aware_connector_rejected_count = 0
-    bridge_aware_bridge_cell_count = 0
-    bridge_aware_mask_added_cell_count = 0
-    bridge_corridor_connector_attempt_count = 0
-    bridge_corridor_connector_available_count = 0
-    bridge_corridor_connector_selected_count = 0
-    bridge_corridor_connector_rejected_count = 0
-    bridge_corridor_added_cell_count = 0
-    terminal_adjusted_count = 0
-    terminal_adjustment_candidate_count = 0
-    reachable_component_disconnected_count = 0
-    reachable_component_replacement_selected_count = 0
-    reachable_component_terminal_candidate_count = 0
-    reachable_terminal_rescue_count = 0
-    proxy_goal_anchor_selected_count = 0
-    goal_rescue_candidate_count = 0
-    benefit_surface_present_count = 0
-    path_duplicate_with_baseline_count = 0
-    baseline_equivalent_count = 0
-    no_quality_gain_count = 0
-    fixture_no_benefit_surface_count = 0
-    candidate_missing_metrics_count = 0
-    constrained_connector_failed_count = 0
-    for item in evaluations:
-        candidate = item.to_dict()
-        planning_backend = candidate.get('planning_backend')
-        if not isinstance(planning_backend, dict):
-            continue
-        sampled = planning_backend.get('sampled_region_path')
-        if not isinstance(sampled, dict) or not sampled:
-            continue
-        status = str(sampled.get('status') or planning_backend.get('status') or 'unknown')
-        status_counts[status] += 1
-        if status == 'selected' or planning_backend.get('selected_backend') == 'sampled_region_path':
-            selected_count += 1
-        if status == 'fallback' or sampled.get('fallback_reason'):
-            fallback_count += 1
-        reason = sampled.get('fallback_reason')
-        if reason:
-            fallback_reasons[str(reason)] += 1
-        constrained_connector_failed_seen = reason == 'constrained_connector_failed'
-        comparison = sampled.get('candidate_comparison')
-        comparison = comparison if isinstance(comparison, dict) else {}
-        complexity_reason = comparison.get('complexity_reason')
-        if not complexity_reason and reason in {'candidate_missing_metrics', 'constrained_connector_failed', 'fixture_no_benefit_surface', 'sampled_candidate_baseline_equivalent', 'sampled_candidate_no_quality_gain', 'sampled_candidate_path_duplicate'}:
-            complexity_reason = reason
-        if complexity_reason:
-            complexity_reason_value = str(complexity_reason)
-            complexity_reason_counts[complexity_reason_value] += 1
-            if complexity_reason_value == 'sampled_candidate_baseline_equivalent':
-                baseline_equivalent_count += 1
-            if complexity_reason_value == 'sampled_candidate_path_duplicate':
-                path_duplicate_with_baseline_count += 1
-            if complexity_reason_value == 'sampled_candidate_no_quality_gain':
-                no_quality_gain_count += 1
-            if complexity_reason_value == 'fixture_no_benefit_surface':
-                fixture_no_benefit_surface_count += 1
-            if complexity_reason_value == 'candidate_missing_metrics':
-                candidate_missing_metrics_count += 1
-            if complexity_reason_value == 'constrained_connector_failed':
-                constrained_connector_failed_seen = True
-        if comparison.get('benefit_surface_present') is True:
-            benefit_surface_present_count += 1
-        if comparison.get('path_duplicate_with_baseline') is True and complexity_reason != 'sampled_candidate_path_duplicate':
-            path_duplicate_with_baseline_count += 1
-        sample_attempt_count += _int_value(sampled.get('sample_attempt_count'))
-        anchoring = sampled.get('start_goal_anchoring')
-        anchoring = anchoring if isinstance(anchoring, dict) else {}
-        start_classification = anchoring.get('start_classification')
-        goal_classification = anchoring.get('goal_classification')
-        if start_classification:
-            start_classification_counts[str(start_classification)] += 1
-        if goal_classification:
-            goal_classification_counts[str(goal_classification)] += 1
-        for endpoint in ('start', 'goal'):
-            if anchoring.get(f'{endpoint}_anchor_region_added') is True:
-                anchor_region_added_count += 1
-            if anchoring.get(f'{endpoint}_anchor_region_connected') is True:
-                anchor_region_connected_count += 1
-        closure = anchoring.get('anchor_connectivity_closure')
-        closure = closure if isinstance(closure, dict) else {}
-        anchor_closure_attempt_count += _int_value(closure.get('attempt_count'))
-        anchor_closure_connected_count += _int_value(closure.get('connected_count'))
-        closure_status_counts = closure.get('status_counts')
-        if isinstance(closure_status_counts, dict):
-            anchor_closure_status_counts.update({str(key): _int_value(value) for key, value in closure_status_counts.items()})
-        closure_reason_counts = closure.get('reason_counts')
-        if isinstance(closure_reason_counts, dict):
-            anchor_closure_reason_counts.update({str(key): _int_value(value) for key, value in closure_reason_counts.items()})
-        closure_kind_counts = closure.get('connection_kind_counts')
-        if isinstance(closure_kind_counts, dict):
-            anchor_closure_connection_kind_counts.update({str(key): _int_value(value) for key, value in closure_kind_counts.items()})
-        sample_attempts = sampled.get('sample_attempts')
-        bridge_aware_report_fallback_reasons: set[str] = set()
-        bridge_corridor_report_fallback_reasons: set[str] = set()
-        if isinstance(sample_attempts, list):
-            for attempt in sample_attempts:
-                if not isinstance(attempt, dict):
-                    continue
-                if attempt.get('kind') != 'connector_attempt':
-                    continue
-                connector_attempt_count += 1
-                strategy = attempt.get('strategy')
-                if strategy:
-                    connector_strategy_counts[str(strategy)] += 1
-                if strategy == 'bridge_aware_constrained_astar':
-                    bridge_aware_connector_attempt_count += 1
-                    status_value = str(attempt.get('status') or 'unknown')
-                    bridge_aware_connector_status_counts[status_value] += 1
-                    if status_value == 'available':
-                        bridge_aware_connector_available_count += 1
-                    bridge_aware_bridge_cell_count += _int_value(attempt.get('bridge_cell_count'))
-                    bridge_aware_mask_added_cell_count += _int_value(attempt.get('bridge_mask_added_cell_count'))
-                    bridge_reason = attempt.get('fallback_reason')
-                    if bridge_reason:
-                        bridge_aware_report_fallback_reasons.add(str(bridge_reason))
-                if strategy == 'bridge_corridor_constrained_astar':
-                    bridge_corridor_connector_attempt_count += 1
-                    status_value = str(attempt.get('status') or 'unknown')
-                    bridge_corridor_status_counts[status_value] += 1
-                    if status_value == 'available':
-                        bridge_corridor_connector_available_count += 1
-                    bridge_corridor_added_cell_count += _int_value(attempt.get('bridge_corridor_added_cell_count'))
-                    radius = attempt.get('bridge_corridor_radius_cells')
-                    if radius is not None:
-                        bridge_corridor_radius_counts[str(radius)] += 1
-                    corridor_reason = attempt.get('fallback_reason') or attempt.get('bridge_corridor_failure_reason')
-                    if corridor_reason:
-                        bridge_corridor_report_fallback_reasons.add(str(corridor_reason))
-        rankings = sampled.get('candidate_rankings')
-        if isinstance(rankings, list):
-            candidate_ranking_count += len(rankings)
-            for ranking in rankings:
-                if not isinstance(ranking, dict):
-                    continue
-                strategy = ranking.get('strategy')
-                ranking_status = str(ranking.get('status') or 'unknown')
-                if strategy == 'bridge_corridor_constrained_astar':
-                    if ranking_status == 'selected':
-                        bridge_corridor_connector_selected_count += 1
-                    if ranking_status == 'rejected':
-                        bridge_corridor_connector_rejected_count += 1
-                    corridor_reason = ranking.get('fallback_reason') or ranking.get('bridge_corridor_failure_reason')
-                    if corridor_reason:
-                        bridge_corridor_report_fallback_reasons.add(str(corridor_reason))
-                    if corridor_reason == 'constrained_connector_failed':
-                        constrained_connector_failed_seen = True
-                    continue
-                if strategy != 'bridge_aware_constrained_astar':
-                    if ranking.get('fallback_reason') == 'constrained_connector_failed':
-                        constrained_connector_failed_seen = True
-                    continue
-                if ranking_status == 'selected':
-                    bridge_aware_connector_selected_count += 1
-                if ranking_status == 'rejected':
-                    bridge_aware_connector_rejected_count += 1
-                bridge_reason = ranking.get('fallback_reason')
-                if bridge_reason:
-                    bridge_aware_report_fallback_reasons.add(str(bridge_reason))
-                if bridge_reason == 'constrained_connector_failed':
-                    constrained_connector_failed_seen = True
-        if constrained_connector_failed_seen:
-            constrained_connector_failed_count += 1
-        bridge_aware_fallback_reasons.update(bridge_aware_report_fallback_reasons)
-        bridge_corridor_fallback_reasons.update(bridge_corridor_report_fallback_reasons)
-        terminal = sampled.get('terminal_adjustment_report')
-        terminal = terminal if isinstance(terminal, dict) else {}
-        terminal_status = terminal.get('status')
-        if terminal_status:
-            terminal_adjustment_status_counts[str(terminal_status)] += 1
-        terminal_reason = terminal.get('reason_code') or terminal.get('reason')
-        if terminal_reason:
-            terminal_adjustment_reason_counts[str(terminal_reason)] += 1
-        if terminal.get('target_adjusted') is True:
-            terminal_adjusted_count += 1
-        terminal_adjustment_candidate_count += _int_value(terminal.get('candidate_count'))
-        reachable_component_terminal_candidate_count += _int_value(terminal.get('reachable_candidate_count'))
-        goal_rescue_candidate_count += _int_value(terminal.get('rescue_candidate_count'))
-        if terminal.get('reachable_terminal_rescue_used') is True or terminal_reason == 'reachable_terminal_selected_by_component_projection':
-            reachable_terminal_rescue_count += 1
-        if terminal.get('proxy_goal_anchor_selected') is True or terminal_reason == 'proxy_goal_anchor_selected':
-            proxy_goal_anchor_selected_count += 1
-        component = terminal.get('reachable_component_report')
-        if not isinstance(component, dict):
-            component = anchoring.get('reachable_component_report')
-        component = component if isinstance(component, dict) else {}
-        component_status = component.get('status')
-        if component_status:
-            reachable_component_status_counts[str(component_status)] += 1
-        component_reason = component.get('reason')
-        if component_reason:
-            reachable_component_reason_counts[str(component_reason)] += 1
-        if component_status == 'disconnected' or component_reason == 'target_component_disconnected':
-            reachable_component_disconnected_count += 1
-        if terminal.get('reachable_component_replacement_selected') is True or component_reason == 'reachable_component_replacement_selected':
-            reachable_component_replacement_selected_count += 1
-        tie_break = sampled.get('execution_tie_break')
-        tie_break = tie_break if isinstance(tie_break, dict) else {}
-        tie_break_status = tie_break.get('status')
-        if tie_break_status:
-            execution_tie_break_status_counts[str(tie_break_status)] += 1
-        tie_break_reason = tie_break.get('reason')
-        if tie_break_reason:
-            execution_tie_break_reason_counts[str(tie_break_reason)] += 1
-        graph = candidate.get('region_graph')
-        if isinstance(graph, dict):
-            source_counts[str(graph.get('graph_source') or graph.get('region_source') or 'unknown')] += 1
-        else:
-            source_counts['unknown'] += 1
-    return {
-        "selected_count": selected_count,
-        "fallback_count": fallback_count,
-        "status_counts": dict(sorted(status_counts.items())),
-        "source_counts": dict(sorted(source_counts.items())),
-        "fallback_reasons": dict(sorted(fallback_reasons.items())),
-        "sample_attempt_count": sample_attempt_count,
-        "candidate_ranking_count": candidate_ranking_count,
-        "anchor_region_added_count": anchor_region_added_count,
-        "anchor_region_connected_count": anchor_region_connected_count,
-        "anchor_closure_attempt_count": anchor_closure_attempt_count,
-        "anchor_closure_connected_count": anchor_closure_connected_count,
-        "anchor_closure_status_counts": dict(sorted(anchor_closure_status_counts.items())),
-        "anchor_closure_reason_counts": dict(sorted(anchor_closure_reason_counts.items())),
-        "anchor_closure_connection_kind_counts": dict(sorted(anchor_closure_connection_kind_counts.items())),
-        "start_classification_counts": dict(sorted(start_classification_counts.items())),
-        "goal_classification_counts": dict(sorted(goal_classification_counts.items())),
-        "connector_attempt_count": connector_attempt_count,
-        "connector_strategy_counts": dict(sorted(connector_strategy_counts.items())),
-        "bridge_aware_connector_attempt_count": bridge_aware_connector_attempt_count,
-        "bridge_aware_connector_available_count": bridge_aware_connector_available_count,
-        "bridge_aware_connector_selected_count": bridge_aware_connector_selected_count,
-        "bridge_aware_connector_rejected_count": bridge_aware_connector_rejected_count,
-        "bridge_aware_connector_status_counts": dict(sorted(bridge_aware_connector_status_counts.items())),
-        "bridge_aware_fallback_reasons": dict(sorted(bridge_aware_fallback_reasons.items())),
-        "bridge_aware_bridge_cell_count": bridge_aware_bridge_cell_count,
-        "bridge_aware_mask_added_cell_count": bridge_aware_mask_added_cell_count,
-        "bridge_corridor_connector_attempt_count": bridge_corridor_connector_attempt_count,
-        "bridge_corridor_connector_available_count": bridge_corridor_connector_available_count,
-        "bridge_corridor_connector_selected_count": bridge_corridor_connector_selected_count,
-        "bridge_corridor_connector_rejected_count": bridge_corridor_connector_rejected_count,
-        "bridge_corridor_status_counts": dict(sorted(bridge_corridor_status_counts.items())),
-        "bridge_corridor_fallback_reasons": dict(sorted(bridge_corridor_fallback_reasons.items())),
-        "bridge_corridor_radius_counts": dict(sorted(bridge_corridor_radius_counts.items())),
-        "bridge_corridor_added_cell_count": bridge_corridor_added_cell_count,
-        "terminal_adjusted_count": terminal_adjusted_count,
-        "terminal_adjustment_candidate_count": terminal_adjustment_candidate_count,
-        "terminal_adjustment_status_counts": dict(sorted(terminal_adjustment_status_counts.items())),
-        "terminal_adjustment_reason_counts": dict(sorted(terminal_adjustment_reason_counts.items())),
-        "reachable_component_status_counts": dict(sorted(reachable_component_status_counts.items())),
-        "reachable_component_reason_counts": dict(sorted(reachable_component_reason_counts.items())),
-        "reachable_component_disconnected_count": reachable_component_disconnected_count,
-        "reachable_component_replacement_selected_count": reachable_component_replacement_selected_count,
-        "reachable_component_terminal_candidate_count": reachable_component_terminal_candidate_count,
-        "reachable_terminal_rescue_count": reachable_terminal_rescue_count,
-        "proxy_goal_anchor_selected_count": proxy_goal_anchor_selected_count,
-        "goal_rescue_candidate_count": goal_rescue_candidate_count,
-        "benefit_surface_present_count": benefit_surface_present_count,
-        "path_duplicate_with_baseline_count": path_duplicate_with_baseline_count,
-        "baseline_equivalent_count": baseline_equivalent_count,
-        "no_quality_gain_count": no_quality_gain_count,
-        "fixture_no_benefit_surface_count": fixture_no_benefit_surface_count,
-        "candidate_missing_metrics_count": candidate_missing_metrics_count,
-        "constrained_connector_failed_count": constrained_connector_failed_count,
-        "complexity_reason_counts": dict(sorted(complexity_reason_counts.items())),
-        "execution_tie_break_status_counts": dict(sorted(execution_tie_break_status_counts.items())),
-        "execution_tie_break_reason_counts": dict(sorted(execution_tie_break_reason_counts.items())),
+_SAMPLED_REGION_PATH_COUNTER_KEYS = 'status_counts source_counts fallback_reasons start_classification_counts goal_classification_counts connector_strategy_counts bridge_aware_connector_status_counts bridge_aware_fallback_reasons bridge_corridor_status_counts bridge_corridor_fallback_reasons bridge_corridor_radius_counts reachable_component_status_counts reachable_component_reason_counts anchor_closure_status_counts anchor_closure_reason_counts anchor_closure_connection_kind_counts terminal_adjustment_status_counts terminal_adjustment_reason_counts execution_tie_break_status_counts execution_tie_break_reason_counts complexity_reason_counts'.split()
+
+_SAMPLED_REGION_PATH_INT_KEYS = 'selected_count fallback_count sample_attempt_count candidate_ranking_count anchor_region_added_count anchor_region_connected_count anchor_closure_attempt_count anchor_closure_connected_count connector_attempt_count bridge_aware_connector_attempt_count bridge_aware_connector_available_count bridge_aware_connector_selected_count bridge_aware_connector_rejected_count bridge_aware_bridge_cell_count bridge_aware_mask_added_cell_count bridge_corridor_connector_attempt_count bridge_corridor_connector_available_count bridge_corridor_connector_selected_count bridge_corridor_connector_rejected_count bridge_corridor_added_cell_count terminal_adjusted_count terminal_adjustment_candidate_count reachable_component_disconnected_count reachable_component_replacement_selected_count reachable_component_terminal_candidate_count reachable_terminal_rescue_count proxy_goal_anchor_selected_count goal_rescue_candidate_count benefit_surface_present_count path_duplicate_with_baseline_count baseline_equivalent_count no_quality_gain_count fixture_no_benefit_surface_count candidate_missing_metrics_count constrained_connector_failed_count'.split()
+
+
+def _sampled_region_path_counter_state() -> dict[str, Any]:
+    state: dict[str, Any] = {key: Counter() for key in _SAMPLED_REGION_PATH_COUNTER_KEYS}
+    state.update({key: 0 for key in _SAMPLED_REGION_PATH_INT_KEYS})
+    return state
+
+
+def _sampled_region_path_complexity_reason(sampled: dict[str, Any], reason: Any) -> tuple[dict[str, Any], Any]:
+    comparison = sampled.get('candidate_comparison')
+    comparison = comparison if isinstance(comparison, dict) else {}
+    complexity_reason = comparison.get('complexity_reason')
+    fallback_complexity_reasons = {
+        'candidate_missing_metrics',
+        'constrained_connector_failed',
+        'fixture_no_benefit_surface',
+        'sampled_candidate_baseline_equivalent',
+        'sampled_candidate_no_quality_gain',
+        'sampled_candidate_path_duplicate',
     }
+    if not complexity_reason and reason in fallback_complexity_reasons:
+        complexity_reason = reason
+    return comparison, complexity_reason
+
+
+def _accumulate_sampled_region_path_classification(
+    state: dict[str, Any],
+    comparison: dict[str, Any],
+    complexity_reason: Any,
+    constrained_connector_failed_seen: bool,
+) -> bool:
+    if complexity_reason:
+        complexity_reason_value = str(complexity_reason)
+        state["complexity_reason_counts"][complexity_reason_value] += 1
+        if complexity_reason_value == 'sampled_candidate_baseline_equivalent':
+            state["baseline_equivalent_count"] += 1
+        if complexity_reason_value == 'sampled_candidate_path_duplicate':
+            state["path_duplicate_with_baseline_count"] += 1
+        if complexity_reason_value == 'sampled_candidate_no_quality_gain':
+            state["no_quality_gain_count"] += 1
+        if complexity_reason_value == 'fixture_no_benefit_surface':
+            state["fixture_no_benefit_surface_count"] += 1
+        if complexity_reason_value == 'candidate_missing_metrics':
+            state["candidate_missing_metrics_count"] += 1
+        if complexity_reason_value == 'constrained_connector_failed':
+            constrained_connector_failed_seen = True
+    if comparison.get('benefit_surface_present') is True:
+        state["benefit_surface_present_count"] += 1
+    if comparison.get('path_duplicate_with_baseline') is True and complexity_reason != 'sampled_candidate_path_duplicate':
+        state["path_duplicate_with_baseline_count"] += 1
+    return constrained_connector_failed_seen
+
+
+def _accumulate_sampled_region_path_anchoring(state: dict[str, Any], sampled: dict[str, Any]) -> dict[str, Any]:
+    anchoring = sampled.get('start_goal_anchoring')
+    anchoring = anchoring if isinstance(anchoring, dict) else {}
+    start_classification = anchoring.get('start_classification')
+    goal_classification = anchoring.get('goal_classification')
+    if start_classification:
+        state["start_classification_counts"][str(start_classification)] += 1
+    if goal_classification:
+        state["goal_classification_counts"][str(goal_classification)] += 1
+    for endpoint in ('start', 'goal'):
+        if anchoring.get(f'{endpoint}_anchor_region_added') is True:
+            state["anchor_region_added_count"] += 1
+        if anchoring.get(f'{endpoint}_anchor_region_connected') is True:
+            state["anchor_region_connected_count"] += 1
+    closure = anchoring.get('anchor_connectivity_closure')
+    closure = closure if isinstance(closure, dict) else {}
+    state["anchor_closure_attempt_count"] += _int_value(closure.get('attempt_count'))
+    state["anchor_closure_connected_count"] += _int_value(closure.get('connected_count'))
+    for source_key, target_key in (
+        ('status_counts', "anchor_closure_status_counts"),
+        ('reason_counts', "anchor_closure_reason_counts"),
+        ('connection_kind_counts', "anchor_closure_connection_kind_counts"),
+    ):
+        values = closure.get(source_key)
+        if isinstance(values, dict):
+            state[target_key].update({str(key): _int_value(value) for key, value in values.items()})
+    return anchoring
+
+
+def _accumulate_sampled_region_path_connector_attempt(
+    state: dict[str, Any],
+    attempt: dict[str, Any],
+    bridge_aware_reasons: set[str],
+    bridge_corridor_reasons: set[str],
+) -> None:
+    if attempt.get('kind') != 'connector_attempt':
+        return
+    state["connector_attempt_count"] += 1
+    strategy = attempt.get('strategy')
+    if strategy:
+        state["connector_strategy_counts"][str(strategy)] += 1
+    if strategy == 'bridge_aware_constrained_astar':
+        state["bridge_aware_connector_attempt_count"] += 1
+        status_value = str(attempt.get('status') or 'unknown')
+        state["bridge_aware_connector_status_counts"][status_value] += 1
+        if status_value == 'available':
+            state["bridge_aware_connector_available_count"] += 1
+        state["bridge_aware_bridge_cell_count"] += _int_value(attempt.get('bridge_cell_count'))
+        state["bridge_aware_mask_added_cell_count"] += _int_value(attempt.get('bridge_mask_added_cell_count'))
+        bridge_reason = attempt.get('fallback_reason')
+        if bridge_reason:
+            bridge_aware_reasons.add(str(bridge_reason))
+    if strategy == 'bridge_corridor_constrained_astar':
+        state["bridge_corridor_connector_attempt_count"] += 1
+        status_value = str(attempt.get('status') or 'unknown')
+        state["bridge_corridor_status_counts"][status_value] += 1
+        if status_value == 'available':
+            state["bridge_corridor_connector_available_count"] += 1
+        state["bridge_corridor_added_cell_count"] += _int_value(attempt.get('bridge_corridor_added_cell_count'))
+        radius = attempt.get('bridge_corridor_radius_cells')
+        if radius is not None:
+            state["bridge_corridor_radius_counts"][str(radius)] += 1
+        corridor_reason = attempt.get('fallback_reason') or attempt.get('bridge_corridor_failure_reason')
+        if corridor_reason:
+            bridge_corridor_reasons.add(str(corridor_reason))
+
+
+def _accumulate_sampled_region_path_ranking(
+    state: dict[str, Any],
+    ranking: dict[str, Any],
+    bridge_aware_reasons: set[str],
+    bridge_corridor_reasons: set[str],
+    constrained_connector_failed_seen: bool,
+) -> bool:
+    strategy = ranking.get('strategy')
+    ranking_status = str(ranking.get('status') or 'unknown')
+    if strategy == 'bridge_corridor_constrained_astar':
+        if ranking_status == 'selected':
+            state["bridge_corridor_connector_selected_count"] += 1
+        if ranking_status == 'rejected':
+            state["bridge_corridor_connector_rejected_count"] += 1
+        corridor_reason = ranking.get('fallback_reason') or ranking.get('bridge_corridor_failure_reason')
+        if corridor_reason:
+            bridge_corridor_reasons.add(str(corridor_reason))
+        return constrained_connector_failed_seen or corridor_reason == 'constrained_connector_failed'
+    if strategy != 'bridge_aware_constrained_astar':
+        return constrained_connector_failed_seen or ranking.get('fallback_reason') == 'constrained_connector_failed'
+    if ranking_status == 'selected':
+        state["bridge_aware_connector_selected_count"] += 1
+    if ranking_status == 'rejected':
+        state["bridge_aware_connector_rejected_count"] += 1
+    bridge_reason = ranking.get('fallback_reason')
+    if bridge_reason:
+        bridge_aware_reasons.add(str(bridge_reason))
+    return constrained_connector_failed_seen or bridge_reason == 'constrained_connector_failed'
+
+
+def _accumulate_sampled_region_path_connectors(state: dict[str, Any], sampled: dict[str, Any]) -> bool:
+    bridge_aware_reasons: set[str] = set()
+    bridge_corridor_reasons: set[str] = set()
+    constrained_connector_failed_seen = False
+    sample_attempts = sampled.get('sample_attempts')
+    if isinstance(sample_attempts, list):
+        for attempt in sample_attempts:
+            if isinstance(attempt, dict):
+                _accumulate_sampled_region_path_connector_attempt(state, attempt, bridge_aware_reasons, bridge_corridor_reasons)
+    rankings = sampled.get('candidate_rankings')
+    if isinstance(rankings, list):
+        state["candidate_ranking_count"] += len(rankings)
+        for ranking in rankings:
+            if isinstance(ranking, dict):
+                constrained_connector_failed_seen = _accumulate_sampled_region_path_ranking(
+                    state,
+                    ranking,
+                    bridge_aware_reasons,
+                    bridge_corridor_reasons,
+                    constrained_connector_failed_seen,
+                )
+    state["bridge_aware_fallback_reasons"].update(bridge_aware_reasons)
+    state["bridge_corridor_fallback_reasons"].update(bridge_corridor_reasons)
+    return constrained_connector_failed_seen
+
+
+def _accumulate_sampled_region_path_terminal(
+    state: dict[str, Any],
+    sampled: dict[str, Any],
+    anchoring: dict[str, Any],
+) -> None:
+    terminal = sampled.get('terminal_adjustment_report')
+    terminal = terminal if isinstance(terminal, dict) else {}
+    terminal_status = terminal.get('status')
+    if terminal_status:
+        state["terminal_adjustment_status_counts"][str(terminal_status)] += 1
+    terminal_reason = terminal.get('reason_code') or terminal.get('reason')
+    if terminal_reason:
+        state["terminal_adjustment_reason_counts"][str(terminal_reason)] += 1
+    if terminal.get('target_adjusted') is True:
+        state["terminal_adjusted_count"] += 1
+    state["terminal_adjustment_candidate_count"] += _int_value(terminal.get('candidate_count'))
+    state["reachable_component_terminal_candidate_count"] += _int_value(terminal.get('reachable_candidate_count'))
+    state["goal_rescue_candidate_count"] += _int_value(terminal.get('rescue_candidate_count'))
+    if terminal.get('reachable_terminal_rescue_used') is True or terminal_reason == 'reachable_terminal_selected_by_component_projection':
+        state["reachable_terminal_rescue_count"] += 1
+    if terminal.get('proxy_goal_anchor_selected') is True or terminal_reason == 'proxy_goal_anchor_selected':
+        state["proxy_goal_anchor_selected_count"] += 1
+    component = terminal.get('reachable_component_report')
+    if not isinstance(component, dict):
+        component = anchoring.get('reachable_component_report')
+    component = component if isinstance(component, dict) else {}
+    component_status = component.get('status')
+    if component_status:
+        state["reachable_component_status_counts"][str(component_status)] += 1
+    component_reason = component.get('reason')
+    if component_reason:
+        state["reachable_component_reason_counts"][str(component_reason)] += 1
+    if component_status == 'disconnected' or component_reason == 'target_component_disconnected':
+        state["reachable_component_disconnected_count"] += 1
+    if terminal.get('reachable_component_replacement_selected') is True or component_reason == 'reachable_component_replacement_selected':
+        state["reachable_component_replacement_selected_count"] += 1
+
+
+def _accumulate_sampled_region_path_item(state: dict[str, Any], candidate: dict[str, Any]) -> None:
+    planning_backend = candidate.get('planning_backend')
+    if not isinstance(planning_backend, dict):
+        return
+    sampled = planning_backend.get('sampled_region_path')
+    if not isinstance(sampled, dict) or not sampled:
+        return
+    status = str(sampled.get('status') or planning_backend.get('status') or 'unknown')
+    state["status_counts"][status] += 1
+    if status == 'selected' or planning_backend.get('selected_backend') == 'sampled_region_path':
+        state["selected_count"] += 1
+    if status == 'fallback' or sampled.get('fallback_reason'):
+        state["fallback_count"] += 1
+    reason = sampled.get('fallback_reason')
+    if reason:
+        state["fallback_reasons"][str(reason)] += 1
+    comparison, complexity_reason = _sampled_region_path_complexity_reason(sampled, reason)
+    constrained_connector_failed_seen = _accumulate_sampled_region_path_classification(
+        state,
+        comparison,
+        complexity_reason,
+        reason == 'constrained_connector_failed',
+    )
+    state["sample_attempt_count"] += _int_value(sampled.get('sample_attempt_count'))
+    anchoring = _accumulate_sampled_region_path_anchoring(state, sampled)
+    constrained_connector_failed_seen = (
+        _accumulate_sampled_region_path_connectors(state, sampled) or constrained_connector_failed_seen
+    )
+    if constrained_connector_failed_seen:
+        state["constrained_connector_failed_count"] += 1
+    _accumulate_sampled_region_path_terminal(state, sampled, anchoring)
+    tie_break = sampled.get('execution_tie_break')
+    tie_break = tie_break if isinstance(tie_break, dict) else {}
+    tie_break_status = tie_break.get('status')
+    if tie_break_status:
+        state["execution_tie_break_status_counts"][str(tie_break_status)] += 1
+    tie_break_reason = tie_break.get('reason')
+    if tie_break_reason:
+        state["execution_tie_break_reason_counts"][str(tie_break_reason)] += 1
+    graph = candidate.get('region_graph')
+    if isinstance(graph, dict):
+        state["source_counts"][str(graph.get('graph_source') or graph.get('region_source') or 'unknown')] += 1
+    else:
+        state["source_counts"]['unknown'] += 1
+
+
+def _sampled_region_path_payload(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "selected_count": state["selected_count"],
+        "fallback_count": state["fallback_count"],
+        "status_counts": dict(sorted(state["status_counts"].items())),
+        "source_counts": dict(sorted(state["source_counts"].items())),
+        "fallback_reasons": dict(sorted(state["fallback_reasons"].items())),
+        "sample_attempt_count": state["sample_attempt_count"],
+        "candidate_ranking_count": state["candidate_ranking_count"],
+        "anchor_region_added_count": state["anchor_region_added_count"],
+        "anchor_region_connected_count": state["anchor_region_connected_count"],
+        "anchor_closure_attempt_count": state["anchor_closure_attempt_count"],
+        "anchor_closure_connected_count": state["anchor_closure_connected_count"],
+        "anchor_closure_status_counts": dict(sorted(state["anchor_closure_status_counts"].items())),
+        "anchor_closure_reason_counts": dict(sorted(state["anchor_closure_reason_counts"].items())),
+        "anchor_closure_connection_kind_counts": dict(sorted(state["anchor_closure_connection_kind_counts"].items())),
+        "start_classification_counts": dict(sorted(state["start_classification_counts"].items())),
+        "goal_classification_counts": dict(sorted(state["goal_classification_counts"].items())),
+        "connector_attempt_count": state["connector_attempt_count"],
+        "connector_strategy_counts": dict(sorted(state["connector_strategy_counts"].items())),
+        "bridge_aware_connector_attempt_count": state["bridge_aware_connector_attempt_count"],
+        "bridge_aware_connector_available_count": state["bridge_aware_connector_available_count"],
+        "bridge_aware_connector_selected_count": state["bridge_aware_connector_selected_count"],
+        "bridge_aware_connector_rejected_count": state["bridge_aware_connector_rejected_count"],
+        "bridge_aware_connector_status_counts": dict(sorted(state["bridge_aware_connector_status_counts"].items())),
+        "bridge_aware_fallback_reasons": dict(sorted(state["bridge_aware_fallback_reasons"].items())),
+        "bridge_aware_bridge_cell_count": state["bridge_aware_bridge_cell_count"],
+        "bridge_aware_mask_added_cell_count": state["bridge_aware_mask_added_cell_count"],
+        "bridge_corridor_connector_attempt_count": state["bridge_corridor_connector_attempt_count"],
+        "bridge_corridor_connector_available_count": state["bridge_corridor_connector_available_count"],
+        "bridge_corridor_connector_selected_count": state["bridge_corridor_connector_selected_count"],
+        "bridge_corridor_connector_rejected_count": state["bridge_corridor_connector_rejected_count"],
+        "bridge_corridor_status_counts": dict(sorted(state["bridge_corridor_status_counts"].items())),
+        "bridge_corridor_fallback_reasons": dict(sorted(state["bridge_corridor_fallback_reasons"].items())),
+        "bridge_corridor_radius_counts": dict(sorted(state["bridge_corridor_radius_counts"].items())),
+        "bridge_corridor_added_cell_count": state["bridge_corridor_added_cell_count"],
+        "terminal_adjusted_count": state["terminal_adjusted_count"],
+        "terminal_adjustment_candidate_count": state["terminal_adjustment_candidate_count"],
+        "terminal_adjustment_status_counts": dict(sorted(state["terminal_adjustment_status_counts"].items())),
+        "terminal_adjustment_reason_counts": dict(sorted(state["terminal_adjustment_reason_counts"].items())),
+        "reachable_component_status_counts": dict(sorted(state["reachable_component_status_counts"].items())),
+        "reachable_component_reason_counts": dict(sorted(state["reachable_component_reason_counts"].items())),
+        "reachable_component_disconnected_count": state["reachable_component_disconnected_count"],
+        "reachable_component_replacement_selected_count": state["reachable_component_replacement_selected_count"],
+        "reachable_component_terminal_candidate_count": state["reachable_component_terminal_candidate_count"],
+        "reachable_terminal_rescue_count": state["reachable_terminal_rescue_count"],
+        "proxy_goal_anchor_selected_count": state["proxy_goal_anchor_selected_count"],
+        "goal_rescue_candidate_count": state["goal_rescue_candidate_count"],
+        "benefit_surface_present_count": state["benefit_surface_present_count"],
+        "path_duplicate_with_baseline_count": state["path_duplicate_with_baseline_count"],
+        "baseline_equivalent_count": state["baseline_equivalent_count"],
+        "no_quality_gain_count": state["no_quality_gain_count"],
+        "fixture_no_benefit_surface_count": state["fixture_no_benefit_surface_count"],
+        "candidate_missing_metrics_count": state["candidate_missing_metrics_count"],
+        "constrained_connector_failed_count": state["constrained_connector_failed_count"],
+        "complexity_reason_counts": dict(sorted(state["complexity_reason_counts"].items())),
+        "execution_tie_break_status_counts": dict(sorted(state["execution_tie_break_status_counts"].items())),
+        "execution_tie_break_reason_counts": dict(sorted(state["execution_tie_break_reason_counts"].items())),
+    }
+
+
+def _sampled_region_path_diagnostics(evaluations) -> dict[str, Any]:
+    state = _sampled_region_path_counter_state()
+    for item in evaluations:
+        _accumulate_sampled_region_path_item(state, item.to_dict())
+    return _sampled_region_path_payload(state)
 __all__ = ('_iris_diagnostics', '_region_graph_diagnostics', '_convex_region_diagnostics', '_gcs_trajectory_diagnostics', '_gcs_candidate_diagnostics', '_gcs_control_point_diagnostics', '_gcs_motion_feasibility_diagnostics', '_gcs_curvature_constrained_diagnostics', '_channel_aware_astar_diagnostics', '_channel_aware_astar_blocker_class', '_channel_aware_astar_failure_taxonomy', '_platform_goal_failure_class', '_platform_goal_contract_mismatch', '_aggregate_channel_aware_astar_diagnostics', '_channel_aware_astar_prefixed_fields', '_sampled_region_path_diagnostics')
