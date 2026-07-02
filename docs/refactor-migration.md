@@ -51,3 +51,11 @@
 - `tests/test_model_explorer.py` 只保留端到端 CLI、runner 和 integration smoke；path feedback selection、diagnostics、anchor projection 等 helper contract 放在 `tests/path_feedback/` 或 `tests/planning/`。
 - `tests/test_quasi_real_data_pipeline.py` 只保留 quasi-real pipeline/integration smoke；selection decision、sample discriminativeness、decision diagnostics、quality gates、stability 等 helper contract 放在 `tests/quasi_real/`。
 - `model_explorer verify` 已覆盖目标 facade 行数、split module 行数、反向导入、private import、动态 `__all__` 和巨型测试预算。新增模块或测试时应先跑 `python -m model_explorer verify`，再跑相关 pytest。
+
+## 全局导出与长函数迁移规则
+
+- 所有 production module 禁止使用基于 `globals()` 的动态 `__all__`。新增或迁移模块必须显式列出稳定 public/internal compatibility symbols；临时导入名、标准库模块名、typing helper 和实现细节不得进入 `__all__`。
+- 旧 public import 路径继续兼容，但新增测试应优先从真实职责模块导入。只有验证 legacy compatibility 时，才从 facade 或 `*_impl.py` 断言旧符号仍可用。
+- 长函数预算由 `model_explorer verify` 执行。新增报告、summary、training、diagnostics、collector 或 selection 逻辑时，应把字段分组、section 渲染、单次执行、状态聚合和 payload 构造拆到 helper module；原入口函数只保留 orchestration。
+- Markdown report builder 应通过 section helper 组合输出，避免在入口函数里混合数据计算、表格渲染和字段排序。Compact summary builder 应按字段域分组，不在 wrapper 内堆叠大字典。
+- Training 相关拆分必须保持 PyTorch lazy import：`policy.training` 只能在训练执行路径内部导入，非 training 命令和普通模块 import 不应要求 torch 存在。

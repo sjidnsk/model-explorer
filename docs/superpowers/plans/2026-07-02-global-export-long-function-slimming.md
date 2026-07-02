@@ -70,3 +70,23 @@ $env:PYTHONPATH='src'; python -m pytest tests/test_norm_architecture.py -q
 ```
 
 预期结果：测试通过，但 `_run_architecture_static_check(Path.cwd())` 对真实仓库仍返回 `returncode=1`，且规则计数包含 `no_dynamic_globals_all: 11` 与 `function_line_limit: 10`。
+
+## 执行结果
+
+本计划已完成并切回 GREEN：
+
+- 11 个基于 `globals()` 的动态 `__all__` 已全部替换为显式 allowlist。
+- `verification.py::_run_architecture_static_check` 已拆为多个 scan helper，主函数保留架构检查编排。
+- Experiment 与 quasi-real Markdown report builder 已拆到 section helper。
+- Path feedback compact summary 与 Markdown report builder 已拆到 compact/report section helper。
+- Training matrix 已拆为 dimensions、execution、outputs 与 orchestration，保持 PyTorch lazy import。
+- 其余长函数已分别拆分：sampled-region diagnostics、rollout collector、baseline evaluation strategy、quasi-real architecture selection summary。
+
+当前验收状态：
+
+```powershell
+$env:PYTHONPATH='src'; python -m pytest tests -q
+$env:PYTHONPATH='src'; python -m model_explorer verify
+```
+
+两条命令均通过；`architecture_static_check` 中 `no_dynamic_globals_all` 与 `function_line_limit` violations 均为空。

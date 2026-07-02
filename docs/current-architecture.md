@@ -59,3 +59,9 @@
 测试治理同步收口：`tests/test_model_explorer.py` 保留端到端 CLI、runner 和 integration smoke；path feedback selection、diagnostics 与 anchor projection helper contract 迁移到 `tests/path_feedback/` 和 `tests/planning/` 的聚焦文件。`tests/test_quasi_real_data_pipeline.py` 保留 quasi-real pipeline/integration smoke；selection decision、sample discriminativeness、decision diagnostics、quality gates 与 stability contract 迁移到 `tests/quasi_real/`。
 
 当前 `model_explorer verify` 会阻止目标 facade 重新膨胀、split module 反向导入 facade/runner/`*_impl.py`、动态 `globals()` 形式 `__all__`、production/test 从目标 facade 导入 `_private` helper，以及巨型测试文件超过预算。
+
+## 全局导出与长函数治理状态
+
+当前 production module 不再允许使用 `__all__ = [name for name in globals() ...]` 形式的动态导出。所有稳定 facade、runner、target split module 和本阶段新增 helper module 都应使用显式 allowlist，避免把 `Any`、`Path`、`json`、`dataclass` 等临时导入对象暴露为 API。
+
+本阶段后，报告、summary、training、verification、diagnostics、collector、evaluation 与 quasi-real architecture selection 中原本超过预算的函数都已经拆为小职责 helper。`model_explorer verify` 继续执行 10 个函数预算目标，统一门槛为 `<= 180` 行，并且当前 violations 为空。新增 report/summary/training 逻辑应优先落到 section/helper 模块，入口函数只做编排、兼容包装和 I/O glue。
