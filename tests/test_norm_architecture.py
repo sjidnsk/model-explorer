@@ -444,6 +444,18 @@ def test_verification_catches_dynamic_globals_all_in_any_production_module(tmp_p
         "__all__ = [name for name in globals() if not name.startswith('__')]\n",
         encoding="utf-8",
     )
+    control_flow_target = "src/model_explorer/policy/conditional_dynamic_all.py"
+    control_flow_path = tmp_path / control_flow_target
+    control_flow_path.write_text(
+        "\n".join(
+            [
+                "if True:",
+                "    __all__ = [name for name in globals() if not name.startswith('__')]",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
     local_target = "src/model_explorer/policy/local_dynamic_all.py"
     local_path = tmp_path / local_target
     local_path.write_text(
@@ -465,7 +477,7 @@ def test_verification_catches_dynamic_globals_all_in_any_production_module(tmp_p
         if violation["rule"] == "no_dynamic_globals_all"
     }
 
-    assert dynamic_globals_all_paths == {module_target}
+    assert dynamic_globals_all_paths == {module_target, control_flow_target}
 
 
 def test_verification_catches_function_line_budget_violation(tmp_path: Path) -> None:

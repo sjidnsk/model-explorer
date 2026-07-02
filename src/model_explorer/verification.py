@@ -383,7 +383,7 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
             scanned_files.add(path.resolve())
             module_name = _module_name_for_source_path(root, path)
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            for node in tree.body:
+            for node in _module_scope_statements(tree):
                 if _is_dynamic_globals_all_assignment(node):
                     violations.append(
                         {
@@ -743,6 +743,22 @@ def _is_dynamic_globals_all_assignment(node: ast.AST) -> bool:
         and child.func.id == "globals"
         for child in ast.walk(value)
     )
+
+
+def _module_scope_statements(tree: ast.Module) -> list[ast.stmt]:
+    statements: list[ast.stmt] = []
+
+    def visit(node: ast.AST) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return
+        if isinstance(node, ast.stmt):
+            statements.append(node)
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    for node in tree.body:
+        visit(node)
+    return statements
 
 
 def _assignment_targets_name(node: ast.Assign | ast.AnnAssign, name: str) -> bool:
