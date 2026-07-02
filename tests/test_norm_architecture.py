@@ -69,6 +69,36 @@ ARCHITECTURE_FIXTURE_FILES = (
     "tests/test_quasi_real_data_pipeline.py",
 )
 
+EXPECTED_DYNAMIC_GLOBALS_ALL_FILES = (
+    "src/model_explorer/experiments/environment.py",
+    "src/model_explorer/experiments/evaluation.py",
+    "src/model_explorer/experiments/manifest.py",
+    "src/model_explorer/experiments/reports.py",
+    "src/model_explorer/experiments/selection.py",
+    "src/model_explorer/experiments/training_matrix.py",
+    "src/model_explorer/policy/path_feedback_runner.py",
+    "src/model_explorer/policy/planning_adapters.py",
+    "src/model_explorer/policy/planning_routes.py",
+    "src/model_explorer/policy/planning_types.py",
+    "src/model_explorer/policy/planning_utils.py",
+)
+
+EXPECTED_FUNCTION_LINE_LIMITS = {
+    ("src/model_explorer/experiments/quasi_real_matrix/reports.py", "_markdown_report"): 180,
+    ("src/model_explorer/experiments/reports.py", "_markdown_report"): 180,
+    ("src/model_explorer/policy/path_feedback_summary.py", "compact_path_feedback_summary"): 180,
+    ("src/model_explorer/experiments/training_matrix.py", "_run_training"): 180,
+    ("src/model_explorer/verification.py", "_run_architecture_static_check"): 180,
+    ("src/model_explorer/policy/path_feedback_backend_diagnostics.py", "_sampled_region_path_diagnostics"): 180,
+    ("src/model_explorer/policy/path_feedback_reports.py", "render_path_feedback_markdown"): 180,
+    ("src/model_explorer/policy/collector.py", "collect_dynamic_rollout_episode"): 180,
+    ("src/model_explorer/policy/evaluation.py", "_evaluate_strategy"): 180,
+    (
+        "src/model_explorer/experiments/quasi_real_matrix/architecture_selection.py",
+        "_architecture_selection_summary",
+    ): 180,
+}
+
 
 def _write_architecture_fixture(
     tmp_path: Path,
@@ -269,21 +299,41 @@ def test_verification_architecture_static_check_passes_target_governance_state()
 
     result = _run_architecture_static_check(MODEL_ROOT)
     rule_counts = Counter(violation["rule"] for violation in result["violations"])
-    oversized_targets = {
+    target_facade_violations = {
         violation["path"]
         for violation in result["violations"]
         if violation["rule"] == "target_facade_line_limit"
     }
-    giant_tests = {
+    giant_test_violations = {
         violation["path"]
         for violation in result["violations"]
         if violation["rule"] == "giant_test_line_limit"
     }
+    dynamic_globals_all_violations = {
+        violation["path"]
+        for violation in result["violations"]
+        if violation["rule"] == "no_dynamic_globals_all"
+    }
+    function_limit_violations = {
+        (violation["path"], violation["function"], violation["limit"])
+        for violation in result["violations"]
+        if violation["rule"] == "function_line_limit"
+    }
 
-    assert result["returncode"] == 0
-    assert rule_counts == {}
-    assert oversized_targets == set()
-    assert giant_tests == set()
+    assert result["returncode"] == 1
+    assert rule_counts == Counter(
+        {
+            "no_dynamic_globals_all": len(EXPECTED_DYNAMIC_GLOBALS_ALL_FILES),
+            "function_line_limit": len(EXPECTED_FUNCTION_LINE_LIMITS),
+        }
+    )
+    assert dynamic_globals_all_violations == set(EXPECTED_DYNAMIC_GLOBALS_ALL_FILES)
+    assert function_limit_violations == {
+        (path, function_name, limit)
+        for (path, function_name), limit in EXPECTED_FUNCTION_LINE_LIMITS.items()
+    }
+    assert target_facade_violations == set()
+    assert giant_test_violations == set()
 
 
 def test_verification_catches_oversized_target_facade(tmp_path: Path) -> None:
@@ -383,21 +433,41 @@ def test_verification_catches_test_private_import_from_target_facade(tmp_path: P
     } >= {("no_target_facade_private_test_import", "model_explorer.policy.feedback_selection")}
 
 
-def test_verification_catches_dynamic_globals_all_in_governed_modules(tmp_path: Path) -> None:
+def test_verification_catches_dynamic_globals_all_in_any_production_module(tmp_path: Path) -> None:
     from model_explorer.verification import _run_architecture_static_check
 
-    target = "src/model_explorer/policy/planning_anchor_projection.py"
-    _write_architecture_fixture(
-        tmp_path,
-        overrides={target: "__all__ = [name for name in globals() if not name.startswith('__')]\n"},
-    )
+    _write_architecture_fixture(tmp_path)
+    target = "src/model_explorer/policy/planning_utils.py"
+    path = tmp_path / target
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("__all__ = [name for name in globals() if not name.startswith('__')]\n", encoding="utf-8")
 
     result = _run_architecture_static_check(tmp_path)
 
     assert {
         (violation["rule"], violation["path"])
         for violation in result["violations"]
-    } >= {("no_dynamic_all_in_governed_module", target)}
+    } >= {("no_dynamic_globals_all", target)}
+
+
+def test_verification_catches_function_line_budget_violation(tmp_path: Path) -> None:
+    from model_explorer.verification import _run_architecture_static_check
+
+    _write_architecture_fixture(tmp_path)
+    target = "src/model_explorer/policy/collector.py"
+    path = tmp_path / target
+    path.parent.mkdir(parents=True, exist_ok=True)
+    oversized_function = "\n".join(
+        ["def collect_dynamic_rollout_episode():", *(f"    line_{index} = None" for index in range(180))]
+    )
+    path.write_text(f"{oversized_function}\n", encoding="utf-8")
+
+    result = _run_architecture_static_check(tmp_path)
+
+    assert {
+        (violation["rule"], violation["path"], violation["function"], violation["limit"])
+        for violation in result["violations"]
+    } >= {("function_line_limit", target, "collect_dynamic_rollout_episode", 180)}
 
 
 def test_verification_catches_giant_test_budget_violation(tmp_path: Path) -> None:

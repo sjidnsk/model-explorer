@@ -159,6 +159,21 @@ _GIANT_TEST_LINE_LIMITS = {
     "tests/test_model_explorer.py": 5600,
     "tests/test_quasi_real_data_pipeline.py": 1050,
 }
+_FUNCTION_LINE_LIMITS = {
+    ("src/model_explorer/experiments/quasi_real_matrix/reports.py", "_markdown_report"): 180,
+    ("src/model_explorer/experiments/reports.py", "_markdown_report"): 180,
+    ("src/model_explorer/policy/path_feedback_summary.py", "compact_path_feedback_summary"): 180,
+    ("src/model_explorer/experiments/training_matrix.py", "_run_training"): 180,
+    ("src/model_explorer/verification.py", "_run_architecture_static_check"): 180,
+    ("src/model_explorer/policy/path_feedback_backend_diagnostics.py", "_sampled_region_path_diagnostics"): 180,
+    ("src/model_explorer/policy/path_feedback_reports.py", "render_path_feedback_markdown"): 180,
+    ("src/model_explorer/policy/collector.py", "collect_dynamic_rollout_episode"): 180,
+    ("src/model_explorer/policy/evaluation.py", "_evaluate_strategy"): 180,
+    (
+        "src/model_explorer/experiments/quasi_real_matrix/architecture_selection.py",
+        "_architecture_selection_summary",
+    ): 180,
+}
 
 
 def run_verification(
@@ -219,6 +234,11 @@ def _planned_steps(project_root: Path, *, skip_benchmark_smoke: bool) -> list[di
             "target_split_modules": [str(project_root / name) for name in _TARGET_SPLIT_MODULES],
             "giant_test_line_limits": {
                 str(project_root / name): limit for name, limit in _GIANT_TEST_LINE_LIMITS.items()
+            },
+            "no_dynamic_globals_all_root": str(project_root / "src" / "model_explorer"),
+            "function_line_limits": {
+                f"{project_root / relative_path}::{function_name}": limit
+                for (relative_path, function_name), limit in _FUNCTION_LINE_LIMITS.items()
             },
         },
         {"name": "git_diff_check", "kind": "subprocess", "command": ["git", "diff", "--check"]},
@@ -360,22 +380,21 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
     if source_root.exists():
         for path in sorted(source_root.rglob("*.py")):
             relative_path = path.relative_to(root).as_posix()
-            if relative_path in _LEGACY_IMPORT_ALLOWLIST:
-                continue
             scanned_files += 1
             module_name = _module_name_for_source_path(root, path)
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            if relative_path in _TARGET_GOVERNED_PRODUCTION_FILES:
-                for node in ast.walk(tree):
-                    if _is_dynamic_globals_all_assignment(node):
-                        violations.append(
-                            {
-                                "rule": "no_dynamic_all_in_governed_module",
-                                "path": relative_path,
-                                "line": node.lineno,
-                                "text": _assignment_text(node),
-                            }
-                        )
+            for node in ast.walk(tree):
+                if _is_dynamic_globals_all_assignment(node):
+                    violations.append(
+                        {
+                            "rule": "no_dynamic_globals_all",
+                            "path": relative_path,
+                            "line": node.lineno,
+                            "text": _assignment_text(node),
+                        }
+                    )
+            if relative_path in _LEGACY_IMPORT_ALLOWLIST:
+                continue
             for node in ast.walk(tree):
                 for target in _legacy_import_targets(
                     node,
@@ -588,6 +607,29 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                 }
             )
 
+    for (relative_path, function_name), limit in _FUNCTION_LINE_LIMITS.items():
+        path = root / relative_path
+        if not path.exists():
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in _named_function_defs(tree, function_name):
+            if node.end_lineno is None:
+                continue
+            line_count = node.end_lineno - node.lineno + 1
+            if line_count <= limit:
+                continue
+            violations.append(
+                {
+                    "rule": "function_line_limit",
+                    "path": relative_path,
+                    "line": node.lineno,
+                    "function": function_name,
+                    "limit": limit,
+                    "line_count": line_count,
+                    "text": f"{function_name} has {line_count} lines > {limit}",
+                }
+            )
+
     tests_root = root / "tests"
     if tests_root.exists():
         for path in sorted(tests_root.rglob("*.py")):
@@ -635,6 +677,11 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
         "target_split_module_line_limit": _TARGET_SPLIT_MODULE_LINE_LIMIT,
         "target_split_modules": list(_TARGET_SPLIT_MODULES),
         "giant_test_line_limits": dict(_GIANT_TEST_LINE_LIMITS),
+        "no_dynamic_globals_all_root": "src/model_explorer",
+        "function_line_limits": {
+            f"{relative_path}::{function_name}": limit
+            for (relative_path, function_name), limit in _FUNCTION_LINE_LIMITS.items()
+        },
         "violations": violations,
     }
 
@@ -679,6 +726,14 @@ def _assignment_targets_name(node: ast.Assign | ast.AnnAssign, name: str) -> boo
     if isinstance(node, ast.Assign):
         return any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
     return isinstance(node.target, ast.Name) and node.target.id == name
+
+
+def _named_function_defs(tree: ast.AST, function_name: str) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function_name
+    ]
 
 
 def _assignment_text(node: ast.AST) -> str:
