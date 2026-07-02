@@ -285,194 +285,208 @@ def _evaluate_strategy(
     selection_result_factory=None,
 ) -> dict[str, Any]:
     reward_kwargs = reward_kwargs or {}
-    selected_cells: list[list[int] | None] = []
-    selected_action_indices: list[int | None] = []
-    cumulative_coverage_rate_delta = 0.0
-    total_path_cost = 0.0
-    total_risk = 0.0
-    failure_count = 0
-    final_coverage_rate = 0.0
-    selected_count = 0
-    replan_count = 0
-    value_coverage = 0.0
-    selected_expected_coverage_delta = 0.0
-    selected_value_coverage = 0.0
-    selected_path_cost = 0.0
-    selected_risk_total = 0.0
-    selected_composite_utility = 0.0
-    coverage_oracle_expected_coverage_delta = 0.0
-    low_risk_oracle_risk_total = 0.0
-    cost_oracle_path_cost = 0.0
-    composite_oracle_utility = 0.0
-    coverage_regret = 0.0
-    risk_regret_total = 0.0
-    path_cost_regret = 0.0
-    composite_regret = 0.0
-    oracle_count = 0
-    coverage_spread_total = 0.0
-    risk_spread_total = 0.0
-    path_cost_spread_total = 0.0
-    value_spread_total = 0.0
-    oracle_heuristic_disagreement_count = 0
-    sample_discriminativeness_count = 0
-    oracle_action_cells: dict[str, list[list[int] | None]] = {
-        "coverage_oracle_cells": [],
-        "low_risk_oracle_cells": [],
-        "cost_oracle_cells": [],
-        "composite_oracle_cells": [],
-    }
-    teacher_diagnostics: list[dict[str, Any]] = []
-    previous_goal: GoalCandidate | None = None
-    current_cell = (0, 0)
+    state = _initial_evaluation_state()
 
     for step_index, contract in enumerate(snapshots):
-        oracle_info = _oracle_info(contract)
-        if oracle_info is not None:
-            oracle_count += 1
-            coverage_oracle_expected_coverage_delta += oracle_info["coverage_delta"]
-            low_risk_oracle_risk_total += oracle_info["low_risk"]
-            cost_oracle_path_cost += oracle_info["path_cost"]
-            composite_oracle_utility += oracle_info["composite_utility"]
-            coverage_spread_total += oracle_info["candidate_coverage_spread"]
-            risk_spread_total += oracle_info["risk_spread"]
-            path_cost_spread_total += oracle_info["path_cost_spread"]
-            value_spread_total += oracle_info["value_spread"]
-            oracle_heuristic_disagreement_count += int(oracle_info["heuristic_disagreement"])
-            sample_discriminativeness_count += 1
-            for key in oracle_action_cells:
-                oracle_action_cells[key].append(oracle_info[key[:-1]])
-        else:
-            for key in oracle_action_cells:
-                oracle_action_cells[key].append(None)
+        _evaluate_strategy_step(
+            state,
+            contract,
+            step_index,
+            selector,
+            planning_adapter=planning_adapter,
+            reward_kwargs=reward_kwargs,
+            selection_result_factory=selection_result_factory,
+        )
 
-        planning_result = None
-        teacher_info: dict[str, Any] = {}
-        if selection_result_factory is None:
-            selected_goal = selector(contract)
-        else:
-            selection_result = selection_result_factory(contract, current_cell, step_index)
-            selected_goal, planning_result, teacher_info = _coerce_selection_result(selection_result)
-        teacher_diagnostics.append(teacher_info)
-        if selected_goal is None:
-            failure_count += 1
-            replan_count += 1
-            selected_cells.append(None)
-            selected_action_indices.append(None)
-            previous_goal = None
-            continue
+    return _build_evaluation_payload(state, reward_kwargs)
 
-        action_index = _selected_action_index(contract, selected_goal)
-        selected_action_indices.append(None if action_index < 0 else action_index)
-        if planning_adapter is not None and planning_result is None:
-            planning_result = planning_adapter.plan(
-                PathPlanRequest(
-                    contract=contract,
-                    step_index=step_index,
-                    action_index=action_index,
-                    selected_goal=selected_goal,
-                    current_cell=current_cell,
-                )
+
+def _initial_evaluation_state() -> dict[str, Any]:
+    return {
+        "selected_cells": [],
+        "selected_action_indices": [],
+        "cumulative_coverage_rate_delta": 0.0,
+        "total_path_cost": 0.0,
+        "total_risk": 0.0,
+        "failure_count": 0,
+        "final_coverage_rate": 0.0,
+        "selected_count": 0,
+        "replan_count": 0,
+        "value_coverage": 0.0,
+        "selected_expected_coverage_delta": 0.0,
+        "selected_value_coverage": 0.0,
+        "selected_path_cost": 0.0,
+        "selected_risk_total": 0.0,
+        "selected_composite_utility": 0.0,
+        "coverage_oracle_expected_coverage_delta": 0.0,
+        "low_risk_oracle_risk_total": 0.0,
+        "cost_oracle_path_cost": 0.0,
+        "composite_oracle_utility": 0.0,
+        "coverage_regret": 0.0,
+        "risk_regret_total": 0.0,
+        "path_cost_regret": 0.0,
+        "composite_regret": 0.0,
+        "oracle_count": 0,
+        "coverage_spread_total": 0.0,
+        "risk_spread_total": 0.0,
+        "path_cost_spread_total": 0.0,
+        "value_spread_total": 0.0,
+        "oracle_heuristic_disagreement_count": 0,
+        "sample_discriminativeness_count": 0,
+        "oracle_action_cells": {
+            "coverage_oracle_cells": [],
+            "low_risk_oracle_cells": [],
+            "cost_oracle_cells": [],
+            "composite_oracle_cells": [],
+        },
+        "teacher_diagnostics": [],
+        "previous_goal": None,
+        "current_cell": (0, 0),
+    }
+
+
+def _evaluate_strategy_step(
+    state: dict[str, Any],
+    contract: ModelExplorerContract,
+    step_index: int,
+    selector,
+    *,
+    planning_adapter: PathPlanningAdapter | None,
+    reward_kwargs: dict[str, Any],
+    selection_result_factory,
+) -> None:
+    oracle_info = _oracle_info(contract)
+    _aggregate_oracle_info(state, oracle_info)
+
+    planning_result = None
+    teacher_info: dict[str, Any] = {}
+    if selection_result_factory is None:
+        selected_goal = selector(contract)
+    else:
+        selection_result = selection_result_factory(contract, state["current_cell"], step_index)
+        selected_goal, planning_result, teacher_info = _coerce_selection_result(selection_result)
+    state["teacher_diagnostics"].append(teacher_info)
+    if selected_goal is None:
+        _record_missing_selection(state)
+        return
+
+    action_index = _selected_action_index(contract, selected_goal)
+    state["selected_action_indices"].append(None if action_index < 0 else action_index)
+    if planning_adapter is not None and planning_result is None:
+        planning_result = planning_adapter.plan(
+            PathPlanRequest(
+                contract=contract,
+                step_index=step_index,
+                action_index=action_index,
+                selected_goal=selected_goal,
+                current_cell=state["current_cell"],
             )
-            if not planning_result.feasible:
-                failure_count += 1
-
-        reward_info = compute_step_reward(
-            selected_goal,
-            contract.observation_update,
-            path_cost_override=None if planning_result is None else planning_result.path_cost,
-            risk_override=None if planning_result is None else planning_result.risk,
-            **reward_kwargs,
         )
-        selected_cells.append([selected_goal.cell[0], selected_goal.cell[1]])
-        cumulative_coverage_rate_delta += reward_info.coverage_rate_delta
-        total_path_cost += reward_info.path_cost
-        total_risk += reward_info.risk
-        final_coverage_rate = _coverage_rate(contract.observation_update, fallback=final_coverage_rate)
-        value_coverage += _value_coverage(contract.observation_update)
-        selected_coverage_delta = _goal_coverage_delta(selected_goal)
-        selected_value = _goal_value(selected_goal)
-        selected_composite = _goal_composite_utility(
-            selected_goal,
-            path_cost_override=reward_info.path_cost,
-            risk_override=reward_info.risk,
-        )
-        selected_expected_coverage_delta += selected_coverage_delta
-        selected_value_coverage += selected_value
-        selected_path_cost += reward_info.path_cost
-        selected_risk_total += reward_info.risk
-        selected_composite_utility += selected_composite
-        if oracle_info is not None:
-            coverage_regret += oracle_info["coverage_delta"] - selected_coverage_delta
-            risk_regret_total += reward_info.risk - oracle_info["low_risk"]
-            path_cost_regret += reward_info.path_cost - oracle_info["path_cost"]
-            composite_regret += oracle_info["composite_utility"] - selected_composite
-        if _should_count_replan(contract, selected_goal, previous_goal) or (
-            planning_result is not None and planning_result.replan_required
-        ):
-            replan_count += 1
-        selected_count += 1
-        if planning_result is None or planning_result.feasible:
-            current_cell = selected_goal.cell
-        previous_goal = selected_goal
+        if not planning_result.feasible:
+            state["failure_count"] += 1
 
+    reward_info = compute_step_reward(
+        selected_goal,
+        contract.observation_update,
+        path_cost_override=None if planning_result is None else planning_result.path_cost,
+        risk_override=None if planning_result is None else planning_result.risk,
+        **reward_kwargs,
+    )
+    _aggregate_selected_goal_metrics(state, contract, selected_goal, reward_info, oracle_info)
+    if _should_count_replan(contract, selected_goal, state["previous_goal"]) or (
+        planning_result is not None and planning_result.replan_required
+    ):
+        state["replan_count"] += 1
+    state["selected_count"] += 1
+    if planning_result is None or planning_result.feasible:
+        state["current_cell"] = selected_goal.cell
+    state["previous_goal"] = selected_goal
+
+
+def _aggregate_oracle_info(state: dict[str, Any], oracle_info: dict[str, Any] | None) -> None:
+    oracle_action_cells = state["oracle_action_cells"]
+    if oracle_info is None:
+        for key in oracle_action_cells:
+            oracle_action_cells[key].append(None)
+        return
+
+    state["oracle_count"] += 1
+    state["coverage_oracle_expected_coverage_delta"] += oracle_info["coverage_delta"]
+    state["low_risk_oracle_risk_total"] += oracle_info["low_risk"]
+    state["cost_oracle_path_cost"] += oracle_info["path_cost"]
+    state["composite_oracle_utility"] += oracle_info["composite_utility"]
+    state["coverage_spread_total"] += oracle_info["candidate_coverage_spread"]
+    state["risk_spread_total"] += oracle_info["risk_spread"]
+    state["path_cost_spread_total"] += oracle_info["path_cost_spread"]
+    state["value_spread_total"] += oracle_info["value_spread"]
+    state["oracle_heuristic_disagreement_count"] += int(oracle_info["heuristic_disagreement"])
+    state["sample_discriminativeness_count"] += 1
+    for key in oracle_action_cells:
+        oracle_action_cells[key].append(oracle_info[key[:-1]])
+
+
+def _record_missing_selection(state: dict[str, Any]) -> None:
+    state["failure_count"] += 1
+    state["replan_count"] += 1
+    state["selected_cells"].append(None)
+    state["selected_action_indices"].append(None)
+    state["previous_goal"] = None
+
+
+def _aggregate_selected_goal_metrics(
+    state: dict[str, Any],
+    contract: ModelExplorerContract,
+    selected_goal: GoalCandidate,
+    reward_info,
+    oracle_info: dict[str, Any] | None,
+) -> None:
+    selected_coverage_delta = _goal_coverage_delta(selected_goal)
+    selected_value = _goal_value(selected_goal)
+    selected_composite = _goal_composite_utility(
+        selected_goal,
+        path_cost_override=reward_info.path_cost,
+        risk_override=reward_info.risk,
+    )
+    state["selected_cells"].append([selected_goal.cell[0], selected_goal.cell[1]])
+    state["cumulative_coverage_rate_delta"] += reward_info.coverage_rate_delta
+    state["total_path_cost"] += reward_info.path_cost
+    state["total_risk"] += reward_info.risk
+    state["final_coverage_rate"] = _coverage_rate(
+        contract.observation_update,
+        fallback=state["final_coverage_rate"],
+    )
+    state["value_coverage"] += _value_coverage(contract.observation_update)
+    state["selected_expected_coverage_delta"] += selected_coverage_delta
+    state["selected_value_coverage"] += selected_value
+    state["selected_path_cost"] += reward_info.path_cost
+    state["selected_risk_total"] += reward_info.risk
+    state["selected_composite_utility"] += selected_composite
+    if oracle_info is not None:
+        state["coverage_regret"] += oracle_info["coverage_delta"] - selected_coverage_delta
+        state["risk_regret_total"] += reward_info.risk - oracle_info["low_risk"]
+        state["path_cost_regret"] += reward_info.path_cost - oracle_info["path_cost"]
+        state["composite_regret"] += oracle_info["composite_utility"] - selected_composite
+
+
+def _build_evaluation_payload(state: dict[str, Any], reward_kwargs: dict[str, Any]) -> dict[str, Any]:
+    selected_count = state["selected_count"]
+    oracle_count = state["oracle_count"]
+    sample_count = state["sample_discriminativeness_count"]
+    oracle_action_cells = state["oracle_action_cells"]
     metrics = {
-        "selected_cells": selected_cells,
-        "selected_action_indices": selected_action_indices,
-        "final_coverage_rate": final_coverage_rate,
-        "cumulative_coverage_rate_delta": cumulative_coverage_rate_delta,
-        "total_path_cost": total_path_cost,
-        "average_risk": total_risk / selected_count if selected_count else 0.0,
-        "failure_count": failure_count,
-        "replan_count": replan_count,
-        "value_coverage": value_coverage,
-        "action_sensitive_metrics": {
-            "selected_expected_coverage_delta": _finite_float(selected_expected_coverage_delta),
-            "selected_value_coverage": _finite_float(selected_value_coverage),
-            "selected_risk": _finite_float(selected_risk_total / selected_count if selected_count else 0.0),
-            "selected_path_cost": _finite_float(selected_path_cost),
-            "selected_composite_utility": _finite_float(selected_composite_utility),
-            "selected_count": selected_count,
-        },
-        "oracle_metrics": {
-            "coverage_oracle_expected_coverage_delta": _finite_float(coverage_oracle_expected_coverage_delta),
-            "low_risk_oracle_risk": _finite_float(low_risk_oracle_risk_total / oracle_count if oracle_count else 0.0),
-            "cost_oracle_path_cost": _finite_float(cost_oracle_path_cost),
-            "composite_oracle_utility": _finite_float(composite_oracle_utility),
-            "oracle_count": oracle_count,
-        },
-        "oracle_regret": {
-            "coverage_regret": _finite_float(coverage_regret),
-            "risk_regret": _finite_float(risk_regret_total / oracle_count if oracle_count else 0.0),
-            "path_cost_regret": _finite_float(path_cost_regret),
-            "composite_regret": _finite_float(composite_regret),
-        },
-        "sample_discriminativeness": {
-            "candidate_coverage_spread": _finite_float(
-                coverage_spread_total / sample_discriminativeness_count
-                if sample_discriminativeness_count
-                else 0.0
-            ),
-            "risk_spread": _finite_float(
-                risk_spread_total / sample_discriminativeness_count
-                if sample_discriminativeness_count
-                else 0.0
-            ),
-            "path_cost_spread": _finite_float(
-                path_cost_spread_total / sample_discriminativeness_count
-                if sample_discriminativeness_count
-                else 0.0
-            ),
-            "value_spread": _finite_float(
-                value_spread_total / sample_discriminativeness_count
-                if sample_discriminativeness_count
-                else 0.0
-            ),
-            "oracle_vs_heuristic_action_disagreement_rate": _finite_float(
-                oracle_heuristic_disagreement_count / sample_discriminativeness_count
-                if sample_discriminativeness_count
-                else 0.0
-            ),
-        },
+        "selected_cells": state["selected_cells"],
+        "selected_action_indices": state["selected_action_indices"],
+        "final_coverage_rate": state["final_coverage_rate"],
+        "cumulative_coverage_rate_delta": state["cumulative_coverage_rate_delta"],
+        "total_path_cost": state["total_path_cost"],
+        "average_risk": state["total_risk"] / selected_count if selected_count else 0.0,
+        "failure_count": state["failure_count"],
+        "replan_count": state["replan_count"],
+        "value_coverage": state["value_coverage"],
+        "action_sensitive_metrics": _selected_goal_metric_payload(state, selected_count),
+        "oracle_metrics": _oracle_metric_payload(state, oracle_count),
+        "oracle_regret": _oracle_regret_payload(state, oracle_count),
+        "sample_discriminativeness": _sample_discriminativeness_payload(state, sample_count),
         "oracle_actions": {
             "coverage_oracle_cell": _first_cell(oracle_action_cells["coverage_oracle_cells"]),
             "low_risk_oracle_cell": _first_cell(oracle_action_cells["low_risk_oracle_cells"]),
@@ -481,14 +495,69 @@ def _evaluate_strategy(
             **oracle_action_cells,
         },
     }
-    if any(teacher_diagnostics):
-        metrics.update(_teacher_diagnostics_summary(teacher_diagnostics))
+    if any(state["teacher_diagnostics"]):
+        metrics.update(_teacher_diagnostics_summary(state["teacher_diagnostics"]))
     if reward_kwargs.get("canonical_profile") is not None:
         profile = reward_kwargs["canonical_profile"]
         metrics["profile_id"] = profile.profile_id
         metrics["profile_version"] = profile.profile_version
         metrics["profile_hash"] = profile.profile_hash
     return metrics
+
+
+def _selected_goal_metric_payload(state: dict[str, Any], selected_count: int) -> dict[str, Any]:
+    return {
+        "selected_expected_coverage_delta": _finite_float(state["selected_expected_coverage_delta"]),
+        "selected_value_coverage": _finite_float(state["selected_value_coverage"]),
+        "selected_risk": _finite_float(
+            state["selected_risk_total"] / selected_count if selected_count else 0.0
+        ),
+        "selected_path_cost": _finite_float(state["selected_path_cost"]),
+        "selected_composite_utility": _finite_float(state["selected_composite_utility"]),
+        "selected_count": selected_count,
+    }
+
+
+def _oracle_metric_payload(state: dict[str, Any], oracle_count: int) -> dict[str, Any]:
+    return {
+        "coverage_oracle_expected_coverage_delta": _finite_float(
+            state["coverage_oracle_expected_coverage_delta"]
+        ),
+        "low_risk_oracle_risk": _finite_float(
+            state["low_risk_oracle_risk_total"] / oracle_count if oracle_count else 0.0
+        ),
+        "cost_oracle_path_cost": _finite_float(state["cost_oracle_path_cost"]),
+        "composite_oracle_utility": _finite_float(state["composite_oracle_utility"]),
+        "oracle_count": oracle_count,
+    }
+
+
+def _oracle_regret_payload(state: dict[str, Any], oracle_count: int) -> dict[str, Any]:
+    return {
+        "coverage_regret": _finite_float(state["coverage_regret"]),
+        "risk_regret": _finite_float(
+            state["risk_regret_total"] / oracle_count if oracle_count else 0.0
+        ),
+        "path_cost_regret": _finite_float(state["path_cost_regret"]),
+        "composite_regret": _finite_float(state["composite_regret"]),
+    }
+
+
+def _sample_discriminativeness_payload(state: dict[str, Any], sample_count: int) -> dict[str, Any]:
+    return {
+        "candidate_coverage_spread": _finite_average(state["coverage_spread_total"], sample_count),
+        "risk_spread": _finite_average(state["risk_spread_total"], sample_count),
+        "path_cost_spread": _finite_average(state["path_cost_spread_total"], sample_count),
+        "value_spread": _finite_average(state["value_spread_total"], sample_count),
+        "oracle_vs_heuristic_action_disagreement_rate": _finite_average(
+            state["oracle_heuristic_disagreement_count"],
+            sample_count,
+        ),
+    }
+
+
+def _finite_average(total: float, count: int) -> float:
+    return _finite_float(total / count if count else 0.0)
 
 
 def _oracle_info(contract: ModelExplorerContract) -> dict[str, Any] | None:
