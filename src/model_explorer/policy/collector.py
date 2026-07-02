@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any
 
 from ..core.interfaces import ExplorerDecision, GoalCandidate, ModelExplorerContract
 from ..decision.selector import select_goal
 from ..io.scenario import Scenario
-from .execution import ExecutionFeasibilityAdapter, ExecutionFeasibilityRequest
+from .execution import ExecutionFeasibilityAdapter, ExecutionFeasibilityRequest, ExecutionFeasibilityResponse
 from .features import extract_policy_observation
 from .feedback_selection_scoring import select_goal_with_path_feedback
 from .canonical_reward import load_canonical_reward_profile
@@ -17,8 +18,8 @@ from .planning_types import (
     PathPlanResult,
     PathPlanningAdapter,
 )
-from .provider import ContractProvider, ProviderStepRequest, SequenceContractProvider
-from .reward import compute_step_reward
+from .provider import ContractProvider, ProviderStepRequest, ProviderStepResult, SequenceContractProvider
+from .reward import RewardInfo, compute_step_reward
 from .rollout import EpisodeMetrics, RolloutEpisode, RolloutInfo, RolloutTransition
 
 
@@ -68,211 +69,452 @@ def collect_dynamic_rollout_episode(
     selection_strategy: str = "auto",
 ) -> RolloutEpisode:
     transitions: list[RolloutTransition] = []
-    total_path_cost = 0.0
-    total_risk = 0.0
-    selected_count = 0
-    cumulative_coverage_rate_delta = 0.0
-    failure_count = 0
-    replan_count = 0
-    final_coverage_rate = 0.0
-    value_coverage = 0.0
-    previous_decision: ExplorerDecision | None = None
+    metrics_state = _RolloutMetricsState()
     current_contract = provider.initial_contract()
     step_limit = max_steps if max_steps is not None else getattr(provider, "total_steps", None)
     step_index = 0
-    current_cell = (0, 0)
     default_planner = ContractCostPlanner()
     reward_kwargs = _reward_kwargs(reward_config)
     requested_selection_strategy = _normalize_selection_strategy(selection_strategy)
 
     while current_contract is not None and (step_limit is None or step_index < step_limit):
-        remaining_steps = _remaining_steps(step_limit, step_index)
-        observation = extract_policy_observation(
-            current_contract,
-            step_index=step_index,
-            remaining_steps=remaining_steps,
-            max_candidates=max_candidates,
-        )
-        decision, effective_selection_strategy, feedback_selection = _select_rollout_goal(
-            current_contract,
+        step_plan = _plan_rollout_step(
+            contract=current_contract,
             policy=policy,
-            planning_adapter=planning_adapter,
-            current_cell=current_cell,
             step_index=step_index,
+            step_limit=step_limit,
             max_candidates=max_candidates,
+            planning_adapter=planning_adapter,
+            default_planner=default_planner,
+            current_cell=metrics_state.current_cell,
             selection_strategy=requested_selection_strategy,
             anchor_projection_candidate_config=anchor_projection_candidate_config,
+            execution_adapter=execution_adapter,
+            rollout_metadata=rollout_metadata,
         )
-        selected_goal = decision.selected_goal
-        failure_reason = None if selected_goal is not None else "no_reachable_goal"
-        action_index = -1 if selected_goal is None else _selected_action_index(current_contract, selected_goal.cell)
-        extra_info: dict[str, Any] = _rollout_metadata_info(rollout_metadata)
-        extra_info.update(
-            {
-                "requested_selection_strategy": requested_selection_strategy,
-                "selection_strategy": effective_selection_strategy,
-                "teacher_action_index": None if action_index < 0 else action_index,
-                "teacher_selected_cell": None
-                if selected_goal is None
-                else [selected_goal.cell[0], selected_goal.cell[1]],
-            }
+        step_result = _handle_rollout_step_result(
+            provider=provider,
+            contract=current_contract,
+            step_plan=step_plan,
+            previous_decision=metrics_state.previous_decision,
+            step_index=step_index,
+            step_limit=step_limit,
+            max_candidates=max_candidates,
         )
-        if feedback_selection is not None:
-            extra_info.update(_feedback_teacher_info(feedback_selection))
-
-        planning_result: PathPlanResult | None = None
-        planner = planning_adapter if planning_adapter is not None else default_planner
-        if selected_goal is not None:
-            if (
-                feedback_selection is not None
-                and feedback_selection.selected_evaluation is not None
-                and feedback_selection.selected_evaluation.action_index == action_index
-            ):
-                planning_result = feedback_selection.selected_evaluation.result
-                extra_info["selection_score"] = feedback_selection.scores_by_action_index.get(action_index)
-            else:
-                planning_result = planner.plan(
-                    PathPlanRequest(
-                        contract=current_contract,
-                        step_index=step_index,
-                        action_index=action_index,
-                        selected_goal=selected_goal,
-                        current_cell=current_cell,
-                    )
-                )
-            extra_info["planning_feasible"] = bool(planning_result.feasible)
-            extra_info["planning_metadata"] = dict(planning_result.metadata)
-            extra_info["path_length"] = float(planning_result.path_length)
-            if not planning_result.feasible:
-                failure_reason = planning_result.failure_reason or "path_planning_failed"
-
-        execution_response = None
-        if selected_goal is not None and execution_adapter is not None and planning_adapter is None:
-            execution_response = execution_adapter.check_feasibility(
-                ExecutionFeasibilityRequest(
-                    schema_version=current_contract.schema_version,
-                    step_index=step_index,
-                    action_index=action_index,
-                    selected_cell=selected_goal.cell,
-                    selected_world=current_contract.cell_to_world(selected_goal.cell),
-                )
-            )
-            extra_info["execution_feasible"] = bool(execution_response.feasible)
-            extra_info["execution_metrics"] = dict(execution_response.metrics)
-            if not execution_response.feasible:
-                failure_reason = execution_response.failure_reason or "execution_infeasible"
-
-        provider_result = provider.advance(
-            ProviderStepRequest(
-                step_index=step_index,
-                contract=current_contract,
-                action_index=action_index,
-                selected_goal=selected_goal,
-                failure_reason=failure_reason,
-                info=dict(extra_info),
-            )
-        )
-        if provider_result.failure_reason is not None:
-            if failure_reason is None:
-                failure_reason = provider_result.failure_reason
-            else:
-                extra_info["provider_failure_reason"] = provider_result.failure_reason
-        extra_info.update(provider_result.info)
-
-        replan_reasons = _combined_replan_reasons(
-            current_contract,
-            decision,
-            previous_decision,
-            provider_result.replan_reasons,
-            planner_replan_required=bool(planning_result.replan_required) if planning_result is not None else False,
-            execution_replan_required=bool(execution_response.replan_required) if execution_response is not None else False,
-        )
-        extra_info["replan_reasons"] = list(replan_reasons)
-
-        if failure_reason is not None:
-            failure_count += 1
-        if replan_reasons:
-            replan_count += 1
 
         reward_info = compute_step_reward(
-            selected_goal,
+            step_plan.selected_goal,
             current_contract.observation_update,
-            failure_reason=failure_reason,
-            path_cost_override=None if planning_result is None else planning_result.path_cost,
-            risk_override=None if planning_result is None else planning_result.risk,
+            failure_reason=step_result.failure_reason,
+            path_cost_override=None if step_plan.planning_result is None else step_plan.planning_result.path_cost,
+            risk_override=None if step_plan.planning_result is None else step_plan.planning_result.risk,
             **reward_kwargs,
         )
-        final_coverage_rate = _coverage_rate(current_contract.observation_update, fallback=final_coverage_rate)
-        value_coverage += _value_coverage(current_contract.observation_update)
-        cumulative_coverage_rate_delta += reward_info.coverage_rate_delta
-        total_path_cost += reward_info.path_cost
-        total_risk += reward_info.risk
-        if selected_goal is not None:
-            selected_count += 1
-        if reward_info.reward_components:
-            extra_info["reward_components"] = dict(reward_info.reward_components)
-        if reward_info.profile_id is not None:
-            extra_info["profile_id"] = reward_info.profile_id
-        if reward_info.profile_version is not None:
-            extra_info["profile_version"] = reward_info.profile_version
-        if reward_info.profile_hash is not None:
-            extra_info["profile_hash"] = reward_info.profile_hash
-
-        reached_step_limit = step_limit is not None and step_index + 1 >= step_limit
-        next_contract = None if reached_step_limit else provider_result.next_contract
-        done = bool(provider_result.done or reached_step_limit or next_contract is None)
-        next_observation = (
-            None
-            if next_contract is None
-            else extract_policy_observation(
-                next_contract,
-                step_index=step_index + 1,
-                remaining_steps=_remaining_steps(step_limit, step_index + 1),
-                max_candidates=max_candidates,
-            )
-        )
-
         transitions.append(
-            RolloutTransition(
-                observation=observation,
-                action_index=action_index,
-                log_prob=None,
-                value=None,
-                reward=reward_info.reward,
-                next_observation=next_observation,
-                done=done,
-                info=RolloutInfo(
-                    selected_cell=None if selected_goal is None else selected_goal.cell,
-                    coverage_rate_delta=reward_info.coverage_rate_delta,
-                    path_cost=reward_info.path_cost,
-                    risk=reward_info.risk,
-                    failure_reason=reward_info.failure_reason,
-                    final_coverage_rate=final_coverage_rate if done else None,
-                    total_cost=total_path_cost,
-                    failure_count=failure_count,
-                    replan_count=replan_count,
-                    extra=extra_info,
-                ),
+            _build_rollout_transition(
+                contract=current_contract,
+                step_plan=step_plan,
+                step_result=step_result,
+                reward_info=reward_info,
+                metrics_state=metrics_state,
             )
         )
 
-        previous_decision = decision
-        if selected_goal is not None and failure_reason is None:
-            current_cell = selected_goal.cell
-        current_contract = next_contract
+        metrics_state.previous_decision = step_plan.decision
+        if step_plan.selected_goal is not None and step_result.failure_reason is None:
+            metrics_state.current_cell = step_plan.selected_goal.cell
+        current_contract = step_result.next_contract
         step_index += 1
 
-    average_risk = total_risk / selected_count if selected_count else 0.0
+    return _finalize_rollout_episode(transitions, metrics_state)
+
+
+@dataclass
+class _RolloutMetricsState:
+    total_path_cost: float = 0.0
+    total_risk: float = 0.0
+    selected_count: int = 0
+    cumulative_coverage_rate_delta: float = 0.0
+    failure_count: int = 0
+    replan_count: int = 0
+    final_coverage_rate: float = 0.0
+    value_coverage: float = 0.0
+    previous_decision: ExplorerDecision | None = None
+    current_cell: tuple[int, int] = (0, 0)
+
+
+@dataclass
+class _RolloutStepPlan:
+    observation: Any
+    decision: ExplorerDecision
+    selected_goal: GoalCandidate | None
+    action_index: int
+    failure_reason: str | None
+    extra_info: dict[str, Any]
+    planning_result: PathPlanResult | None
+    execution_response: ExecutionFeasibilityResponse | None
+
+
+@dataclass
+class _RolloutStepResult:
+    failure_reason: str | None
+    extra_info: dict[str, Any]
+    replan_reasons: tuple[str, ...]
+    next_contract: ModelExplorerContract | None
+    next_observation: Any | None
+    done: bool
+
+
+def _plan_rollout_step(
+    *,
+    contract: ModelExplorerContract,
+    policy,
+    step_index: int,
+    step_limit: int | None,
+    max_candidates: int | None,
+    planning_adapter: PathPlanningAdapter | None,
+    default_planner: PathPlanningAdapter,
+    current_cell: tuple[int, int],
+    selection_strategy: str,
+    anchor_projection_candidate_config: AnchorProjectionCandidateConfig | dict[str, Any] | None,
+    execution_adapter: ExecutionFeasibilityAdapter | None,
+    rollout_metadata: dict[str, Any] | None,
+) -> _RolloutStepPlan:
+    observation = extract_policy_observation(
+        contract,
+        step_index=step_index,
+        remaining_steps=_remaining_steps(step_limit, step_index),
+        max_candidates=max_candidates,
+    )
+    decision, effective_selection_strategy, feedback_selection = _select_rollout_goal(
+        contract,
+        policy=policy,
+        planning_adapter=planning_adapter,
+        current_cell=current_cell,
+        step_index=step_index,
+        max_candidates=max_candidates,
+        selection_strategy=selection_strategy,
+        anchor_projection_candidate_config=anchor_projection_candidate_config,
+    )
+    selected_goal = decision.selected_goal
+    action_index = -1 if selected_goal is None else _selected_action_index(contract, selected_goal.cell)
+    failure_reason = None if selected_goal is not None else "no_reachable_goal"
+    extra_info = _selection_extra_info(
+        rollout_metadata,
+        requested_selection_strategy=selection_strategy,
+        effective_selection_strategy=effective_selection_strategy,
+        selected_goal=selected_goal,
+        action_index=action_index,
+        feedback_selection=feedback_selection,
+    )
+    planning_result = _resolve_planning_result(
+        contract=contract,
+        step_index=step_index,
+        action_index=action_index,
+        selected_goal=selected_goal,
+        current_cell=current_cell,
+        planner=planning_adapter if planning_adapter is not None else default_planner,
+        feedback_selection=feedback_selection,
+        extra_info=extra_info,
+    )
+    if planning_result is not None and not planning_result.feasible:
+        failure_reason = planning_result.failure_reason or "path_planning_failed"
+    execution_response = _resolve_execution_result(
+        contract=contract,
+        step_index=step_index,
+        action_index=action_index,
+        selected_goal=selected_goal,
+        planning_adapter=planning_adapter,
+        execution_adapter=execution_adapter,
+        extra_info=extra_info,
+    )
+    if execution_response is not None and not execution_response.feasible:
+        failure_reason = execution_response.failure_reason or "execution_infeasible"
+    return _RolloutStepPlan(
+        observation=observation,
+        decision=decision,
+        selected_goal=selected_goal,
+        action_index=action_index,
+        failure_reason=failure_reason,
+        extra_info=extra_info,
+        planning_result=planning_result,
+        execution_response=execution_response,
+    )
+
+
+def _selection_extra_info(
+    rollout_metadata: dict[str, Any] | None,
+    *,
+    requested_selection_strategy: str,
+    effective_selection_strategy: str,
+    selected_goal: GoalCandidate | None,
+    action_index: int,
+    feedback_selection,
+) -> dict[str, Any]:
+    extra_info: dict[str, Any] = _rollout_metadata_info(rollout_metadata)
+    extra_info.update(
+        {
+            "requested_selection_strategy": requested_selection_strategy,
+            "selection_strategy": effective_selection_strategy,
+            "teacher_action_index": None if action_index < 0 else action_index,
+            "teacher_selected_cell": None
+            if selected_goal is None
+            else [selected_goal.cell[0], selected_goal.cell[1]],
+        }
+    )
+    if feedback_selection is not None:
+        extra_info.update(_feedback_teacher_info(feedback_selection))
+    return extra_info
+
+
+def _resolve_planning_result(
+    *,
+    contract: ModelExplorerContract,
+    step_index: int,
+    action_index: int,
+    selected_goal: GoalCandidate | None,
+    current_cell: tuple[int, int],
+    planner: PathPlanningAdapter,
+    feedback_selection,
+    extra_info: dict[str, Any],
+) -> PathPlanResult | None:
+    if selected_goal is None:
+        return None
+    if (
+        feedback_selection is not None
+        and feedback_selection.selected_evaluation is not None
+        and feedback_selection.selected_evaluation.action_index == action_index
+    ):
+        planning_result = feedback_selection.selected_evaluation.result
+        extra_info["selection_score"] = feedback_selection.scores_by_action_index.get(action_index)
+    else:
+        planning_result = planner.plan(
+            PathPlanRequest(
+                contract=contract,
+                step_index=step_index,
+                action_index=action_index,
+                selected_goal=selected_goal,
+                current_cell=current_cell,
+            )
+        )
+    extra_info["planning_feasible"] = bool(planning_result.feasible)
+    extra_info["planning_metadata"] = dict(planning_result.metadata)
+    extra_info["path_length"] = float(planning_result.path_length)
+    return planning_result
+
+
+def _resolve_execution_result(
+    *,
+    contract: ModelExplorerContract,
+    step_index: int,
+    action_index: int,
+    selected_goal: GoalCandidate | None,
+    planning_adapter: PathPlanningAdapter | None,
+    execution_adapter: ExecutionFeasibilityAdapter | None,
+    extra_info: dict[str, Any],
+) -> ExecutionFeasibilityResponse | None:
+    if selected_goal is None or execution_adapter is None or planning_adapter is not None:
+        return None
+    execution_response = execution_adapter.check_feasibility(
+        ExecutionFeasibilityRequest(
+            schema_version=contract.schema_version,
+            step_index=step_index,
+            action_index=action_index,
+            selected_cell=selected_goal.cell,
+            selected_world=contract.cell_to_world(selected_goal.cell),
+        )
+    )
+    extra_info["execution_feasible"] = bool(execution_response.feasible)
+    extra_info["execution_metrics"] = dict(execution_response.metrics)
+    return execution_response
+
+
+def _handle_rollout_step_result(
+    *,
+    provider: ContractProvider,
+    contract: ModelExplorerContract,
+    step_plan: _RolloutStepPlan,
+    previous_decision: ExplorerDecision | None,
+    step_index: int,
+    step_limit: int | None,
+    max_candidates: int | None,
+) -> _RolloutStepResult:
+    provider_result = provider.advance(
+        ProviderStepRequest(
+            step_index=step_index,
+            contract=contract,
+            action_index=step_plan.action_index,
+            selected_goal=step_plan.selected_goal,
+            failure_reason=step_plan.failure_reason,
+            info=dict(step_plan.extra_info),
+        )
+    )
+    failure_reason = _merge_provider_failure(
+        step_plan.extra_info,
+        step_plan.failure_reason,
+        provider_result,
+    )
+    step_plan.extra_info.update(provider_result.info)
+    replan_reasons = _combined_replan_reasons(
+        contract,
+        step_plan.decision,
+        previous_decision,
+        provider_result.replan_reasons,
+        planner_replan_required=(
+            bool(step_plan.planning_result.replan_required)
+            if step_plan.planning_result is not None
+            else False
+        ),
+        execution_replan_required=(
+            bool(step_plan.execution_response.replan_required)
+            if step_plan.execution_response is not None
+            else False
+        ),
+    )
+    step_plan.extra_info["replan_reasons"] = list(replan_reasons)
+    next_contract, next_observation, done = _next_rollout_observation(
+        provider_result,
+        step_index=step_index,
+        step_limit=step_limit,
+        max_candidates=max_candidates,
+    )
+    return _RolloutStepResult(
+        failure_reason=failure_reason,
+        extra_info=step_plan.extra_info,
+        replan_reasons=replan_reasons,
+        next_contract=next_contract,
+        next_observation=next_observation,
+        done=done,
+    )
+
+
+def _merge_provider_failure(
+    extra_info: dict[str, Any],
+    failure_reason: str | None,
+    provider_result: ProviderStepResult,
+) -> str | None:
+    if provider_result.failure_reason is None:
+        return failure_reason
+    if failure_reason is None:
+        return provider_result.failure_reason
+    extra_info["provider_failure_reason"] = provider_result.failure_reason
+    return failure_reason
+
+
+def _next_rollout_observation(
+    provider_result: ProviderStepResult,
+    *,
+    step_index: int,
+    step_limit: int | None,
+    max_candidates: int | None,
+) -> tuple[ModelExplorerContract | None, Any | None, bool]:
+    reached_step_limit = step_limit is not None and step_index + 1 >= step_limit
+    next_contract = None if reached_step_limit else provider_result.next_contract
+    done = bool(provider_result.done or reached_step_limit or next_contract is None)
+    if next_contract is None:
+        return next_contract, None, done
+    next_observation = extract_policy_observation(
+        next_contract,
+        step_index=step_index + 1,
+        remaining_steps=_remaining_steps(step_limit, step_index + 1),
+        max_candidates=max_candidates,
+    )
+    return next_contract, next_observation, done
+
+
+def _build_rollout_transition(
+    *,
+    contract: ModelExplorerContract,
+    step_plan: _RolloutStepPlan,
+    step_result: _RolloutStepResult,
+    reward_info: RewardInfo,
+    metrics_state: _RolloutMetricsState,
+) -> RolloutTransition:
+    _update_rollout_metrics(
+        contract,
+        step_plan=step_plan,
+        step_result=step_result,
+        reward_info=reward_info,
+        metrics_state=metrics_state,
+    )
+    _add_reward_profile_info(step_result.extra_info, reward_info)
+    return RolloutTransition(
+        observation=step_plan.observation,
+        action_index=step_plan.action_index,
+        log_prob=None,
+        value=None,
+        reward=reward_info.reward,
+        next_observation=step_result.next_observation,
+        done=step_result.done,
+        info=RolloutInfo(
+            selected_cell=None if step_plan.selected_goal is None else step_plan.selected_goal.cell,
+            coverage_rate_delta=reward_info.coverage_rate_delta,
+            path_cost=reward_info.path_cost,
+            risk=reward_info.risk,
+            failure_reason=reward_info.failure_reason,
+            final_coverage_rate=metrics_state.final_coverage_rate if step_result.done else None,
+            total_cost=metrics_state.total_path_cost,
+            failure_count=metrics_state.failure_count,
+            replan_count=metrics_state.replan_count,
+            extra=step_result.extra_info,
+        ),
+    )
+
+
+def _update_rollout_metrics(
+    contract: ModelExplorerContract,
+    *,
+    step_plan: _RolloutStepPlan,
+    step_result: _RolloutStepResult,
+    reward_info: RewardInfo,
+    metrics_state: _RolloutMetricsState,
+) -> None:
+    if step_result.failure_reason is not None:
+        metrics_state.failure_count += 1
+    if step_result.replan_reasons:
+        metrics_state.replan_count += 1
+    metrics_state.final_coverage_rate = _coverage_rate(
+        contract.observation_update,
+        fallback=metrics_state.final_coverage_rate,
+    )
+    metrics_state.value_coverage += _value_coverage(contract.observation_update)
+    metrics_state.cumulative_coverage_rate_delta += reward_info.coverage_rate_delta
+    metrics_state.total_path_cost += reward_info.path_cost
+    metrics_state.total_risk += reward_info.risk
+    if step_plan.selected_goal is not None:
+        metrics_state.selected_count += 1
+
+
+def _add_reward_profile_info(extra_info: dict[str, Any], reward_info: RewardInfo) -> None:
+    if reward_info.reward_components:
+        extra_info["reward_components"] = dict(reward_info.reward_components)
+    if reward_info.profile_id is not None:
+        extra_info["profile_id"] = reward_info.profile_id
+    if reward_info.profile_version is not None:
+        extra_info["profile_version"] = reward_info.profile_version
+    if reward_info.profile_hash is not None:
+        extra_info["profile_hash"] = reward_info.profile_hash
+
+
+def _finalize_rollout_episode(
+    transitions: list[RolloutTransition],
+    metrics_state: _RolloutMetricsState,
+) -> RolloutEpisode:
+    average_risk = (
+        metrics_state.total_risk / metrics_state.selected_count
+        if metrics_state.selected_count
+        else 0.0
+    )
     return RolloutEpisode(
         transitions=tuple(transitions),
         metrics=EpisodeMetrics(
-            final_coverage_rate=final_coverage_rate,
-            cumulative_coverage_rate_delta=cumulative_coverage_rate_delta,
-            total_path_cost=total_path_cost,
+            final_coverage_rate=metrics_state.final_coverage_rate,
+            cumulative_coverage_rate_delta=metrics_state.cumulative_coverage_rate_delta,
+            total_path_cost=metrics_state.total_path_cost,
             average_risk=average_risk,
-            failure_count=failure_count,
-            replan_count=replan_count,
-            value_coverage=value_coverage,
+            failure_count=metrics_state.failure_count,
+            replan_count=metrics_state.replan_count,
+            value_coverage=metrics_state.value_coverage,
         ),
     )
 
