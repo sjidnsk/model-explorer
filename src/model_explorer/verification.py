@@ -342,12 +342,12 @@ def _run_forbidden_import_check(project_root: str | Path) -> dict[str, Any]:
 def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root)
     violations: list[dict[str, Any]] = []
-    scanned_files = 0
+    scanned_files: set[Path] = set()
 
     data_root = root / "src" / "model_explorer" / "data"
     if data_root.exists():
         for path in sorted(data_root.rglob("*.py")):
-            scanned_files += 1
+            scanned_files.add(path.resolve())
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in tree.body:
                 if _is_policy_import(node):
@@ -363,7 +363,7 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
     decision_root = root / "src" / "model_explorer" / "decision"
     if decision_root.exists():
         for path in sorted(decision_root.rglob("*.py")):
-            scanned_files += 1
+            scanned_files.add(path.resolve())
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in tree.body:
                 if _is_policy_import(node):
@@ -380,10 +380,10 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
     if source_root.exists():
         for path in sorted(source_root.rglob("*.py")):
             relative_path = path.relative_to(root).as_posix()
-            scanned_files += 1
+            scanned_files.add(path.resolve())
             module_name = _module_name_for_source_path(root, path)
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            for node in ast.walk(tree):
+            for node in tree.body:
                 if _is_dynamic_globals_all_assignment(node):
                     violations.append(
                         {
@@ -506,7 +506,7 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                     }
                 )
                 continue
-            scanned_files += 1
+            scanned_files.add(path.resolve())
             module_name = _module_name_for_source_path(root, path)
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
@@ -571,7 +571,7 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
                     "text": f"{line_count} lines > {_TARGET_SPLIT_MODULE_LINE_LIMIT}",
                 }
             )
-        scanned_files += 1
+        scanned_files.add(path.resolve())
         module_name = _module_name_for_source_path(root, path)
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         forbidden_targets = set(_TARGET_SPLIT_MODULE_IMPORT_TARGETS[relative_path])
@@ -610,9 +610,32 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
     for (relative_path, function_name), limit in _FUNCTION_LINE_LIMITS.items():
         path = root / relative_path
         if not path.exists():
+            violations.append(
+                {
+                    "rule": "function_line_target_missing",
+                    "path": relative_path,
+                    "line": None,
+                    "function": function_name,
+                    "limit": limit,
+                    "text": f"missing function target {function_name}",
+                }
+            )
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in _named_function_defs(tree, function_name):
+        function_defs = _named_function_defs(tree, function_name)
+        if not function_defs:
+            violations.append(
+                {
+                    "rule": "function_line_target_missing",
+                    "path": relative_path,
+                    "line": None,
+                    "function": function_name,
+                    "limit": limit,
+                    "text": f"missing function target {function_name}",
+                }
+            )
+            continue
+        for node in function_defs:
             if node.end_lineno is None:
                 continue
             line_count = node.end_lineno - node.lineno + 1
@@ -633,7 +656,7 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
     tests_root = root / "tests"
     if tests_root.exists():
         for path in sorted(tests_root.rglob("*.py")):
-            scanned_files += 1
+            scanned_files.add(path.resolve())
             relative_path = path.relative_to(root).as_posix()
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
@@ -668,7 +691,7 @@ def _run_architecture_static_check(project_root: str | Path) -> dict[str, Any]:
         "name": "architecture_static_check",
         "kind": "python_scan",
         "returncode": 1 if violations else 0,
-        "scanned_files": scanned_files,
+        "scanned_files": len(scanned_files),
         "facade_line_limit": _FACADE_LINE_LIMIT,
         "impl_line_limit": _FACADE_LINE_LIMIT,
         "runner_line_limits": dict(_RUNNER_LINE_LIMITS),

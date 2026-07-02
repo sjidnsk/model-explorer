@@ -437,17 +437,35 @@ def test_verification_catches_dynamic_globals_all_in_any_production_module(tmp_p
     from model_explorer.verification import _run_architecture_static_check
 
     _write_architecture_fixture(tmp_path)
-    target = "src/model_explorer/policy/planning_utils.py"
-    path = tmp_path / target
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("__all__ = [name for name in globals() if not name.startswith('__')]\n", encoding="utf-8")
+    module_target = "src/model_explorer/policy/planning_utils.py"
+    module_path = tmp_path / module_target
+    module_path.parent.mkdir(parents=True, exist_ok=True)
+    module_path.write_text(
+        "__all__ = [name for name in globals() if not name.startswith('__')]\n",
+        encoding="utf-8",
+    )
+    local_target = "src/model_explorer/policy/local_dynamic_all.py"
+    local_path = tmp_path / local_target
+    local_path.write_text(
+        "\n".join(
+            [
+                "def export_names():",
+                "    __all__ = [name for name in globals() if not name.startswith('__')]",
+                "    return __all__",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
 
     result = _run_architecture_static_check(tmp_path)
-
-    assert {
-        (violation["rule"], violation["path"])
+    dynamic_globals_all_paths = {
+        violation["path"]
         for violation in result["violations"]
-    } >= {("no_dynamic_globals_all", target)}
+        if violation["rule"] == "no_dynamic_globals_all"
+    }
+
+    assert dynamic_globals_all_paths == {module_target}
 
 
 def test_verification_catches_function_line_budget_violation(tmp_path: Path) -> None:
@@ -468,6 +486,34 @@ def test_verification_catches_function_line_budget_violation(tmp_path: Path) -> 
         (violation["rule"], violation["path"], violation["function"], violation["limit"])
         for violation in result["violations"]
     } >= {("function_line_limit", target, "collect_dynamic_rollout_episode", 180)}
+
+
+def test_verification_catches_missing_function_line_budget_target(tmp_path: Path) -> None:
+    from model_explorer.verification import _run_architecture_static_check
+
+    _write_architecture_fixture(tmp_path)
+    target = "src/model_explorer/policy/collector.py"
+    path = tmp_path / target
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("def other_function():\n    return None\n", encoding="utf-8")
+
+    result = _run_architecture_static_check(tmp_path)
+
+    assert {
+        (violation["rule"], violation["path"], violation["function"], violation["limit"])
+        for violation in result["violations"]
+    } >= {("function_line_target_missing", target, "collect_dynamic_rollout_episode", 180)}
+
+
+def test_verification_counts_unique_scanned_files(tmp_path: Path) -> None:
+    from model_explorer.verification import _run_architecture_static_check
+
+    _write_architecture_fixture(tmp_path)
+
+    result = _run_architecture_static_check(tmp_path)
+    expected_scanned_files = len({path.resolve() for path in tmp_path.rglob("*.py")})
+
+    assert result["scanned_files"] == expected_scanned_files
 
 
 def test_verification_catches_giant_test_budget_violation(tmp_path: Path) -> None:
