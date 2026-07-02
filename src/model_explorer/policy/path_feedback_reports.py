@@ -11,7 +11,7 @@ def _list_text(value: Any) -> str:
     return str(value)
 
 
-def render_path_feedback_markdown(summary: dict[str, Any]) -> str:
+def _legacy_render_path_feedback_markdown(summary: dict[str, Any]) -> str:
     lines = [
         "# Path Feedback Summary",
         "",
@@ -276,5 +276,12 @@ def render_path_feedback_markdown(summary: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def render_path_feedback_markdown(summary: dict[str, Any]) -> str:
+    from .path_feedback_report_sections import render_markdown_sections
+
+    return "\n".join(render_markdown_sections(summary))
+
 
 __all__ = ['render_path_feedback_markdown']

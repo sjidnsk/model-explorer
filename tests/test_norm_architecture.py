@@ -126,7 +126,9 @@ EXPECTED_CURRENT_FUNCTION_LINE_VIOLATIONS = {
     not in {
         ("src/model_explorer/experiments/quasi_real_matrix/reports.py", "_markdown_report"),
         ("src/model_explorer/experiments/reports.py", "_markdown_report"),
+        ("src/model_explorer/policy/path_feedback_summary.py", "compact_path_feedback_summary"),
         ("src/model_explorer/verification.py", "_run_architecture_static_check"),
+        ("src/model_explorer/policy/path_feedback_reports.py", "render_path_feedback_markdown"),
     }
 }
 

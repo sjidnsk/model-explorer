@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .path_feedback_manifest import PathFeedbackManifest
+from .path_feedback_compact_summary import compact_summary_payload
 from .planning_anchor_projection import anchor_projection_candidate_config_from_mapping
 
 
@@ -82,7 +83,7 @@ def validate_path_feedback_summary_contract(
     }
 
 
-def compact_path_feedback_summary(
+def _legacy_compact_path_feedback_summary_payload(
     summary: dict[str, Any],
     *,
     summary_output: Path | None = None,
@@ -511,6 +512,19 @@ def compact_path_feedback_summary(
     if report_output is not None:
         payload["report_output"] = str(report_output)
     return payload
+
+
+def compact_path_feedback_summary(
+    summary: dict[str, Any],
+    *,
+    summary_output: Path | None = None,
+    report_output: Path | None = None,
+) -> dict[str, Any]:
+    return compact_summary_payload(
+        summary,
+        summary_output=summary_output,
+        report_output=report_output,
+    )
 
 
 def _acceptance_metadata(
