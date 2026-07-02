@@ -203,4 +203,30 @@ run_reward_ablations = _run_reward_ablations
 comparison_from_evaluation = _comparison_from_evaluation
 aggregate_rollout_metrics = _aggregate_rollout_metrics
 
-__all__ = [name for name in globals() if not name.startswith("__")]
+__all__ = (
+    "Scenario",
+    "collect_rollout_episode",
+    "evaluate_policy_baseline_scenarios",
+    "evaluate_policy_baselines",
+    "RolloutEpisode",
+    "ExperimentManifest",
+    "ExperimentScenarioGroup",
+    "_reward_ablations",
+    "_collect_episodes",
+    "_load_split_scenarios",
+    "_all_split_scenarios",
+    "_all_split_episodes",
+    "_evaluation_split_name",
+    "_split_summaries",
+    "_grouped_evaluation",
+    "_run_reward_ablations",
+    "_should_evaluate_trained_policy",
+    "_comparison_from_evaluation",
+    "_aggregate_rollout_metrics",
+    "collect_episodes",
+    "load_split_scenarios",
+    "grouped_evaluation",
+    "run_reward_ablations",
+    "comparison_from_evaluation",
+    "aggregate_rollout_metrics",
+)

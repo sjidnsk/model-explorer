@@ -53,4 +53,10 @@ def _git_output(base_dir: Path, *args: str) -> str | None:
 environment_metadata = _environment_metadata
 git_metadata = _git_metadata
 
-__all__ = [name for name in globals() if not name.startswith("__")]
+__all__ = (
+    "_environment_metadata",
+    "_git_metadata",
+    "_git_output",
+    "environment_metadata",
+    "git_metadata",
+)

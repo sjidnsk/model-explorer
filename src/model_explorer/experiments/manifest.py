@@ -507,4 +507,35 @@ manifest_inspection_summary = _manifest_inspection_summary
 would_write_paths = _would_write_paths
 resolved_manifest_payload = _resolved_manifest_payload
 
-__all__ = [name for name in globals() if not name.startswith("__")]
+__all__ = (
+    "EXPERIMENT_SCHEMA_VERSION",
+    "ExperimentScenarioGroup",
+    "ExperimentSplit",
+    "ExperimentManifest",
+    "load_experiment_manifest",
+    "_planner_config_with_sidecar",
+    "_scenario_groups",
+    "_manifest_splits",
+    "_split_scenario_groups",
+    "_evaluation_groups_from_splits",
+    "_unique_scenario_paths",
+    "_scenario_paths",
+    "_resolve_path",
+    "_resolve_output_path",
+    "_ensure_parent_dir",
+    "_write_json",
+    "_optional_mapping",
+    "_system_calibration_config",
+    "_system_path_feedback_gate_enabled",
+    "_system_path_feedback_gate_config",
+    "_system_sample_quality_config",
+    "_manifest_inspection_summary",
+    "_would_write_paths",
+    "_resolved_manifest_payload",
+    "_training_would_write_paths",
+    "resolve_path",
+    "resolve_output_path",
+    "manifest_inspection_summary",
+    "would_write_paths",
+    "resolved_manifest_payload",
+)

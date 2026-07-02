@@ -678,4 +678,23 @@ policy_ranking = _policy_ranking
 architecture_deltas = _architecture_deltas
 loss_summary = _loss_summary
 
-__all__ = [name for name in globals() if not name.startswith("__")]
+__all__ = (
+    "_comparison_from_evaluation",
+    "_baseline_deltas",
+    "_metric_value",
+    "_numeric_stats",
+    "_daily_report_summary",
+    "_architecture_deltas",
+    "_policy_ranking",
+    "_ordered_policy_names",
+    "_per_group_winners",
+    "_failure_scenarios",
+    "_gate_summary",
+    "_markdown_report",
+    "_loss_summary",
+    "render_experiment_markdown",
+    "daily_report_summary",
+    "policy_ranking",
+    "architecture_deltas",
+    "loss_summary",
+)

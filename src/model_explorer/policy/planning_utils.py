@@ -173,4 +173,21 @@ def _optional_nonnegative_float(value: Any) -> float | None:
     return parsed if parsed >= 0.0 else None
 
 
-__all__ = [name for name in globals() if not name.startswith("__")]
+__all__ = (
+    "GoalCandidate",
+    "_numeric_experimental",
+    "_grid_distance",
+    "_manhattan_distance",
+    "_reconstruct_path",
+    "_metadata_or_config",
+    "_grid_rows",
+    "_finite_number",
+    "_path_length_from_route",
+    "_route_has_safety_or_fallback_issue",
+    "_cell_pair",
+    "_positive_int",
+    "_positive_float",
+    "_optional_positive_float",
+    "_optional_nonnegative_int",
+    "_optional_nonnegative_float",
+)

@@ -145,4 +145,12 @@ class PathPlanningAdapter(Protocol):
         ...
 
 
-__all__ = [name for name in globals() if not name.startswith("__")]
+__all__ = (
+    "GoalCandidate",
+    "ModelExplorerContract",
+    "PathPlanRequest",
+    "PathPlanResult",
+    "AnchorProjectionCandidateConfig",
+    "PathCandidateEvaluation",
+    "PathPlanningAdapter",
+)

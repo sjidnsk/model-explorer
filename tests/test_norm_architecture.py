@@ -69,19 +69,40 @@ ARCHITECTURE_FIXTURE_FILES = (
     "tests/test_quasi_real_data_pipeline.py",
 )
 
-EXPECTED_DYNAMIC_GLOBALS_ALL_FILES = (
-    "src/model_explorer/experiments/environment.py",
-    "src/model_explorer/experiments/evaluation.py",
-    "src/model_explorer/experiments/manifest.py",
-    "src/model_explorer/experiments/reports.py",
-    "src/model_explorer/experiments/selection.py",
-    "src/model_explorer/experiments/training_matrix.py",
-    "src/model_explorer/policy/path_feedback_runner.py",
-    "src/model_explorer/policy/planning_adapters.py",
-    "src/model_explorer/policy/planning_routes.py",
-    "src/model_explorer/policy/planning_types.py",
-    "src/model_explorer/policy/planning_utils.py",
+EXPLICIT_EXPORT_MODULES = (
+    "model_explorer.experiments.environment",
+    "model_explorer.experiments.evaluation",
+    "model_explorer.experiments.manifest",
+    "model_explorer.experiments.reports",
+    "model_explorer.experiments.selection",
+    "model_explorer.experiments.training_matrix",
+    "model_explorer.policy.path_feedback_runner",
+    "model_explorer.policy.planning_adapters",
+    "model_explorer.policy.planning_routes",
+    "model_explorer.policy.planning_types",
+    "model_explorer.policy.planning_utils",
 )
+
+FORBIDDEN_EXPLICIT_EXPORT_NAMES = {
+    "Any",
+    "Path",
+    "Protocol",
+    "Sequence",
+    "annotations",
+    "dataclass",
+    "field",
+    "heappop",
+    "heappush",
+    "hypot",
+    "importlib_util",
+    "isfinite",
+    "json",
+    "os",
+    "sqrt",
+    "subprocess",
+    "sys",
+    "tempfile",
+}
 
 EXPECTED_FUNCTION_LINE_LIMITS = {
     ("src/model_explorer/experiments/quasi_real_matrix/reports.py", "_markdown_report"): 180,
@@ -321,13 +342,8 @@ def test_verification_architecture_static_check_passes_target_governance_state()
     }
 
     assert result["returncode"] == 1
-    assert rule_counts == Counter(
-        {
-            "no_dynamic_globals_all": len(EXPECTED_DYNAMIC_GLOBALS_ALL_FILES),
-            "function_line_limit": len(EXPECTED_FUNCTION_LINE_LIMITS),
-        }
-    )
-    assert dynamic_globals_all_violations == set(EXPECTED_DYNAMIC_GLOBALS_ALL_FILES)
+    assert rule_counts == Counter({"function_line_limit": len(EXPECTED_FUNCTION_LINE_LIMITS)})
+    assert dynamic_globals_all_violations == set()
     assert function_limit_violations == {
         (path, function_name, limit)
         for (path, function_name), limit in EXPECTED_FUNCTION_LINE_LIMITS.items()
@@ -593,6 +609,40 @@ def test_legacy_facade_exports_do_not_leak_temporary_names() -> None:
     assert "evaluate_candidate_paths" in planning.__all__
     assert "run_path_feedback_manifest" in path_feedback.__all__
     assert "_selected_after_feedback" in path_feedback.__all__
+
+
+def test_target_split_modules_have_explicit_exports_without_temporary_names() -> None:
+    for module_name in EXPLICIT_EXPORT_MODULES:
+        module = importlib.import_module(module_name)
+        assert isinstance(module.__all__, tuple)
+        assert FORBIDDEN_EXPLICIT_EXPORT_NAMES.isdisjoint(set(module.__all__))
+
+
+def test_legacy_facade_imports_expose_key_symbols() -> None:
+    from model_explorer.experiments.environment import environment_metadata, git_metadata
+    from model_explorer.experiments.evaluation import aggregate_rollout_metrics, collect_episodes
+    from model_explorer.experiments.manifest import ExperimentManifest, load_experiment_manifest
+    from model_explorer.experiments.reports import render_experiment_markdown
+    from model_explorer.experiments.selection import select_best_training_run
+    from model_explorer.experiments.training_matrix import run_training
+    from model_explorer.policy.path_feedback import run_path_feedback_manifest
+    from model_explorer.policy.planning import PathPlanRequest, evaluate_candidate_paths
+
+    path_feedback_facade = importlib.import_module("model_explorer.policy.path_feedback")
+
+    assert callable(environment_metadata)
+    assert callable(git_metadata)
+    assert callable(aggregate_rollout_metrics)
+    assert callable(collect_episodes)
+    assert ExperimentManifest.__name__ == "ExperimentManifest"
+    assert callable(load_experiment_manifest)
+    assert callable(render_experiment_markdown)
+    assert callable(select_best_training_run)
+    assert callable(run_training)
+    assert callable(getattr(path_feedback_facade, "_selected_after_feedback"))
+    assert callable(run_path_feedback_manifest)
+    assert PathPlanRequest.__name__ == "PathPlanRequest"
+    assert callable(evaluate_candidate_paths)
 
 
 def test_runner_modules_are_only_orchestration_layers() -> None:
