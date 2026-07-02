@@ -106,6 +106,16 @@ def test_quasi_real_selection_facade_no_longer_defines_moved_private_helpers() -
     assert defined.isdisjoint(moved_private_names)
 
 
+def test_architecture_selection_summary_stays_within_split_line_budget() -> None:
+    tree = ast.parse((QUASI_REAL / "architecture_selection.py").read_text(encoding="utf-8"))
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+
+    summary = functions["_architecture_selection_summary"]
+
+    assert summary.end_lineno is not None
+    assert summary.end_lineno - summary.lineno + 1 <= 180
+
+
 class QuasiRealSelectionBehaviorTests(unittest.TestCase):
     def test_selection_decision_is_inconclusive_when_margin_is_within_seed_variance(self):
         from model_explorer.experiments.quasi_real_matrix.architecture_selection import selection_decision

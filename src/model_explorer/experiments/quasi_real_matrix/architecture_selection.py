@@ -30,169 +30,49 @@ def _architecture_selection_summary(
     *,
     stability_summary: dict[str, Any],
 ) -> dict[str, Any]:
-    config = _normalize_selection_config(manifest.selection_config)
-    metric = str(config["metric"])
-    mode = str(config["mode"])
-    composite_weights = dict(config["composite_weights"])
+    config, metric, mode, composite_weights = _architecture_selection_config(manifest)
     runs = _training_runs(experiment)
     architectures = _manifest_architectures(manifest)
     seeds = _manifest_seeds(manifest)
     dataset_summary = experiment.get("dataset_summary", {}) if isinstance(experiment, dict) else {}
-    per_architecture_values: dict[str, list[float]] = {architecture: [] for architecture in architectures}
-    loss_values: dict[str, list[float]] = {architecture: [] for architecture in architectures}
-    composite_values: dict[str, list[float]] = {architecture: [] for architecture in architectures}
-    composite_component_values: dict[str, dict[str, list[float]]] = {
-        architecture: {metric_name: [] for metric_name in composite_weights}
-        for architecture in architectures
-    }
-    exception_counts: dict[str, int] = {architecture: 0 for architecture in architectures}
-
-    for run in runs:
-        architecture = str(run.get("architecture", "unknown")) if isinstance(run, dict) else "unknown"
-        if architecture not in per_architecture_values:
-            per_architecture_values[architecture] = []
-            loss_values[architecture] = []
-            composite_values[architecture] = []
-            composite_component_values[architecture] = {
-                metric_name: [] for metric_name in composite_weights
-            }
-            exception_counts[architecture] = 0
-        if not isinstance(run, dict):
-            exception_counts[architecture] += 1
-            continue
-        if "error" in run or "exception" in run:
-            exception_counts[architecture] += 1
-        _append_metric({architecture: per_architecture_values[architecture]}, architecture, _run_selection_metric(run, metric))
-        _append_metric({architecture: loss_values[architecture]}, architecture, run.get("loss"))
-        validation_metrics = _evaluation_policy_metrics(run.get("validation_evaluation", {}), "torch_policy")
-        _append_metric(
-            {architecture: composite_values[architecture]},
-            architecture,
-            _selection_composite_score(validation_metrics, composite_weights),
-        )
-        for metric_name in composite_weights:
-            _append_metric(
-                composite_component_values[architecture],
-                metric_name,
-                _metric_value(validation_metrics, metric_name),
-            )
-
-    metric_stats = {
-        architecture: _numeric_summary(tuple(values))
-        for architecture, values in per_architecture_values.items()
-    }
-    loss_stats = {
-        architecture: _numeric_summary(tuple(values))
-        for architecture, values in loss_values.items()
-    }
-    composite_stats = {
-        architecture: _numeric_summary(tuple(values))
-        for architecture, values in composite_values.items()
-    }
-    composite_component_stats = {
-        architecture: {
-            metric_name: _numeric_summary(tuple(values))
-            for metric_name, values in metrics.items()
-        }
-        for architecture, metrics in composite_component_values.items()
-    }
-    quality_gates = _selection_quality_gates(
+    run_stats = _architecture_selection_run_stats(
+        runs,
+        architectures=architectures,
+        metric=metric,
+        composite_weights=composite_weights,
+    )
+    quality_gates = _architecture_selection_quality_gates(
         config,
+        runs=runs,
         architectures=architectures,
         seeds=seeds,
-        runs=runs,
-        metric_stats=metric_stats,
-        loss_stats=loss_stats,
-        exception_counts=exception_counts,
+        run_stats=run_stats,
         dataset_summary=dataset_summary,
     )
-    architecture_stability = (
-        stability_summary.get("architectures", {}) if isinstance(stability_summary, dict) else {}
-    )
-    architecture_details = {}
-    for architecture in architectures:
-        stability_metrics = architecture_stability.get(architecture, {}) if isinstance(architecture_stability, dict) else {}
-        architecture_details[architecture] = {
-            "run_count": _architecture_run_count(runs, architecture),
-            "exception_count": exception_counts.get(architecture, 0),
-            "failure_count": (
-                stability_metrics.get("torch_policy.failure_count", _numeric_summary(()))
-                if isinstance(stability_metrics, dict)
-                else _numeric_summary(())
-            ),
-            "selection_metric": metric_stats.get(architecture, _numeric_summary(())),
-            "selection_composite_score": composite_stats.get(architecture, _numeric_summary(())),
-            "selection_composite_components": composite_component_stats.get(architecture, {}),
-            "loss": loss_stats.get(architecture, _numeric_summary(())),
-            "baseline_deltas": (
-                stability_summary.get("baseline_deltas", {}).get(architecture, {})
-                if isinstance(stability_summary.get("baseline_deltas", {}), dict)
-                else {}
-            ),
-            "dataset": {
-                key: stability_metrics.get(f"dataset.{key}", {})
-                for key in (
-                    "unreachable_candidate_count",
-                    "padding_candidate_count",
-                    "missing_experimental_feature_candidate_count",
-                    "mask_stress_sample_count",
-                )
-            }
-            if isinstance(stability_metrics, dict)
-            else {},
-        }
-
-    decision_diagnostics = _decision_diagnostics_summary(runs, architectures=architectures)
-    action_sensitive_summary = _architecture_nested_metric_summary(
+    architecture_details = _architecture_selection_details(
         runs,
         architectures=architectures,
-        section="action_sensitive_metrics",
+        stability_summary=stability_summary,
+        run_stats=run_stats,
     )
-    oracle_regret_summary = _architecture_nested_metric_summary(
+    diagnostics = _architecture_selection_diagnostics(
         runs,
         architectures=architectures,
-        section="oracle_regret",
+        config=config,
+        composite_stats=run_stats["composite_stats"],
     )
-    sample_discriminativeness = _sample_discriminativeness_summary(runs)
-    per_group_action_outcomes = _per_group_action_outcomes(
-        runs,
-        architectures=architectures,
-        uncertainty_multiplier=float(config["uncertainty_multiplier"]),
-        decision_fn=_selection_decision,
+    base_summary = _architecture_selection_decision_payload(
+        config,
+        metric=metric,
+        mode=mode,
+        composite_weights=composite_weights,
+        runs=runs,
+        architecture_details=architecture_details,
+        stability_summary=stability_summary,
+        quality_gates=quality_gates,
+        diagnostics=diagnostics,
+        dataset_summary=dataset_summary,
     )
-    composite_decision = _selection_decision(
-        composite_stats,
-        metric="selection_composite_score",
-        mode="max",
-        uncertainty_multiplier=float(config["uncertainty_multiplier"]),
-    )
-    base_summary: dict[str, Any] = {
-        "enabled": bool(config["enabled"]),
-        "metric": metric,
-        "mode": mode,
-        "decision_boundary": "recommended_architecture or inconclusive based on seed variance",
-        "selection_composite_weights": composite_weights,
-        "composite_selection": composite_decision,
-        "decision_diagnostics": decision_diagnostics,
-        "action_sensitive_summary": action_sensitive_summary,
-        "oracle_regret_summary": oracle_regret_summary,
-        "sample_discriminativeness": sample_discriminativeness,
-        "per_group_action_outcomes": per_group_action_outcomes,
-        "quality_gates": quality_gates,
-        "architectures": architecture_details,
-        "loss_distribution": stability_summary.get("loss_distribution", {}) if isinstance(stability_summary, dict) else {},
-        "baseline_delta_distribution": (
-            stability_summary.get("baseline_deltas", {}) if isinstance(stability_summary, dict) else {}
-        ),
-        "per_group_winners": _per_group_architecture_winners(
-            runs,
-            metric=metric,
-            mode=mode,
-            uncertainty_multiplier=float(config["uncertainty_multiplier"]),
-        ),
-        "mask_stress_coverage": _mask_stress_coverage(dataset_summary),
-        "evaluation_scope": EVALUATION_SCOPE,
-    }
     if not bool(config["enabled"]):
         base_summary.update(
             {
@@ -214,18 +94,18 @@ def _architecture_selection_summary(
         )
         return base_summary
     decision = _selection_decision(
-        metric_stats,
+        run_stats["metric_stats"],
         metric=metric,
         mode=mode,
         uncertainty_multiplier=float(config["uncertainty_multiplier"]),
     )
     decision = _apply_decision_signal_guards(
         decision,
-        composite_decision=composite_decision,
-        decision_diagnostics=decision_diagnostics,
+        composite_decision=diagnostics["composite_decision"],
+        decision_diagnostics=diagnostics["decision_diagnostics"],
     )
     base_summary.update(decision)
-    base_summary["held_out_test_audit"] = _held_out_test_audit(
+    base_summary["held_out_test_audit"] = _architecture_selection_held_out_audit(
         runs,
         architectures=architectures,
         metric=metric,
@@ -235,6 +115,312 @@ def _architecture_selection_summary(
         composite_weights=composite_weights,
     )
     return base_summary
+
+
+def _architecture_selection_config(
+    manifest: QuasiRealEvaluationManifest,
+) -> tuple[dict[str, Any], str, str, dict[str, float]]:
+    config = _normalize_selection_config(manifest.selection_config)
+    return (
+        config,
+        str(config["metric"]),
+        str(config["mode"]),
+        dict(config["composite_weights"]),
+    )
+
+
+def _architecture_selection_run_stats(
+    runs: list[dict[str, Any]],
+    *,
+    architectures: list[str],
+    metric: str,
+    composite_weights: dict[str, float],
+) -> dict[str, Any]:
+    metric_values: dict[str, list[float]] = {architecture: [] for architecture in architectures}
+    loss_values: dict[str, list[float]] = {architecture: [] for architecture in architectures}
+    composite_values: dict[str, list[float]] = {architecture: [] for architecture in architectures}
+    composite_component_values: dict[str, dict[str, list[float]]] = {
+        architecture: {metric_name: [] for metric_name in composite_weights}
+        for architecture in architectures
+    }
+    exception_counts: dict[str, int] = {architecture: 0 for architecture in architectures}
+
+    for run in runs:
+        _append_architecture_selection_run_metrics(
+            run,
+            metric=metric,
+            composite_weights=composite_weights,
+            metric_values=metric_values,
+            loss_values=loss_values,
+            composite_values=composite_values,
+            composite_component_values=composite_component_values,
+            exception_counts=exception_counts,
+        )
+
+    return {
+        "metric_stats": _summarize_architecture_values(metric_values),
+        "loss_stats": _summarize_architecture_values(loss_values),
+        "composite_stats": _summarize_architecture_values(composite_values),
+        "composite_component_stats": {
+            architecture: _summarize_architecture_values(values)
+            for architecture, values in composite_component_values.items()
+        },
+        "exception_counts": exception_counts,
+    }
+
+
+def _append_architecture_selection_run_metrics(
+    run: dict[str, Any],
+    *,
+    metric: str,
+    composite_weights: dict[str, float],
+    metric_values: dict[str, list[float]],
+    loss_values: dict[str, list[float]],
+    composite_values: dict[str, list[float]],
+    composite_component_values: dict[str, dict[str, list[float]]],
+    exception_counts: dict[str, int],
+) -> None:
+    architecture = str(run.get("architecture", "unknown")) if isinstance(run, dict) else "unknown"
+    _ensure_architecture_metric_slots(
+        architecture,
+        composite_weights=composite_weights,
+        metric_values=metric_values,
+        loss_values=loss_values,
+        composite_values=composite_values,
+        composite_component_values=composite_component_values,
+        exception_counts=exception_counts,
+    )
+    if not isinstance(run, dict):
+        exception_counts[architecture] += 1
+        return
+    if "error" in run or "exception" in run:
+        exception_counts[architecture] += 1
+    validation_metrics = _evaluation_policy_metrics(run.get("validation_evaluation", {}), "torch_policy")
+    _append_metric(metric_values, architecture, _run_selection_metric(run, metric))
+    _append_metric(loss_values, architecture, run.get("loss"))
+    _append_metric(composite_values, architecture, _selection_composite_score(validation_metrics, composite_weights))
+    for metric_name in composite_weights:
+        _append_metric(composite_component_values[architecture], metric_name, _metric_value(validation_metrics, metric_name))
+
+
+def _ensure_architecture_metric_slots(
+    architecture: str,
+    *,
+    composite_weights: dict[str, float],
+    metric_values: dict[str, list[float]],
+    loss_values: dict[str, list[float]],
+    composite_values: dict[str, list[float]],
+    composite_component_values: dict[str, dict[str, list[float]]],
+    exception_counts: dict[str, int],
+) -> None:
+    if architecture in metric_values:
+        return
+    metric_values[architecture] = []
+    loss_values[architecture] = []
+    composite_values[architecture] = []
+    composite_component_values[architecture] = {
+        metric_name: [] for metric_name in composite_weights
+    }
+    exception_counts[architecture] = 0
+
+
+def _summarize_architecture_values(
+    values_by_architecture: dict[str, list[float]],
+) -> dict[str, dict[str, float | int]]:
+    return {
+        architecture: _numeric_summary(tuple(values))
+        for architecture, values in values_by_architecture.items()
+    }
+
+
+def _architecture_selection_quality_gates(
+    config: dict[str, Any],
+    *,
+    runs: list[dict[str, Any]],
+    architectures: list[str],
+    seeds: list[int],
+    run_stats: dict[str, Any],
+    dataset_summary: dict[str, Any],
+) -> dict[str, Any]:
+    return _selection_quality_gates(
+        config,
+        architectures=architectures,
+        seeds=seeds,
+        runs=runs,
+        metric_stats=run_stats["metric_stats"],
+        loss_stats=run_stats["loss_stats"],
+        exception_counts=run_stats["exception_counts"],
+        dataset_summary=dataset_summary,
+    )
+
+
+def _architecture_selection_details(
+    runs: list[dict[str, Any]],
+    *,
+    architectures: list[str],
+    stability_summary: dict[str, Any],
+    run_stats: dict[str, Any],
+) -> dict[str, Any]:
+    architecture_stability = (
+        stability_summary.get("architectures", {}) if isinstance(stability_summary, dict) else {}
+    )
+    return {
+        architecture: _architecture_selection_detail(
+            runs,
+            architecture=architecture,
+            stability_summary=stability_summary,
+            stability_metrics=(
+                architecture_stability.get(architecture, {})
+                if isinstance(architecture_stability, dict)
+                else {}
+            ),
+            run_stats=run_stats,
+        )
+        for architecture in architectures
+    }
+
+
+def _architecture_selection_detail(
+    runs: list[dict[str, Any]],
+    *,
+    architecture: str,
+    stability_summary: dict[str, Any],
+    stability_metrics: dict[str, Any],
+    run_stats: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "run_count": _architecture_run_count(runs, architecture),
+        "exception_count": run_stats["exception_counts"].get(architecture, 0),
+        "failure_count": (
+            stability_metrics.get("torch_policy.failure_count", _numeric_summary(()))
+            if isinstance(stability_metrics, dict)
+            else _numeric_summary(())
+        ),
+        "selection_metric": run_stats["metric_stats"].get(architecture, _numeric_summary(())),
+        "selection_composite_score": run_stats["composite_stats"].get(architecture, _numeric_summary(())),
+        "selection_composite_components": run_stats["composite_component_stats"].get(architecture, {}),
+        "loss": run_stats["loss_stats"].get(architecture, _numeric_summary(())),
+        "baseline_deltas": (
+            stability_summary.get("baseline_deltas", {}).get(architecture, {})
+            if isinstance(stability_summary.get("baseline_deltas", {}), dict)
+            else {}
+        ),
+        "dataset": _architecture_selection_dataset_detail(stability_metrics),
+    }
+
+
+def _architecture_selection_dataset_detail(stability_metrics: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(stability_metrics, dict):
+        return {}
+    return {
+        key: stability_metrics.get(f"dataset.{key}", {})
+        for key in (
+            "unreachable_candidate_count",
+            "padding_candidate_count",
+            "missing_experimental_feature_candidate_count",
+            "mask_stress_sample_count",
+        )
+    }
+
+
+def _architecture_selection_diagnostics(
+    runs: list[dict[str, Any]],
+    *,
+    architectures: list[str],
+    config: dict[str, Any],
+    composite_stats: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    uncertainty_multiplier = float(config["uncertainty_multiplier"])
+    return {
+        "composite_decision": _selection_decision(
+            composite_stats,
+            metric="selection_composite_score",
+            mode="max",
+            uncertainty_multiplier=uncertainty_multiplier,
+        ),
+        "decision_diagnostics": _decision_diagnostics_summary(runs, architectures=architectures),
+        "action_sensitive_summary": _architecture_nested_metric_summary(
+            runs,
+            architectures=architectures,
+            section="action_sensitive_metrics",
+        ),
+        "oracle_regret_summary": _architecture_nested_metric_summary(
+            runs,
+            architectures=architectures,
+            section="oracle_regret",
+        ),
+        "sample_discriminativeness": _sample_discriminativeness_summary(runs),
+        "per_group_action_outcomes": _per_group_action_outcomes(
+            runs,
+            architectures=architectures,
+            uncertainty_multiplier=uncertainty_multiplier,
+            decision_fn=_selection_decision,
+        ),
+    }
+
+
+def _architecture_selection_decision_payload(
+    config: dict[str, Any],
+    *,
+    metric: str,
+    mode: str,
+    composite_weights: dict[str, float],
+    runs: list[dict[str, Any]],
+    architecture_details: dict[str, Any],
+    stability_summary: dict[str, Any],
+    quality_gates: dict[str, Any],
+    diagnostics: dict[str, Any],
+    dataset_summary: dict[str, Any],
+) -> dict[str, Any]:
+    uncertainty_multiplier = float(config["uncertainty_multiplier"])
+    return {
+        "enabled": bool(config["enabled"]),
+        "metric": metric,
+        "mode": mode,
+        "decision_boundary": "recommended_architecture or inconclusive based on seed variance",
+        "selection_composite_weights": composite_weights,
+        "composite_selection": diagnostics["composite_decision"],
+        "decision_diagnostics": diagnostics["decision_diagnostics"],
+        "action_sensitive_summary": diagnostics["action_sensitive_summary"],
+        "oracle_regret_summary": diagnostics["oracle_regret_summary"],
+        "sample_discriminativeness": diagnostics["sample_discriminativeness"],
+        "per_group_action_outcomes": diagnostics["per_group_action_outcomes"],
+        "quality_gates": quality_gates,
+        "architectures": architecture_details,
+        "loss_distribution": stability_summary.get("loss_distribution", {}) if isinstance(stability_summary, dict) else {},
+        "baseline_delta_distribution": (
+            stability_summary.get("baseline_deltas", {}) if isinstance(stability_summary, dict) else {}
+        ),
+        "per_group_winners": _per_group_architecture_winners(
+            runs,
+            metric=metric,
+            mode=mode,
+            uncertainty_multiplier=uncertainty_multiplier,
+        ),
+        "mask_stress_coverage": _mask_stress_coverage(dataset_summary),
+        "evaluation_scope": EVALUATION_SCOPE,
+    }
+
+
+def _architecture_selection_held_out_audit(
+    runs: list[dict[str, Any]],
+    *,
+    architectures: list[str],
+    metric: str,
+    mode: str,
+    uncertainty_multiplier: float,
+    validation_decision: dict[str, Any],
+    composite_weights: dict[str, float],
+) -> dict[str, Any]:
+    return _held_out_test_audit(
+        runs,
+        architectures=architectures,
+        metric=metric,
+        mode=mode,
+        uncertainty_multiplier=uncertainty_multiplier,
+        validation_decision=validation_decision,
+        composite_weights=composite_weights,
+    )
 
 
 def _selection_composite_score(metrics: dict[str, Any], weights: dict[str, float]) -> float:
