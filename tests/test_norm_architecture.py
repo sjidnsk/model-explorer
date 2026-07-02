@@ -30,7 +30,9 @@ ARCHITECTURE_FIXTURE_FILES = (
     "src/model_explorer/policy/path_feedback_diagnostics.py",
     "src/model_explorer/policy/path_feedback_manifest.py",
     "src/model_explorer/policy/path_feedback_reports.py",
+    "src/model_explorer/policy/path_feedback_report_sections.py",
     "src/model_explorer/policy/path_feedback_summary.py",
+    "src/model_explorer/policy/path_feedback_compact_summary.py",
     "src/model_explorer/policy/feedback_selection.py",
     "src/model_explorer/policy/planning_anchor.py",
     "src/model_explorer/policy/planning_diagnostics.py",
@@ -38,11 +40,16 @@ ARCHITECTURE_FIXTURE_FILES = (
     "src/model_explorer/experiments/evaluation.py",
     "src/model_explorer/experiments/manifest.py",
     "src/model_explorer/experiments/reports.py",
+    "src/model_explorer/experiments/report_sections.py",
     "src/model_explorer/experiments/selection.py",
     "src/model_explorer/experiments/training_matrix.py",
+    "src/model_explorer/experiments/training_dimensions.py",
+    "src/model_explorer/experiments/training_execution.py",
+    "src/model_explorer/experiments/training_outputs.py",
     "src/model_explorer/experiments/quasi_real_matrix/manifest.py",
     "src/model_explorer/experiments/quasi_real_matrix/metrics.py",
     "src/model_explorer/experiments/quasi_real_matrix/reports.py",
+    "src/model_explorer/experiments/quasi_real_matrix/report_sections.py",
     "src/model_explorer/experiments/quasi_real_matrix/scenario_generation.py",
     "src/model_explorer/experiments/quasi_real_matrix/selection.py",
     "src/model_explorer/policy/path_feedback_diagnostic_aggregate.py",
@@ -693,6 +700,8 @@ def test_runner_modules_are_only_orchestration_layers() -> None:
 
 
 def test_split_modules_do_not_import_their_runner() -> None:
+    from model_explorer.verification import _RUNNER_SPLIT_MODULES
+
     runner_splits = {
         "model_explorer.policy.path_feedback_runner": [
             SRC_ROOT / "policy" / "feedback_selection.py",
@@ -700,20 +709,27 @@ def test_split_modules_do_not_import_their_runner() -> None:
             SRC_ROOT / "policy" / "path_feedback_diagnostics.py",
             SRC_ROOT / "policy" / "path_feedback_manifest.py",
             SRC_ROOT / "policy" / "path_feedback_reports.py",
+            SRC_ROOT / "policy" / "path_feedback_report_sections.py",
             SRC_ROOT / "policy" / "path_feedback_summary.py",
+            SRC_ROOT / "policy" / "path_feedback_compact_summary.py",
         ],
         "model_explorer.experiments.runner": [
             SRC_ROOT / "experiments" / "environment.py",
             SRC_ROOT / "experiments" / "evaluation.py",
             SRC_ROOT / "experiments" / "manifest.py",
             SRC_ROOT / "experiments" / "reports.py",
+            SRC_ROOT / "experiments" / "report_sections.py",
             SRC_ROOT / "experiments" / "selection.py",
             SRC_ROOT / "experiments" / "training_matrix.py",
+            SRC_ROOT / "experiments" / "training_dimensions.py",
+            SRC_ROOT / "experiments" / "training_execution.py",
+            SRC_ROOT / "experiments" / "training_outputs.py",
         ],
         "model_explorer.experiments.quasi_real_matrix.runner": [
             SRC_ROOT / "experiments" / "quasi_real_matrix" / "manifest.py",
             SRC_ROOT / "experiments" / "quasi_real_matrix" / "metrics.py",
             SRC_ROOT / "experiments" / "quasi_real_matrix" / "reports.py",
+            SRC_ROOT / "experiments" / "quasi_real_matrix" / "report_sections.py",
             SRC_ROOT / "experiments" / "quasi_real_matrix" / "scenario_generation.py",
             SRC_ROOT / "experiments" / "quasi_real_matrix" / "selection.py",
             SRC_ROOT / "experiments" / "quasi_real_matrix" / "quality_gates.py",
@@ -722,6 +738,14 @@ def test_split_modules_do_not_import_their_runner() -> None:
             SRC_ROOT / "experiments" / "quasi_real_matrix" / "stability.py",
         ],
     }
+    configured_paths = {
+        runner: {MODEL_ROOT / path for path in paths}
+        for runner, paths in _RUNNER_SPLIT_MODULES.items()
+    }
+    expected_paths = {runner: set(paths) for runner, paths in runner_splits.items()}
+    for runner, paths in configured_paths.items():
+        assert paths <= expected_paths[runner]
+
     violations: list[str] = []
     for runner_module, paths in runner_splits.items():
         for path in paths:
