@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +15,32 @@ from .manifest import (
 )
 from .metrics import _int_value
 from .architecture_selection import _architecture_selection_summary
+from .report_sections import (
+    render_action_sensitive_section,
+    render_architecture_delta_details_section,
+    render_architecture_selection_section,
+    render_architecture_stability_section,
+    render_architectures_section,
+    render_baseline_comparison_section,
+    render_baseline_delta_summary_section,
+    render_coverage_warnings_section,
+    render_dataset_quality_section,
+    render_failure_scenarios_section,
+    render_header_section,
+    render_held_out_test_audit_section,
+    render_loss_distribution_section,
+    render_mask_stress_section,
+    render_oracle_regret_section,
+    render_per_group_winners_section,
+    render_per_roi_action_outcomes_section,
+    render_policy_decision_diagnostics_section,
+    render_policy_ranking_section,
+    render_quality_gates_section,
+    render_roi_splits_section,
+    render_sample_discriminativeness_section,
+    render_selection_composite_section,
+    render_split_counts_section,
+)
 from .stability import _stability_summary
 
 
@@ -104,602 +129,32 @@ def _markdown_report(summary: dict[str, Any]) -> str:
     experiment = summary.get("experiment", {})
     dataset_summary = experiment.get("dataset_summary", {}) if isinstance(experiment, dict) else {}
     training = experiment.get("training", {}) if isinstance(experiment, dict) else {}
-    lines = [
-        "# Quasi-real South Pole Evaluation Matrix",
-        "",
-        f"- evaluation_scope: {summary['evaluation_scope']}",
-        f"- data_class: {summary['data_class']}",
-        f"- dataset_id: {summary['dataset_id']}",
-        f"- region: {summary['region']}",
-        f"- roi_count: {summary['roi_count']}",
-        f"- mask_stress_augmented: {summary.get('mask_stress_augmented', False)}",
-        "",
-        "## ROI Splits",
-        "",
-        "| split | roi | x | y | width | height | scenarios |",
-        "|---|---|---:|---:|---:|---:|---:|",
-    ]
-    for roi in summary.get("rois", []):
-        bounds = roi.get("bounds", {}) if isinstance(roi, dict) else {}
-        lines.append(
-            "| "
-            + " | ".join(
-                (
-                    str(roi.get("split", "")),
-                    str(roi.get("name", "")),
-                    str(bounds.get("x", 0)),
-                    str(bounds.get("y", 0)),
-                    str(bounds.get("width", 0)),
-                    str(bounds.get("height", 0)),
-                    str(roi.get("scenario_count", 0)),
-                )
-            )
-            + " |"
-        )
-    split_counts = summary.get("splits", {})
-    if isinstance(split_counts, dict) and split_counts:
-        lines.extend(["", "## Split Counts", "", "| split | scenarios |", "|---|---:|"])
-        for split, count in split_counts.items():
-            lines.append(f"| {split} | {count} |")
-    lines.extend(["", "## Dataset Quality", "", "| metric | value |", "|---|---:|"])
-    if isinstance(dataset_summary, dict):
-        for key in (
-            "episode_count",
-            "transition_count",
-            "trainable_transition_count",
-            "roi_count",
-            "unreachable_candidate_count",
-            "action_mask_valid_mean",
-            "unreachable_candidate_rate",
-            "padding_candidate_count",
-            "padding_candidate_rate",
-            "missing_experimental_feature_candidate_count",
-            "mask_stress_sample_count",
-            "mask_stress_sample_rate",
-            "mask_stress_augmented",
-            "non_finite_reward_count",
-        ):
-            lines.append(f"| {key} | {dataset_summary.get(key, 0)} |")
-        reward = dataset_summary.get("reward", {})
-        if isinstance(reward, dict):
-            lines.append(f"| reward_mean | {reward.get('mean', 0.0)} |")
-            lines.append(f"| reward_std | {reward.get('std', 0.0)} |")
-    mask_stress = summary.get("mask_stress", {})
-    lines.extend(["", "## Mask-Stress Coverage", "", "| metric | value |", "|---|---:|"])
-    if isinstance(mask_stress, dict):
-        for key in ("enabled", "label", "profile", "unreachable_candidate_count", "missing_experimental_fields"):
-            lines.append(f"| {key} | {mask_stress.get(key, '')} |")
-    if isinstance(dataset_summary, dict):
-        for key in (
-            "mask_stress_augmented",
-            "mask_stress_sample_count",
-            "unreachable_candidate_count",
-            "padding_candidate_count",
-            "missing_experimental_feature_candidate_count",
-        ):
-            lines.append(f"| {key} | {dataset_summary.get(key, 0)} |")
-    lines.append(f"| evaluation_scope | {summary['evaluation_scope']} |")
-    coverage_warnings = summary.get("coverage_warnings", [])
-    lines.extend(["", "## Sample Coverage Warnings", ""])
-    if isinstance(coverage_warnings, list) and coverage_warnings:
-        for warning in coverage_warnings:
-            lines.append(f"- {warning}")
-    else:
-        lines.append("- none")
     selection = summary.get("architecture_selection", {})
-    if isinstance(selection, dict):
-        lines.extend(["", "## Architecture Selection Gate", "", "| field | value |", "|---|---|"])
-        for key in (
-            "enabled",
-            "status",
-            "decision",
-            "recommended_architecture",
-            "metric",
-            "mode",
-            "reason",
-            "decision_boundary",
-            "baseline_delta_distribution",
-        ):
-            value = selection.get(key)
-            if isinstance(value, (dict, list)):
-                value = json.dumps(value, ensure_ascii=False, sort_keys=True)
-            lines.append(f"| {key} | {value} |")
-        quality = selection.get("quality_gates", {})
-        if isinstance(quality, dict):
-            lines.append(f"| quality_gate_status | {quality.get('status', 'unknown')} |")
-            violations = quality.get("violations", [])
-            if isinstance(violations, list):
-                lines.append(f"| quality_gate_violation_count | {len(violations)} |")
-        mask_coverage = selection.get("mask_stress_coverage", {})
-        if isinstance(mask_coverage, dict):
-            for key in (
-                "unreachable_candidate_count",
-                "padding_candidate_count",
-                "missing_experimental_feature_candidate_count",
-                "mask_stress_sample_count",
-            ):
-                lines.append(f"| {key} | {mask_coverage.get(key, 0)} |")
-        architectures = selection.get("architectures", {})
-        if isinstance(architectures, dict) and architectures:
-            lines.extend(
-                [
-                    "",
-                    "### Architecture Selection Metrics",
-                    "",
-                    "| architecture | run_count | exception_count | failure_count_mean | selection_metric_mean | selection_metric_std | loss_mean | loss_std |",
-                    "|---|---:|---:|---:|---:|---:|---:|---:|",
-                ]
-            )
-            for architecture, details in architectures.items():
-                if not isinstance(details, dict):
-                    continue
-                metric_stats = details.get("selection_metric", {})
-                loss_stats = details.get("loss", {})
-                failure_stats = details.get("failure_count", {})
-                lines.append(
-                    "| "
-                    + " | ".join(
-                        (
-                            str(architecture),
-                            str(details.get("run_count", 0)),
-                            str(details.get("exception_count", 0)),
-                            str(failure_stats.get("mean", 0.0) if isinstance(failure_stats, dict) else 0.0),
-                            str(metric_stats.get("mean", 0.0) if isinstance(metric_stats, dict) else 0.0),
-                            str(metric_stats.get("std", 0.0) if isinstance(metric_stats, dict) else 0.0),
-                            str(loss_stats.get("mean", 0.0) if isinstance(loss_stats, dict) else 0.0),
-                            str(loss_stats.get("std", 0.0) if isinstance(loss_stats, dict) else 0.0),
-                        )
-                    )
-                    + " |"
-                )
-        per_group = selection.get("per_group_winners", {})
-        if isinstance(per_group, dict) and per_group:
-            lines.extend(
-                [
-                    "",
-                    "### Architecture Per-Group Winners",
-                    "",
-                    "| group | winner | reason |",
-                    "|---|---|---|",
-                ]
-            )
-            for group_name, winner in per_group.items():
-                if not isinstance(winner, dict):
-                    continue
-                lines.append(
-                    f"| {group_name} | {winner.get('decision', winner.get('recommended_architecture'))} | {winner.get('reason', '')} |"
-                )
-        decision_diagnostics = selection.get("decision_diagnostics", {})
-        if isinstance(decision_diagnostics, dict):
-            lines.extend(["", "## Policy Decision Diagnostics", "", "- architecture_agreement_matrix: present"])
-            warnings = decision_diagnostics.get("warnings", [])
-            if isinstance(warnings, list) and warnings:
-                for warning in warnings:
-                    lines.append(f"- warning: {warning}")
-            else:
-                lines.append("- warning: none")
-            matrix = decision_diagnostics.get("architecture_agreement_matrix", {})
-            if isinstance(matrix, dict) and matrix:
-                lines.extend(
-                    [
-                        "",
-                        "| left_architecture | right_architecture | compared | agreement_rate |",
-                        "|---|---|---:|---:|",
-                    ]
-                )
-                for left, row in matrix.items():
-                    if not isinstance(row, dict):
-                        continue
-                    for right, cell in row.items():
-                        if not isinstance(cell, dict):
-                            continue
-                        lines.append(
-                            "| "
-                            + " | ".join(
-                                (
-                                    str(left),
-                                    str(right),
-                                    str(cell.get("compared", 0)),
-                                    str(cell.get("agreement_rate", 0.0)),
-                                )
-                            )
-                            + " |"
-                        )
-            baseline_agreement = decision_diagnostics.get("architecture_baseline_agreement", {})
-            if isinstance(baseline_agreement, dict) and baseline_agreement:
-                lines.extend(
-                    [
-                        "",
-                        "| architecture | samples | utility_agreement_rate | coverage_heuristic_agreement_rate |",
-                        "|---|---:|---:|---:|",
-                    ]
-                )
-                for architecture, agreement in baseline_agreement.items():
-                    if not isinstance(agreement, dict):
-                        continue
-                    lines.append(
-                        "| "
-                        + " | ".join(
-                            (
-                                str(architecture),
-                                str(agreement.get("sample_count", 0)),
-                                str(agreement.get("utility_agreement_rate", 0.0)),
-                                str(agreement.get("coverage_heuristic_agreement_rate", 0.0)),
-                            )
-                        )
-                        + " |"
-                    )
-            per_group_disagreement = decision_diagnostics.get("per_group_disagreement", {})
-            if isinstance(per_group_disagreement, dict) and per_group_disagreement:
-                lines.extend(
-                    [
-                        "",
-                        "| group | compared | disagreement_rate |",
-                        "|---|---:|---:|",
-                    ]
-                )
-                for group, disagreement in per_group_disagreement.items():
-                    if not isinstance(disagreement, dict):
-                        continue
-                    lines.append(
-                        f"| {group} | {disagreement.get('compared', 0)} | {disagreement.get('disagreement_rate', 0.0)} |"
-                    )
-        composite_selection = selection.get("composite_selection", {})
-        lines.extend(["", "## Selection Composite Metrics", "", "| field | value |", "|---|---|"])
-        lines.append(
-            "| selection_composite_weights | "
-            + json.dumps(selection.get("selection_composite_weights", {}), ensure_ascii=False, sort_keys=True)
-            + " |"
-        )
-        if isinstance(composite_selection, dict):
-            for key in ("status", "decision", "recommended_architecture", "reason"):
-                lines.append(f"| composite_{key} | {composite_selection.get(key)} |")
-        architectures = selection.get("architectures", {})
-        if isinstance(architectures, dict) and architectures:
-            lines.extend(
-                [
-                    "",
-                    "| architecture | selection_composite_score_mean | selection_composite_score_std |",
-                    "|---|---:|---:|",
-                ]
-            )
-            for architecture, details in architectures.items():
-                if not isinstance(details, dict):
-                    continue
-                composite_stats = details.get("selection_composite_score", {})
-                if not isinstance(composite_stats, dict):
-                    composite_stats = {}
-                lines.append(
-                    f"| {architecture} | {composite_stats.get('mean', 0.0)} | {composite_stats.get('std', 0.0)} |"
-                )
-        action_sensitive = selection.get("action_sensitive_summary", {})
-        if isinstance(action_sensitive, dict):
-            lines.extend(
-                [
-                    "",
-                    "## Action-Sensitive Metrics",
-                    "",
-                    "| architecture | metric | mean | std | min | max | samples |",
-                    "|---|---|---:|---:|---:|---:|---:|",
-                ]
-            )
-            for architecture, metrics in action_sensitive.items():
-                if not isinstance(metrics, dict):
-                    continue
-                for metric, stats in metrics.items():
-                    if not isinstance(stats, dict):
-                        continue
-                    lines.append(
-                        "| "
-                        + " | ".join(
-                            (
-                                str(architecture),
-                                str(metric),
-                                str(stats.get("mean", 0.0)),
-                                str(stats.get("std", 0.0)),
-                                str(stats.get("min", 0.0)),
-                                str(stats.get("max", 0.0)),
-                                str(stats.get("count", 0)),
-                            )
-                        )
-                        + " |"
-                    )
-        oracle_regret = selection.get("oracle_regret_summary", {})
-        if isinstance(oracle_regret, dict):
-            lines.extend(
-                [
-                    "",
-                    "## Oracle Regret Summary",
-                    "",
-                    "| architecture | metric | mean | std | min | max | samples |",
-                    "|---|---|---:|---:|---:|---:|---:|",
-                ]
-            )
-            for architecture, metrics in oracle_regret.items():
-                if not isinstance(metrics, dict):
-                    continue
-                for metric, stats in metrics.items():
-                    if not isinstance(stats, dict):
-                        continue
-                    lines.append(
-                        "| "
-                        + " | ".join(
-                            (
-                                str(architecture),
-                                str(metric),
-                                str(stats.get("mean", 0.0)),
-                                str(stats.get("std", 0.0)),
-                                str(stats.get("min", 0.0)),
-                                str(stats.get("max", 0.0)),
-                                str(stats.get("count", 0)),
-                            )
-                        )
-                        + " |"
-                    )
-        sample_discriminativeness = selection.get("sample_discriminativeness", {})
-        if isinstance(sample_discriminativeness, dict):
-            lines.extend(["", "## Sample Discriminativeness", ""])
-            warnings = sample_discriminativeness.get("warnings", [])
-            lines.append(f"- status: {sample_discriminativeness.get('status', 'unknown')}")
-            if isinstance(warnings, list) and warnings:
-                for warning in warnings:
-                    lines.append(f"- warning: {warning}")
-            else:
-                lines.append("- warning: none")
-            sample_metrics = sample_discriminativeness.get("metrics", {})
-            if isinstance(sample_metrics, dict):
-                lines.extend(["", "| metric | mean | std | min | max | samples |", "|---|---:|---:|---:|---:|---:|"])
-                for metric, stats in sample_metrics.items():
-                    if not isinstance(stats, dict):
-                        continue
-                    lines.append(
-                        "| "
-                        + " | ".join(
-                            (
-                                str(metric),
-                                str(stats.get("mean", 0.0)),
-                                str(stats.get("std", 0.0)),
-                                str(stats.get("min", 0.0)),
-                                str(stats.get("max", 0.0)),
-                                str(stats.get("count", 0)),
-                            )
-                        )
-                        + " |"
-                    )
-        per_group_action = selection.get("per_group_action_outcomes", {})
-        if isinstance(per_group_action, dict):
-            lines.extend(
-                [
-                    "",
-                    "## Per-ROI Action Outcomes",
-                    "",
-                    "| group | decision | architecture | coverage_regret_mean | composite_regret_mean | selected_expected_coverage_delta_mean | reason |",
-                    "|---|---|---|---:|---:|---:|---|",
-                ]
-            )
-            for group_name, group_summary in per_group_action.items():
-                if not isinstance(group_summary, dict):
-                    continue
-                group_architectures = group_summary.get("architectures", {})
-                if not isinstance(group_architectures, dict):
-                    group_architectures = {}
-                for architecture, metrics in group_architectures.items():
-                    if not isinstance(metrics, dict):
-                        continue
-                    coverage_regret = metrics.get("coverage_regret", {})
-                    composite_regret = metrics.get("composite_regret", {})
-                    selected_coverage = metrics.get("selected_expected_coverage_delta", {})
-                    lines.append(
-                        "| "
-                        + " | ".join(
-                            (
-                                str(group_name),
-                                str(group_summary.get("decision", "inconclusive")),
-                                str(architecture),
-                                str(coverage_regret.get("mean", 0.0) if isinstance(coverage_regret, dict) else 0.0),
-                                str(composite_regret.get("mean", 0.0) if isinstance(composite_regret, dict) else 0.0),
-                                str(selected_coverage.get("mean", 0.0) if isinstance(selected_coverage, dict) else 0.0),
-                                str(group_summary.get("reason", "")),
-                            )
-                        )
-                        + " |"
-                    )
-        held_out = selection.get("held_out_test_audit", {})
-        if isinstance(held_out, dict):
-            lines.extend(["", "## Held-out Test Audit", "", "| field | value |", "|---|---|"])
-            for key in (
-                "status",
-                "used_for_selection",
-                "split",
-                "validation_decision",
-                "validation_recommended_architecture",
-                "stable_with_validation",
-                "reason",
-                "evaluation_scope",
-            ):
-                if key in held_out:
-                    lines.append(f"| {key} | {held_out.get(key)} |")
-    quality_gates = summary.get("quality_gates", {})
-    lines.extend(["", "## Quality Gates", "", "| gate | value |", "|---|---:|"])
-    if isinstance(quality_gates, dict) and quality_gates:
-        for key, value in quality_gates.items():
-            lines.append(f"| {key} | {value} |")
-    else:
-        lines.append("| none | not configured |")
-    lines.extend(["", "## Architectures", "", "| architecture |", "|---|"])
-    for architecture in training.get("architectures", []):
-        lines.append(f"| {architecture} |")
     stability_summary = summary.get("stability_summary", {})
-    architecture_stability = (
-        stability_summary.get("architectures", {}) if isinstance(stability_summary, dict) else {}
-    )
-    if isinstance(architecture_stability, dict) and architecture_stability:
-        lines.extend(
-            [
-                "",
-                "## Architecture Stability",
-                "",
-                "| architecture | metric | mean | std | min | max | samples |",
-                "|---|---|---:|---:|---:|---:|---:|",
-            ]
-        )
-        for architecture, metrics in architecture_stability.items():
-            if not isinstance(metrics, dict):
-                continue
-            for metric, stats in metrics.items():
-                if metric == "run_count" or not isinstance(stats, dict):
-                    continue
-                lines.append(
-                    "| "
-                    + " | ".join(
-                        (
-                            str(architecture),
-                            str(metric),
-                            str(stats.get("mean", 0.0)),
-                            str(stats.get("std", 0.0)),
-                            str(stats.get("min", 0.0)),
-                            str(stats.get("max", 0.0)),
-                            str(stats.get("count", 0)),
-                        )
-                    )
-                    + " |"
-                )
-    loss_distribution = (
-        stability_summary.get("loss_distribution", {}) if isinstance(stability_summary, dict) else {}
-    )
-    if isinstance(loss_distribution, dict) and loss_distribution:
-        lines.extend(["", "## Loss Distribution", "", "| metric | mean | std | min | max | samples |", "|---|---:|---:|---:|---:|---:|"])
-        for metric, stats in loss_distribution.items():
-            if not isinstance(stats, dict):
-                continue
-            lines.append(
-                "| "
-                + " | ".join(
-                    (
-                        str(metric),
-                        str(stats.get("mean", 0.0)),
-                        str(stats.get("std", 0.0)),
-                        str(stats.get("min", 0.0)),
-                        str(stats.get("max", 0.0)),
-                        str(stats.get("count", 0)),
-                    )
-                )
-                + " |"
-            )
-    lines.extend(["", "## Baseline Comparison", "", "| section | status |", "|---|---|"])
-    lines.append("| utility | present |")
-    lines.append("| coverage_heuristic | present |")
-    lines.append("| torch_policy | present |")
-    policy_ranking = experiment.get("policy_ranking", {}) if isinstance(experiment, dict) else {}
-    if isinstance(policy_ranking, list) and policy_ranking:
-        lines.extend(
-            [
-                "",
-                "## Policy Ranking",
-                "",
-                "| rank | policy | final_coverage_rate | total_path_cost | failures |",
-                "|---:|---|---:|---:|---:|",
-            ]
-        )
-        for row in policy_ranking:
-            if not isinstance(row, dict):
-                continue
-            lines.append(
-                "| "
-                + " | ".join(
-                    (
-                        str(row.get("rank", "")),
-                        str(row.get("policy", "")),
-                        str(row.get("final_coverage_rate", 0.0)),
-                        str(row.get("total_path_cost", 0.0)),
-                        str(row.get("failure_count", 0)),
-                    )
-                )
-                + " |"
-            )
-    per_group_winners = experiment.get("per_group_winners", {}) if isinstance(experiment, dict) else {}
-    if isinstance(per_group_winners, dict) and per_group_winners:
-        lines.extend(
-            [
-                "",
-                "## Per-Group Winners",
-                "",
-                "| group | winner | final_coverage_rate | total_path_cost | failures |",
-                "|---|---|---:|---:|---:|",
-            ]
-        )
-        for group_name, winner in per_group_winners.items():
-            if not isinstance(winner, dict):
-                continue
-            lines.append(
-                "| "
-                + " | ".join(
-                    (
-                        str(group_name),
-                        str(winner.get("policy", "")),
-                        str(winner.get("final_coverage_rate", 0.0)),
-                        str(winner.get("total_path_cost", 0.0)),
-                        str(winner.get("failure_count", 0)),
-                    )
-                )
-                + " |"
-            )
-    failure_scenarios = experiment.get("failure_scenarios", []) if isinstance(experiment, dict) else []
-    lines.extend(["", "## Failure Scenarios", "", "| scenario | policies |", "|---|---|"])
-    if isinstance(failure_scenarios, list) and failure_scenarios:
-        for item in failure_scenarios:
-            if not isinstance(item, dict):
-                continue
-            policies = item.get("policies", [])
-            policy_text = ", ".join(str(policy) for policy in policies) if isinstance(policies, list) else ""
-            lines.append(f"| {item.get('path', '')} | {policy_text} |")
-    else:
-        lines.append("| none | none |")
-    baseline_delta_summary = (
-        stability_summary.get("baseline_deltas", {}) if isinstance(stability_summary, dict) else {}
-    )
-    if isinstance(baseline_delta_summary, dict) and baseline_delta_summary:
-        lines.extend(
-            [
-                "",
-                "## Baseline Delta Summary",
-                "",
-                "| architecture | metric | mean | std | min | max | samples |",
-                "|---|---|---:|---:|---:|---:|---:|",
-            ]
-        )
-        for architecture, metrics in baseline_delta_summary.items():
-            if not isinstance(metrics, dict):
-                continue
-            for metric, stats in metrics.items():
-                if not isinstance(stats, dict):
-                    continue
-                lines.append(
-                    "| "
-                    + " | ".join(
-                        (
-                            str(architecture),
-                            str(metric),
-                            str(stats.get("mean", 0.0)),
-                            str(stats.get("std", 0.0)),
-                            str(stats.get("min", 0.0)),
-                            str(stats.get("max", 0.0)),
-                            str(stats.get("count", 0)),
-                        )
-                    )
-                    + " |"
-                )
-    architecture_deltas = experiment.get("architecture_deltas", {}) if isinstance(experiment, dict) else {}
-    if architecture_deltas:
-        lines.extend(["", "## Architecture Delta Details", "", "| architecture | baseline | metric | delta |", "|---|---|---|---:|"])
-        for architecture, baselines in architecture_deltas.items():
-            if not isinstance(baselines, dict):
-                continue
-            for baseline, metrics in baselines.items():
-                if not isinstance(metrics, dict):
-                    continue
-                for metric, delta in metrics.items():
-                    lines.append(f"| {architecture} | {baseline} | {metric} | {delta} |")
+    lines = render_header_section(summary)
+    lines.extend(render_roi_splits_section(summary))
+    lines.extend(render_split_counts_section(summary))
+    lines.extend(render_dataset_quality_section(dataset_summary))
+    lines.extend(render_mask_stress_section(summary, dataset_summary))
+    lines.extend(render_coverage_warnings_section(summary))
+    lines.extend(render_architecture_selection_section(selection))
+    lines.extend(render_policy_decision_diagnostics_section(selection))
+    lines.extend(render_selection_composite_section(selection))
+    lines.extend(render_action_sensitive_section(selection))
+    lines.extend(render_oracle_regret_section(selection))
+    lines.extend(render_sample_discriminativeness_section(selection))
+    lines.extend(render_per_roi_action_outcomes_section(selection))
+    lines.extend(render_held_out_test_audit_section(selection))
+    lines.extend(render_quality_gates_section(summary))
+    lines.extend(render_architectures_section(training))
+    lines.extend(render_architecture_stability_section(stability_summary))
+    lines.extend(render_loss_distribution_section(stability_summary))
+    lines.extend(render_baseline_comparison_section())
+    lines.extend(render_policy_ranking_section(experiment))
+    lines.extend(render_per_group_winners_section(experiment))
+    lines.extend(render_failure_scenarios_section(experiment))
+    lines.extend(render_baseline_delta_summary_section(stability_summary))
+    lines.extend(render_architecture_delta_details_section(experiment))
     lines.append("")
     return "\n".join(lines)
 

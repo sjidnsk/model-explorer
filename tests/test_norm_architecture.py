@@ -122,7 +122,12 @@ EXPECTED_FUNCTION_LINE_LIMITS = {
 EXPECTED_CURRENT_FUNCTION_LINE_VIOLATIONS = {
     target: limit
     for target, limit in EXPECTED_FUNCTION_LINE_LIMITS.items()
-    if target != ("src/model_explorer/verification.py", "_run_architecture_static_check")
+    if target
+    not in {
+        ("src/model_explorer/experiments/quasi_real_matrix/reports.py", "_markdown_report"),
+        ("src/model_explorer/experiments/reports.py", "_markdown_report"),
+        ("src/model_explorer/verification.py", "_run_architecture_static_check"),
+    }
 }
 
 
