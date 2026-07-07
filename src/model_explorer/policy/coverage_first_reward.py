@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 SCHEMA_VERSION = "xunce-stage21-coverage-first-ppo-reward-profile/v1"
 SCHEMA_VERSION_V2 = "xunce-stage21-coverage-constrained-ppo-reward-profile/v2"
+SCHEMA_VERSION_V3 = "xunce-stage21-coverage-first-ppo-reward-profile/v3"
 
 PROFILE_KEYS = (
     "schema_version",
@@ -49,6 +50,20 @@ WEIGHT_KEYS_V2 = (
     "hard_risk_failure",
 )
 
+WEIGHT_KEYS_V3 = (
+    "coverage_gain",
+    "coverage_progress",
+    "coverage_per_cost",
+    "terminal_final_coverage",
+    "success_99pct",
+    "path_cost",
+    "soft_risk",
+    "incomplete_terminal",
+    "dead_end",
+    "failure",
+    "hard_risk_failure",
+)
+
 NORMALIZER_KEYS = (
     "coverage_rate_delta",
     "remaining_coverage_gap",
@@ -66,6 +81,8 @@ NORMALIZER_KEYS_V2 = (
     "soft_risk_exposure",
 )
 
+NORMALIZER_KEYS_V3 = NORMALIZER_KEYS_V2
+
 RISK_POLICY_KEYS = (
     "path_cost_includes_risk_proxy",
     "soft_risk_component_mode",
@@ -76,6 +93,12 @@ REWARD_POLICY_KEYS_V2 = (
     "coverage_per_cost_path_cost_floor",
     "coverage_per_cost_component_cap_ratio",
     "path_cost_penalty_cap_ratio_when_below_target",
+)
+
+TERMINAL_POLICY_KEYS_V3 = (
+    "dead_end_attribution_source",
+    "dead_end_penalty_trigger",
+    "incomplete_terminal_penalty_mode",
 )
 
 HARD_RISK_POLICY_KEYS = (
@@ -107,6 +130,20 @@ COMPONENT_KEYS_V2 = (
     "hard_risk_component",
 )
 
+COMPONENT_KEYS_V3 = (
+    "coverage_gain_component",
+    "coverage_progress_component",
+    "coverage_per_cost_component",
+    "path_cost_component",
+    "soft_risk_component",
+    "terminal_final_coverage_component",
+    "success_99pct_bonus_component",
+    "incomplete_terminal_penalty_component",
+    "dead_end_penalty_component",
+    "failure_component",
+    "hard_risk_component",
+)
+
 
 @dataclass(frozen=True)
 class CoverageFirstRewardProfile:
@@ -122,6 +159,7 @@ class CoverageFirstRewardProfile:
     risk_policy: dict[str, Any]
     reward_policy: dict[str, Any]
     hard_risk_policy: dict[str, Any]
+    terminal_policy: dict[str, Any]
     component_source_map: dict[str, str]
     component_keys: tuple[str, ...]
     profile_hash: str
@@ -143,6 +181,9 @@ class CoverageFirstRewardProfile:
         }
         if self.schema_version == SCHEMA_VERSION_V2:
             payload["reward_policy"] = dict(self.reward_policy)
+        if self.schema_version == SCHEMA_VERSION_V3:
+            payload["reward_policy"] = dict(self.reward_policy)
+            payload["terminal_policy"] = dict(self.terminal_policy)
         return payload
 
 
@@ -188,6 +229,8 @@ def compute_coverage_first_reward_components(
     metrics: Mapping[str, Any],
     profile: CoverageFirstRewardProfile,
 ) -> CoverageFirstRewardResult:
+    if profile.schema_version == SCHEMA_VERSION_V3:
+        return _compute_terminal_aware_v3_reward_components(metrics, profile)
     if profile.schema_version == SCHEMA_VERSION_V2:
         return _compute_coverage_constrained_v2_reward_components(metrics, profile)
     return _compute_coverage_first_v1_reward_components(metrics, profile)
@@ -364,20 +407,134 @@ def _compute_coverage_constrained_v2_reward_components(
     )
 
 
+def _compute_terminal_aware_v3_reward_components(
+    metrics: Mapping[str, Any],
+    profile: CoverageFirstRewardProfile,
+) -> CoverageFirstRewardResult:
+    hard_risk = _hard_risk(metrics)
+    failure = hard_risk or _truthy(metrics.get("failure")) or bool(str(metrics.get("failure_reason") or "").strip())
+    final_coverage = min(profile.coverage_cap_rate, _nonnegative(metrics.get("final_coverage_rate")))
+    coverage_delta = _nonnegative(metrics.get("coverage_rate_delta"))
+    progress = min(profile.coverage_cap_rate, _nonnegative(metrics.get("coverage_progress_rate", final_coverage)))
+    remaining_gap = max(0.0, profile.target_final_coverage_rate - progress)
+    done = _truthy(metrics.get("done"))
+    success_99 = done and final_coverage >= profile.target_final_coverage_rate
+    dead_end = _truthy(metrics.get("dead_end_action_mask_zero"))
+
+    weights = profile.weights
+    normalizers = profile.normalizers
+    reward_policy = profile.reward_policy
+    positive_allowed = not hard_risk
+    coverage_gain_component = _round(
+        coverage_delta / normalizers["coverage_rate_delta"] * weights["coverage_gain"]
+    ) if positive_allowed else 0.0
+    coverage_progress_component = _round(
+        (profile.target_final_coverage_rate - remaining_gap)
+        / normalizers["remaining_coverage_gap"]
+        * weights["coverage_progress"]
+    ) if positive_allowed else 0.0
+
+    path_cost = _nonnegative(metrics.get("path_cost_m"))
+    path_cost_floor = float(reward_policy["coverage_per_cost_path_cost_floor"])
+    coverage_per_cost_value = _coverage_per_cost_value(metrics, coverage_delta, path_cost, path_cost_floor)
+    if positive_allowed and coverage_delta > 0.0:
+        normalized_cpc = coverage_per_cost_value / normalizers["coverage_per_cost"]
+        coverage_gain_gate = min(1.0, coverage_delta / normalizers["coverage_rate_delta"])
+        raw_cpc_component = _round(math.log1p(normalized_cpc) * weights["coverage_per_cost"])
+        cpc_cap = abs(weights["coverage_per_cost"]) * float(reward_policy["coverage_per_cost_component_cap_ratio"])
+        coverage_per_cost_component = _round(min(raw_cpc_component, cpc_cap) * coverage_gain_gate) if cpc_cap > 0.0 else 0.0
+    else:
+        coverage_per_cost_component = 0.0
+
+    raw_path_cost_component = _round(
+        -path_cost / normalizers["path_cost_m"] * weights["path_cost"]
+    )
+    path_cost_component = _cap_path_cost_component(raw_path_cost_component, coverage_gain_component, progress, profile)
+    raw_soft_risk_component = _round(
+        -_nonnegative(metrics.get("soft_risk_exposure"))
+        / normalizers["soft_risk_exposure"]
+        * weights["soft_risk"]
+    )
+    soft_risk_component, dedup_applied = _dedup_soft_risk(raw_soft_risk_component, path_cost_component, profile)
+    terminal_final_component = _round(
+        final_coverage / normalizers["final_coverage_rate"] * weights["terminal_final_coverage"]
+    ) if done and positive_allowed else 0.0
+    success_component = _round(weights["success_99pct"]) if success_99 and positive_allowed else 0.0
+    incomplete_component = 0.0
+    if done and not success_99 and positive_allowed:
+        bounded_gap = min(1.0, max(0.0, (profile.target_final_coverage_rate - final_coverage) / profile.target_final_coverage_rate))
+        incomplete_component = _round(-bounded_gap * weights["incomplete_terminal"])
+    dead_end_component = _round(-weights["dead_end"]) if dead_end and positive_allowed else 0.0
+    failure_component = _round(-weights["failure"]) if failure and not hard_risk else 0.0
+    hard_risk_component = _round(-weights["hard_risk_failure"]) if hard_risk else 0.0
+
+    components = {
+        "coverage_gain_component": coverage_gain_component,
+        "coverage_progress_component": coverage_progress_component,
+        "coverage_per_cost_component": coverage_per_cost_component,
+        "path_cost_component": path_cost_component,
+        "soft_risk_component": soft_risk_component,
+        "terminal_final_coverage_component": terminal_final_component,
+        "success_99pct_bonus_component": success_component,
+        "incomplete_terminal_penalty_component": incomplete_component,
+        "dead_end_penalty_component": dead_end_component,
+        "failure_component": failure_component,
+        "hard_risk_component": hard_risk_component,
+    }
+    reward = _round(sum(components.values()))
+    reason_codes: list[str] = []
+    if hard_risk:
+        reason_codes.append("hard_risk_rejected")
+    if failure and not hard_risk:
+        reason_codes.append("failure_penalty_applied")
+    if done and final_coverage < profile.target_final_coverage_rate:
+        reason_codes.append("terminal_incomplete_below_99pct_target")
+    if dead_end_component < 0.0:
+        reason_codes.append("dead_end_penalty_applied")
+    if coverage_delta <= 0.0:
+        reason_codes.append("coverage_per_cost_component_inactive_without_coverage_gain")
+    if hard_risk and profile.hard_risk_policy["clamp_positive_reward_to_non_positive"] and reward > 0.0:
+        components["hard_risk_component"] = _round(components["hard_risk_component"] - reward)
+        reward = _round(sum(components.values()))
+    floor = float(profile.hard_risk_policy["failure_floor"])
+    if hard_risk and reward > floor:
+        components["hard_risk_component"] = _round(components["hard_risk_component"] + (floor - reward))
+        reward = _round(sum(components.values()))
+    return CoverageFirstRewardResult(
+        components=components,
+        reward=reward,
+        trainable=not hard_risk,
+        reason_codes=_unique(reason_codes),
+        profile_id=profile.profile_id,
+        profile_version=profile.profile_version,
+        profile_hash=profile.profile_hash,
+        risk_deduplication_applied=dedup_applied,
+    )
+
+
 def _profile_from_payload(payload: Mapping[str, Any]) -> CoverageFirstRewardProfile:
     schema_version = payload.get("schema_version")
-    profile_keys = PROFILE_KEYS + (("reward_policy",) if schema_version == SCHEMA_VERSION_V2 else ())
+    if schema_version == SCHEMA_VERSION_V3:
+        profile_keys = PROFILE_KEYS + ("reward_policy", "terminal_policy")
+    else:
+        profile_keys = PROFILE_KEYS + (("reward_policy",) if schema_version == SCHEMA_VERSION_V2 else ())
     _validate_keys("profile", payload, profile_keys)
-    if schema_version not in {SCHEMA_VERSION, SCHEMA_VERSION_V2}:
-        raise ValueError(f"schema_version must be {SCHEMA_VERSION} or {SCHEMA_VERSION_V2}")
-    weight_keys = WEIGHT_KEYS_V2 if schema_version == SCHEMA_VERSION_V2 else WEIGHT_KEYS
-    normalizer_keys = NORMALIZER_KEYS_V2 if schema_version == SCHEMA_VERSION_V2 else NORMALIZER_KEYS
-    component_keys = COMPONENT_KEYS_V2 if schema_version == SCHEMA_VERSION_V2 else COMPONENT_KEYS
+    if schema_version not in {SCHEMA_VERSION, SCHEMA_VERSION_V2, SCHEMA_VERSION_V3}:
+        raise ValueError(f"schema_version must be {SCHEMA_VERSION}, {SCHEMA_VERSION_V2}, or {SCHEMA_VERSION_V3}")
+    if schema_version == SCHEMA_VERSION_V3:
+        weight_keys = WEIGHT_KEYS_V3
+        normalizer_keys = NORMALIZER_KEYS_V3
+        component_keys = COMPONENT_KEYS_V3
+    else:
+        weight_keys = WEIGHT_KEYS_V2 if schema_version == SCHEMA_VERSION_V2 else WEIGHT_KEYS
+        normalizer_keys = NORMALIZER_KEYS_V2 if schema_version == SCHEMA_VERSION_V2 else NORMALIZER_KEYS
+        component_keys = COMPONENT_KEYS_V2 if schema_version == SCHEMA_VERSION_V2 else COMPONENT_KEYS
     weights = _numeric_section(payload.get("weights"), weight_keys, "weights", strictly_positive=False)
     normalizers = _numeric_section(payload.get("normalizers"), normalizer_keys, "normalizers", strictly_positive=True)
     risk_policy = _risk_policy(payload.get("risk_policy"))
-    reward_policy = _reward_policy_v2(payload.get("reward_policy")) if schema_version == SCHEMA_VERSION_V2 else {}
+    reward_policy = _reward_policy_v2(payload.get("reward_policy")) if schema_version in {SCHEMA_VERSION_V2, SCHEMA_VERSION_V3} else {}
     hard_risk_policy = _hard_risk_policy(payload.get("hard_risk_policy"))
+    terminal_policy = _terminal_policy_v3(payload.get("terminal_policy")) if schema_version == SCHEMA_VERSION_V3 else {}
     component_source_map = payload.get("component_source_map")
     if not isinstance(component_source_map, dict):
         raise ValueError("component_source_map must be an object")
@@ -395,6 +552,7 @@ def _profile_from_payload(payload: Mapping[str, Any]) -> CoverageFirstRewardProf
         risk_policy=risk_policy,
         reward_policy=reward_policy,
         hard_risk_policy=hard_risk_policy,
+        terminal_policy=terminal_policy,
         component_source_map={str(key): str(value) for key, value in component_source_map.items()},
         component_keys=component_keys,
         profile_hash="",
@@ -488,6 +646,26 @@ def _reward_policy_v2(section: Any) -> dict[str, Any]:
         "coverage_per_cost_path_cost_floor": floor,
         "coverage_per_cost_component_cap_ratio": cpc_cap,
         "path_cost_penalty_cap_ratio_when_below_target": path_cap,
+    }
+
+
+def _terminal_policy_v3(section: Any) -> dict[str, Any]:
+    if not isinstance(section, dict):
+        raise ValueError("terminal_policy must be an object")
+    _validate_keys("terminal_policy", section, TERMINAL_POLICY_KEYS_V3)
+    source = _required_string(section, "dead_end_attribution_source")
+    trigger = _required_string(section, "dead_end_penalty_trigger")
+    mode = _required_string(section, "incomplete_terminal_penalty_mode")
+    if source != "next_state_action_mask_all_false/v1":
+        raise ValueError("terminal_policy.dead_end_attribution_source must be next_state_action_mask_all_false/v1")
+    if trigger != "dead_end_action_mask_zero":
+        raise ValueError("terminal_policy.dead_end_penalty_trigger must be dead_end_action_mask_zero")
+    if mode != "bounded_remaining_coverage_gap":
+        raise ValueError("terminal_policy.incomplete_terminal_penalty_mode must be bounded_remaining_coverage_gap")
+    return {
+        "dead_end_attribution_source": source,
+        "dead_end_penalty_trigger": trigger,
+        "incomplete_terminal_penalty_mode": mode,
     }
 
 
